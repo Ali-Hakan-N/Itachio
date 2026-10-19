@@ -1,0 +1,163 @@
+// Electron giriş noktası: pencereyi açar, çekirdeği kurar, arayüzle IPC köprüsünü sağlar.
+
+const path = require('node:path');
+const fs = require('node:fs');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { LcuConnector } = require('./lcu');
+const { DataStore } = require('./data');
+const { AppCore } = require('./core');
+
+let win = null;
+let core = null;
+let data = null;
+let configError = null;
+
+function loadConfig() {
+  const candidates = [
+    path.join(app.getAppPath(), 'config.json'),
+    path.join(path.dirname(process.execPath), 'config.json'), // exe'nin yanına konmuş config
+  ];
+  for (const file of candidates) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!cfg.supabaseUrl || !cfg.supabaseKey || cfg.supabaseUrl.includes('PROJE-KIMLIGINIZ')) {
+        throw new Error('config.json içinde supabaseUrl ve supabaseKey doldurulmalı');
+      }
+      return cfg;
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        configError = err.message;
+        return null;
+      }
+    }
+  }
+  configError = 'config.json bulunamadı. config.example.json dosyasını kopyalayıp doldurun.';
+  return null;
+}
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1320,
+    height: 840,
+    minWidth: 1080,
+    minHeight: 680,
+    backgroundColor: '#0d1117',
+    title: 'Draft Koçu',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  // Dış bağlantılar uygulama içinde değil tarayıcıda açılsın
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+}
+
+function send(channel, payload) {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+// Her IPC çağrısı { ok, data } veya { ok:false, error } döner
+function handle(channel, fn) {
+  ipcMain.handle(channel, async (_e, ...args) => {
+    try {
+      return { ok: true, data: await fn(...args) };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+}
+
+function requireTeamMember() {
+  const me = core.state.me;
+  if (!me) throw new Error('Önce profil oluşturun');
+  return me;
+}
+
+app.whenReady().then(async () => {
+  const config = loadConfig();
+  createWindow();
+
+  handle('app:init', async () => {
+    if (!config) return { configError };
+    const user = await data.getUser();
+    return { configError: null, user: user ? { email: user.email } : null };
+  });
+
+  if (config) {
+    data = new DataStore({
+      url: config.supabaseUrl,
+      key: config.supabaseKey,
+      storageFile: path.join(app.getPath('userData'), 'session.json'),
+    });
+    const lcu = new LcuConnector({ installPath: config.leagueInstallPath });
+    core = new AppCore({ lcu, data });
+    core.on('update', (partial) => send('state', partial));
+    core.on('saved', (info) => send('saved', info));
+    lcu.start();
+  }
+
+  handle('state:get', () => core.snapshot());
+  handle('data:load', async () => {
+    await core.loadUserData();
+    return core.snapshot();
+  });
+
+  handle('auth:signIn', ({ email, password }) => data.signIn(email, password));
+  handle('auth:signUp', ({ email, password }) => data.signUp(email, password));
+  handle('auth:signOut', async () => {
+    await data.signOut();
+    core.clearUserData();
+  });
+
+  handle('profile:save', async (p) => {
+    await data.saveProfile(p);
+    await core.loadUserData();
+    return core.snapshot();
+  });
+  handle('team:create', async (name) => {
+    await data.createTeam(name);
+    await core.refreshTeam();
+    return core.snapshot();
+  });
+  handle('team:join', async (code) => {
+    await data.joinTeam(code);
+    await core.refreshTeam();
+    return core.snapshot();
+  });
+  handle('team:leave', async () => {
+    await data.leaveTeam();
+    await core.refreshTeam();
+    return core.snapshot();
+  });
+
+  handle('pool:upsert', async (entry) => {
+    const me = requireTeamMember();
+    await data.upsertPool(me.id, entry);
+    await core.refreshTeam();
+  });
+  handle('pool:remove', async (entry) => {
+    const me = requireTeamMember();
+    await data.removePool(me.id, entry);
+    await core.refreshTeam();
+  });
+
+  handle('history:list', async () => {
+    const me = core.state.me;
+    return me?.team_id ? data.listHistory(me.team_id) : [];
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});

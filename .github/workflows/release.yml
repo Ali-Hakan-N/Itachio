@@ -1,0 +1,46 @@
+name: Windows sürümü
+
+# "v0.1.0" gibi bir etiket gönderildiğinde Windows kurulum dosyasını üretir
+# ve GitHub Releases'a yükler. Takım arkadaşları exe'yi oradan indirir.
+#
+# Gerekli repo secret'ları (Settings > Secrets and variables > Actions):
+#   SUPABASE_URL  - https://xxxx.supabase.co
+#   SUPABASE_KEY  - publishable (veya anon) anahtar
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: config.json oluştur
+        shell: pwsh
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if (-not $env:SUPABASE_URL -or -not $env:SUPABASE_KEY) { throw "SUPABASE_URL ve SUPABASE_KEY secret'ları tanımlı değil" }
+          @{ supabaseUrl = $env:SUPABASE_URL; supabaseKey = $env:SUPABASE_KEY; leagueInstallPath = "C:\Riot Games\League of Legends" } |
+            ConvertTo-Json | Set-Content -Encoding utf8 config.json
+      - run: npx electron-builder --win nsis --publish never
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: desktop/dist/*.exe

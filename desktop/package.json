@@ -1,0 +1,41 @@
+{
+  "name": "draft-kocu",
+  "productName": "DraftKocu",
+  "version": "0.1.0",
+  "description": "Takım için League of Legends draft yardımcısı",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev:mock": "node test/mock-lcu.js",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "selfsigned": "^5.5.0"
+  },
+  "build": {
+    "appId": "gg.draftkocu.app",
+    "productName": "DraftKocu",
+    "files": [
+      "src/**/*",
+      "config.json",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    }
+  }
+}

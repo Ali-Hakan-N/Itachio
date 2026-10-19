@@ -1,0 +1,19 @@
+node_modules/
+dist/
+out/
+
+# Kişisel ayarlar: Supabase adresi/anahtarı. Repoya girmez.
+desktop/config.json
+.env
+.env.*
+
+# Supabase CLI yerel dosyaları
+supabase/.temp/
+supabase/.branches/
+
+# İşletim sistemi / editör
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

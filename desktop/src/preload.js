@@ -1,0 +1,22 @@
+// Arayüzün main process'e erişebildiği tek kapı. Sadece tanımlı çağrılar açık.
+const { contextBridge, ipcRenderer } = require('electron');
+
+const call = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
+
+contextBridge.exposeInMainWorld('api', {
+  init: call('app:init'),
+  getState: call('state:get'),
+  loadData: call('data:load'),
+  signIn: call('auth:signIn'),
+  signUp: call('auth:signUp'),
+  signOut: call('auth:signOut'),
+  saveProfile: call('profile:save'),
+  createTeam: call('team:create'),
+  joinTeam: call('team:join'),
+  leaveTeam: call('team:leave'),
+  upsertPool: call('pool:upsert'),
+  removePool: call('pool:remove'),
+  listHistory: call('history:list'),
+  onState: (cb) => ipcRenderer.on('state', (_e, partial) => cb(partial)),
+  onSaved: (cb) => ipcRenderer.on('saved', (_e, info) => cb(info)),
+});

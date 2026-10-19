@@ -1,0 +1,5 @@
+# Supabase CLI kullanırsanız geçerli. Panelden kurarsanız
+# fonksiyon ayarlarında "Enforce JWT Verification" seçeneğini kapatın;
+# fonksiyon kendi x-cron-secret kontrolünü yapıyor.
+[functions.sync-ddragon]
+verify_jwt = false

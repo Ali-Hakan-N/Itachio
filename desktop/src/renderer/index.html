@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://ddragon.leagueoflegends.com"
+    />
+    <title>Draft Koçu</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Draft Koçu</div>
+      <nav class="tabs" id="tabs" hidden>
+        <button data-tab="draft" class="active">Draft</button>
+        <button data-tab="pool">Havuzum</button>
+        <button data-tab="team">Takım</button>
+        <button data-tab="history">Geçmiş</button>
+      </nav>
+      <div class="status" id="status"></div>
+    </header>
+    <main id="view"></main>
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+    <script src="recommend.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
