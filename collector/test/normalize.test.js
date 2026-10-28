@@ -71,3 +71,20 @@ test('valid rows convert; invalid ones are dropped and reported', () => {
   assert.ok(rows.problems.some((p) => p.includes('river')));
   assert.ok(rows.problems.some((p) => p.includes('0-100')));
 });
+
+test('matchup opponent_role defaults to the own role; synergy may be negative', () => {
+  const rows = toRows(
+    {
+      meta: [],
+      synergy: [{ champion: 'Ahri', role: 'mid', ally: 'Wukong', strength: -0.4 }],
+      matchup: [
+        { champion: 'Ahri', role: 'mid', opponent: 'Zed', strength: 0.3 },
+        { champion: 'Ahri', role: 'mid', opponent: 'Zed', opponent_role: 'jungle', strength: -0.2 },
+      ],
+    },
+    CHAMPS,
+    opts,
+  );
+  assert.equal(rows.synergy[0].strength, -0.4);
+  assert.deepEqual(rows.matchup.map((m) => m.opponent_role), ['middle', 'jungle']);
+});

@@ -105,3 +105,22 @@ test('evaluate: without a role (enemies) the best role is used; null without dat
   assert.equal(evaluate({ stats, championId: 5 }).role, 'top');
   assert.equal(evaluate({ stats, championId: 99, role: 'middle' }), null);
 });
+
+test('negative synergy lowers the score', () => {
+  const bad = { ...stats, synergy: [{ champion_id: 3, role: 'middle', ally_id: 4, strength: -0.8 }] };
+  const r = recommend({ stats: bad, role: 'middle', allies: [4] }).find((x) => x.championId === 3);
+  assert.ok(r.synergy < 0 && r.score < 55);
+});
+
+test('cross-lane matchup counts with the role-pair weight', () => {
+  const { pairWeight } = require('../src/renderer/recommend');
+  // Syndra (mid) vs Lee Sin (enemy jungle)
+  const s = { ...stats, matchup: [{ champion_id: 3, role: 'middle', opponent_id: 4, opponent_role: 'jungle', strength: -0.6 }] };
+  const known = recommend({ stats: s, role: 'middle', enemies: [{ championId: 4, position: 'jungle' }] }).find((x) => x.championId === 3);
+  const guessed = recommend({ stats: s, role: 'middle', enemies: [{ championId: 4 }] }).find((x) => x.championId === 3);
+  assert.ok(known.matchup < 0);
+  assert.equal(guessed.matchup, known.matchup); // Lee Sin's best role is jungle
+  assert.equal(pairWeight('bottom', 'utility'), 0.7);
+  assert.equal(pairWeight('top', 'jungle'), 0.6);
+  assert.equal(pairWeight('top', 'middle'), 0.4);
+});

@@ -187,3 +187,20 @@ test('crawl: Flex first; duplicates and other-patch matches do not count', async
   assert.equal(stats.europe.byQueue['Solo/Duo'], 1);
   assert.equal(stats.europe.otherPatch, 1);
 });
+
+test('negative synergy: a pair doing worse together than expected', () => {
+  const agg = aggregates();
+  agg.duo = [{ champion_id: 2, role: 'middle', ally_id: 4, games: 500, wins: 200 }]; // expected ~50%, observed 40%
+  const s = score(agg).synergy.find((x) => x.champion === 2 && x.ally === 4);
+  assert.ok(s && s.strength < -0.5);
+});
+
+test('cross-lane matchups carry the opponent role; same lane uses the own role', () => {
+  const agg = aggregates();
+  agg.vs = [{ champion_id: 2, role: 'middle', opponent_id: 4, opponent_role: 'jungle', games: 400, wins: 160 }];
+  const { matchup } = score(agg);
+  const cross = matchup.find((m) => m.champion === 2 && m.opponent === 4);
+  assert.equal(cross.opponent_role, 'jungle');
+  assert.ok(cross.strength < 0);
+  assert.equal(matchup.find((m) => m.champion === 2 && m.opponent === 1).opponent_role, 'middle');
+});

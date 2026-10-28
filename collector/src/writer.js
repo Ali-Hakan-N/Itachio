@@ -6,7 +6,7 @@
 const TABLES = {
   meta: { name: 'champion_meta', conflict: 'champion_id,role,source' },
   synergy: { name: 'champion_synergy', conflict: 'champion_id,role,ally_id,source' },
-  matchup: { name: 'champion_matchup', conflict: 'champion_id,role,opponent_id,source' },
+  matchup: { name: 'champion_matchup', conflict: 'champion_id,role,opponent_id,opponent_role,source' },
 };
 const CHUNK = 500;
 

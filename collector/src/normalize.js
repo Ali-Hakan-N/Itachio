@@ -5,8 +5,9 @@
 // {
 //   patch?: "16.21",
 //   meta:    [{ champion, role, score (0-100), tier?, win_rate?, pick_rate?, ban_rate?, games? }],
-//   synergy: [{ champion, role, ally,     strength (0..1),  win_rate?, games? }],
-//   matchup: [{ champion, role, opponent, strength (-1..1), win_rate?, games? }]
+//   synergy: [{ champion, role, ally,     strength (-1..1), win_rate?, games? }],
+//   matchup: [{ champion, role, opponent, opponent_role?, strength (-1..1), win_rate?, games? }]
+// opponent_role defaults to role (same lane).
 // }
 // champion / ally / opponent may be a Riot numeric id, a Data Dragon id ("MonkeyKing")
 // or a display name ("Wukong"). Strengths must already account for sample size.
@@ -96,7 +97,7 @@ function toRows(output, champions, { source, collectedAt }) {
     const strength = num(r.strength);
     if (champion_id === null || ally_id === null || champion_id === ally_id) continue;
     if (!role) { problems.push(`synergy: unknown role "${r.role}"`); continue; }
-    if (!inRange(strength, 0, 1)) { problems.push(`synergy: ${r.champion}+${r.ally} strength outside 0..1 (${r.strength})`); continue; }
+    if (!inRange(strength, -1, 1)) { problems.push(`synergy: ${r.champion}+${r.ally} strength outside -1..1 (${r.strength})`); continue; }
     if (!once('synergy', `${champion_id}:${role}:${ally_id}`)) continue;
     synergy.push({ ...base, champion_id, role, ally_id, strength, win_rate: num(r.win_rate), games: int(r.games) });
   }
@@ -106,12 +107,14 @@ function toRows(output, champions, { source, collectedAt }) {
     const champion_id = champ(r.champion);
     const opponent_id = champ(r.opponent);
     const role = normalizeRole(r.role);
+    const opponent_role = r.opponent_role === undefined || r.opponent_role === null ? role : normalizeRole(r.opponent_role);
     const strength = num(r.strength);
     if (champion_id === null || opponent_id === null || champion_id === opponent_id) continue;
+    if (!opponent_role) { problems.push(`matchup: unknown opponent role "${r.opponent_role}"`); continue; }
     if (!role) { problems.push(`matchup: unknown role "${r.role}"`); continue; }
     if (!inRange(strength, -1, 1)) { problems.push(`matchup: ${r.champion}-${r.opponent} strength outside -1..1 (${r.strength})`); continue; }
-    if (!once('matchup', `${champion_id}:${role}:${opponent_id}`)) continue;
-    matchup.push({ ...base, champion_id, role, opponent_id, strength, win_rate: num(r.win_rate), games: int(r.games) });
+    if (!once('matchup', `${champion_id}:${role}:${opponent_id}:${opponent_role}`)) continue;
+    matchup.push({ ...base, champion_id, role, opponent_id, opponent_role, strength, win_rate: num(r.win_rate), games: int(r.games) });
   }
 
   if (unknown.size) problems.unshift(`unknown champions: ${[...unknown].slice(0, 15).join(', ')}${unknown.size > 15 ? ' …' : ''}`);

@@ -4,10 +4,13 @@
 //
 //   M         the champion's meta score in the role (0-100, average over sources)
 //   Synergy   = SYNERGY_MAX × tanh(Σ s / SYNERGY_SOFTNESS)
-//             s: synergy strength with each locked ally (0..1; 1 = +5 win-rate points)
+//             s: synergy strength with each locked ally (-1..1; 1 = +5 win-rate points;
+//                negative when the pair does worse together than expected)
 //   Matchup   = MATCHUP_MAX × tanh(Σ w·m / MATCHUP_SOFTNESS)
-//             m: strength against each locked enemy (-1..1; 1 = ±6 win-rate points)
-//             w: lane opponent 1, others 0.4
+//             m: strength against each locked enemy in that enemy's role
+//                (-1..1; 1 = ±6 win-rate points)
+//             w: by role pair (pairWeight): same lane 1, bot lane 2v2 0.7,
+//                a jungler on either side 0.6, any other pair 0.4
 //
 // Calibration: in the meta score one win-rate point is worth about 3 score points
 // (12 points per standard deviation, 0.6 weight, ~2.5 points of win-rate spread).
@@ -18,7 +21,7 @@
 // (collector/src/riot/score.js); they are not shrunk again here.
 //
 // tanh saturates the effect: three good allies cannot inflate the score without
-// limit. Synergy adds at most +SYNERGY_MAX, Matchup at most ±MATCHUP_MAX.
+// limit. Synergy adds at most ±SYNERGY_MAX, Matchup at most ±MATCHUP_MAX.
 //
 // Exposed as window.Recommend in the browser and module.exports in Node (tests).
 
@@ -27,9 +30,17 @@
   const MATCHUP_MAX = 20;
   const SYNERGY_SOFTNESS = 1.0;
   const MATCHUP_SOFTNESS = 0.9;
-  const LANE_WEIGHT = 1;
-  const OTHER_WEIGHT = 0.4;
   const OFF_ROLE_PENALTY = 30; // a champion with no data in the slot's role is treated as off-role
+
+  // How much an enemy in theirRole matters to a champion in myRole. Cross-lane data
+  // already measures the effect; the weight also keeps overlapping effects in check.
+  function pairWeight(myRole, theirRole) {
+    if (myRole === theirRole) return 1;
+    const bot = (r) => r === 'bottom' || r === 'utility';
+    if (bot(myRole) && bot(theirRole)) return 0.7;
+    if (myRole === 'jungle' || theirRole === 'jungle') return 0.6;
+    return 0.4;
+  }
 
   // If several sources give the same key, they are averaged
   function averager() {
@@ -53,8 +64,9 @@
     const meta = averager();
     const syn = averager(); // champ:role:ally
     const synRev = averager(); // ally:champ (any role) -> estimate from the other direction
-    const mu = averager(); // champ:role:opp
-    const muRev = averager(); // opp:champ -> the opponent's strength against us
+    const mu = averager(); // champ:role:opp:oppRole
+    const muRev = averager(); // seen from the opponent: opp:oppRole:champ:role -> its strength against champ
+    const muAny = averager(); // champ:role:opp, any opponent role (enemy role is a guess)
 
     for (const r of stats.meta || []) meta.add(`${r.champion_id}:${r.role}`, Number(r.score));
     for (const r of stats.synergy || []) {
@@ -64,8 +76,10 @@
     }
     for (const r of stats.matchup || []) {
       const v = Number(r.strength);
-      mu.add(`${r.champion_id}:${r.role}:${r.opponent_id}`, v);
-      muRev.add(`${r.opponent_id}:${r.champion_id}`, v);
+      const oppRole = r.opponent_role || r.role;
+      mu.add(`${r.champion_id}:${r.role}:${r.opponent_id}:${oppRole}`, v);
+      muRev.add(`${r.opponent_id}:${oppRole}:${r.champion_id}:${r.role}`, v);
+      muAny.add(`${r.champion_id}:${r.role}:${r.opponent_id}`, v);
     }
 
     const byRole = new Map(); // role -> [{id, score}]
@@ -87,12 +101,14 @@
       meta: (c, role) => meta.get(`${c}:${role}`),
       // Without direct data, the ally's synergy with us is used (synergy is mostly mutual)
       synergy: (c, role, ally) => syn.get(`${c}:${role}:${ally}`) ?? synRev.get(`${c}:${ally}`),
-      // Without direct data, the inverse of the opponent's strength against us is used
-      matchup: (c, role, opp) => {
-        const direct = mu.get(`${c}:${role}:${opp}`);
+      // Matchup against opp playing oppRole. Without direct data, the inverse of the
+      // opponent's strength against us; then any role for opp (its role may be a guess).
+      matchup: (c, role, opp, oppRole) => {
+        const direct = mu.get(`${c}:${role}:${opp}:${oppRole}`);
         if (direct !== null) return direct;
-        const rev = muRev.get(`${c}:${opp}`);
-        return rev === null ? null : -rev;
+        const rev = muRev.get(`${c}:${role}:${opp}:${oppRole}`);
+        if (rev !== null) return -rev;
+        return muAny.get(`${c}:${role}:${opp}`);
       },
     };
     indexCache.set(stats, idx);
@@ -106,7 +122,7 @@
     for (const a of allies) {
       if (a === c.championId) continue;
       const v = idx.synergy(c.championId, c.role, a);
-      if (v === null || v <= 0) continue;
+      if (v === null || v === 0) continue;
       synSum += v;
       allyHits.push({ championId: a, value: v });
     }
@@ -114,11 +130,12 @@
     const enemyHits = [];
     let muSum = 0;
     for (const e of enemies) {
-      const v = idx.matchup(c.championId, c.role, e.championId);
+      // Ranked champ select hides enemy roles: fall back to the champion's best role
+      const theirRole = e.position || idx.bestRole.get(e.championId)?.role || '';
+      const v = idx.matchup(c.championId, c.role, e.championId, theirRole);
       if (v === null || v === 0) continue;
-      const lane = e.position ? e.position === c.role : idx.bestRole.get(e.championId)?.role === c.role;
-      muSum += (lane ? LANE_WEIGHT : OTHER_WEIGHT) * v;
-      enemyHits.push({ championId: e.championId, value: v, lane });
+      muSum += pairWeight(c.role, theirRole) * v;
+      enemyHits.push({ championId: e.championId, value: v, lane: theirRole === c.role });
     }
 
     const synergy = SYNERGY_MAX * Math.tanh(synSum / SYNERGY_SOFTNESS);
@@ -183,7 +200,7 @@
     return { ...scoreOne(idx, { championId, role, score }, allies, enemies), offRole: true };
   }
 
-  const api = { recommend, evaluate, SYNERGY_MAX, MATCHUP_MAX };
+  const api = { recommend, evaluate, pairWeight, SYNERGY_MAX, MATCHUP_MAX };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Recommend = api;
 })(typeof window !== 'undefined' ? window : globalThis);

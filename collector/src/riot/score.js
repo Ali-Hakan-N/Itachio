@@ -13,10 +13,11 @@
 //     (these WRs use a lighter adjustment, baselinePriorGames. With the strong meta
 //      adjustment every pair of a strong champion would get fake synergy.)
 //   Observed = (wins + K' × expected) / (games + K')   pulled toward expected on little data
-//   Strength = (observed - expected) / 5 points, 0..1
+//   Strength = (observed - expected) / 5 points, -1..1 (negative: the pair does worse together)
 //   A strong champion looks good with everyone; the deviation from expected filters that out.
 //
-// MATCHUP (A in this role, B in the opposite lane)
+// MATCHUP (A in this role, B on the enemy team in its role)
+//   Same lane from riot_lane_stats, other roles from riot_vs_stats (e.g. bot vs enemy support).
 //   Expected WR = σ(logit WR_A - logit WR_B) · Strength = deviation / 6 points, -1..1
 
 const CONFIG = {
@@ -46,7 +47,7 @@ function zScores(values) {
 }
 
 /**
- * @param {{ matches:number, champ:object[], bans:object[], duo:object[], lane:object[] }} agg
+ * @param {{ matches:number, champ:object[], bans:object[], duo:object[], lane:object[], vs?:object[] }} agg
  * @returns {{ meta: object[], synergy: object[], matchup: object[] }}  (normalize.js format)
  */
 function score(agg, config = CONFIG) {
@@ -122,8 +123,8 @@ function score(agg, config = CONFIG) {
   for (const r of agg.duo) {
     if (r.games < c.pairMinGames) continue;
     const expected = sigmoid(logit(wrIn(r.champion_id, r.role)) + logit(baseOverall(r.ally_id)));
-    const strength = clamp(deviation(r.wins, r.games, expected) / c.synergyFull, 0, 1);
-    if (strength < c.minStrength) continue;
+    const strength = clamp(deviation(r.wins, r.games, expected) / c.synergyFull, -1, 1);
+    if (Math.abs(strength) < c.minStrength) continue;
     synergy.push({
       champion: r.champion_id, role: r.role, ally: r.ally_id, strength: round(strength, 3),
       win_rate: round((r.wins / r.games) * 100, 2), games: r.games,
@@ -131,14 +132,15 @@ function score(agg, config = CONFIG) {
   }
 
   const matchup = [];
-  for (const r of agg.lane) {
+  const lanes = agg.lane.map((r) => ({ ...r, opponent_role: r.role }));
+  for (const r of [...lanes, ...(agg.vs || [])]) {
     if (r.games < c.pairMinGames) continue;
-    const expected = sigmoid(logit(wrIn(r.champion_id, r.role)) - logit(wrIn(r.opponent_id, r.role)));
+    const expected = sigmoid(logit(wrIn(r.champion_id, r.role)) - logit(wrIn(r.opponent_id, r.opponent_role)));
     const strength = clamp(deviation(r.wins, r.games, expected) / c.matchupFull, -1, 1);
     if (Math.abs(strength) < c.minStrength) continue;
     matchup.push({
-      champion: r.champion_id, role: r.role, opponent: r.opponent_id, strength: round(strength, 3),
-      win_rate: round((r.wins / r.games) * 100, 2), games: r.games,
+      champion: r.champion_id, role: r.role, opponent: r.opponent_id, opponent_role: r.opponent_role,
+      strength: round(strength, 3), win_rate: round((r.wins / r.games) * 100, 2), games: r.games,
     });
   }
 

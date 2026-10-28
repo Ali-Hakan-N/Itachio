@@ -43,13 +43,15 @@ async function fetchAll(client, table, columns, patch, order) {
 
 async function loadAggregates(client, patch) {
   const total = check(await client.from('riot_patch_totals').select('matches').eq('patch', patch).maybeSingle());
-  const [champ, bans, duo, lane] = await Promise.all([
+  const [champ, bans, duo, lane, vs] = await Promise.all([
     fetchAll(client, 'riot_champ_stats', 'champion_id,role,games,wins', patch, ['champion_id', 'role']),
     fetchAll(client, 'riot_ban_stats', 'champion_id,bans', patch, ['champion_id']),
     fetchAll(client, 'riot_duo_stats', 'champion_id,role,ally_id,games,wins', patch, ['champion_id', 'role', 'ally_id']),
     fetchAll(client, 'riot_lane_stats', 'champion_id,role,opponent_id,games,wins', patch, ['champion_id', 'role', 'opponent_id']),
+    fetchAll(client, 'riot_vs_stats', 'champion_id,role,opponent_id,opponent_role,games,wins', patch,
+      ['champion_id', 'role', 'opponent_id', 'opponent_role']),
   ]);
-  return { matches: total?.matches || 0, champ, bans, duo, lane };
+  return { matches: total?.matches || 0, champ, bans, duo, lane, vs };
 }
 
 module.exports = { currentPatch, filterUnseen, ingest, loadAggregates };
