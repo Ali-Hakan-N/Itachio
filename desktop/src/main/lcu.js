@@ -1,8 +1,8 @@
-// League Client (LCU) bağlantısı.
-// - İstemciyi bulur (çalışan süreçten veya lockfile'dan port + şifre)
-// - WebSocket ile olaylara abone olur
-// - REST istekleri yapar
-// İstemci kapanıp açıldıkça kendiliğinden yeniden bağlanır.
+// League Client (LCU) connection.
+// - Finds the client (port + password from the running process or the lockfile)
+// - Subscribes to events over WebSocket
+// - Makes REST requests
+// Reconnects on its own when the client closes and reopens.
 
 const { EventEmitter } = require('node:events');
 const { execFile } = require('node:child_process');
@@ -11,8 +11,8 @@ const path = require('node:path');
 const https = require('node:https');
 const WebSocket = require('ws');
 
-// LCU yerel ve kendinden imzalı sertifika kullanır. Bu ajan sadece
-// 127.0.0.1'e yapılan LCU istekleri için kullanılıyor.
+// The LCU uses a local self-signed certificate. This agent is only used
+// for LCU requests to 127.0.0.1.
 const localAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
 const DEFAULT_INSTALL_PATHS = [
@@ -27,7 +27,7 @@ const SUBSCRIPTIONS = [
 ];
 
 function parseLockfile(text) {
-  // Biçim: LeagueClient:<pid>:<port>:<password>:<protocol>
+  // Format: LeagueClient:<pid>:<port>:<password>:<protocol>
   const parts = text.trim().split(':');
   if (parts.length < 5) return null;
   const port = Number(parts[2]);
@@ -69,7 +69,7 @@ function findViaLockfile(installPath) {
       const creds = parseLockfile(fs.readFileSync(file, 'utf8'));
       if (creds) return creds;
     } catch {
-      /* yok, sıradakine bak */
+      /* not there, try the next one */
     }
   }
   return null;
@@ -104,14 +104,14 @@ class LcuConnector extends EventEmitter {
 
   async #tick() {
     if (this.stopped || this.connected) return;
-    // Lockfile sadece istemci açıkken var. Env ile verilen (test) öncelikli.
+    // The lockfile only exists while the client runs. One given via env (tests) wins.
     const creds = findViaLockfile(this.installPath) || (await findViaProcess());
     if (creds) {
       try {
         await this.#connect(creds);
         return;
       } catch {
-        /* istemci açılıyor olabilir, tekrar dene */
+        /* the client may be starting, try again */
       }
     }
     this.timer = setTimeout(() => this.#tick(), this.pollMs);
@@ -142,7 +142,7 @@ class LcuConnector extends EventEmitter {
         } catch {
           return;
         }
-        // WAMP olay mesajı: [8, "<abonelik>", { data, eventType, uri }]
+        // WAMP event message: [8, "<subscription>", { data, eventType, uri }]
         if (Array.isArray(msg) && msg[0] === 8 && msg[2]) {
           this.emit('event', msg[2]);
         }
@@ -168,10 +168,10 @@ class LcuConnector extends EventEmitter {
     this.emit('status', { connected: v });
   }
 
-  // REST isteği. 404 gibi durumlarda null döner.
+  // REST request. Returns null on 404 and similar.
   request(method, urlPath, body) {
     const creds = this.creds;
-    if (!creds) return Promise.reject(new Error('LCU bağlı değil'));
+    if (!creds) return Promise.reject(new Error('LCU not connected'));
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
     return new Promise((resolve, reject) => {
       const req = https.request(
@@ -205,7 +205,7 @@ class LcuConnector extends EventEmitter {
           });
         },
       );
-      req.on('timeout', () => req.destroy(new Error('LCU zaman aşımı')));
+      req.on('timeout', () => req.destroy(new Error('LCU timeout')));
       req.on('error', reject);
       if (payload) req.write(payload);
       req.end();

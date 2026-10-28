@@ -1,12 +1,12 @@
-// Sahte League Client (LCU). Gerçek oyun açmadan uygulamayı denemek için.
+// Mock League Client (LCU), for trying the app without the real game.
 //
-// Kullanım (ayrı bir terminalde):
+// Usage (in a separate terminal):
 //   npm run dev:mock
-// Sonra uygulamayı yazdığı LCU_LOCKFILE ile başlatın:
-//   Windows (PowerShell):  $env:LCU_LOCKFILE="<yol>"; npm start
-//   macOS/Linux:           LCU_LOCKFILE=<yol> npm start
+// Then start the app with the LCU_LOCKFILE it prints:
+//   Windows (PowerShell):  $env:LCU_LOCKFILE="<path>"; npm start
+//   macOS/Linux:           LCU_LOCKFILE=<path> npm start
 //
-// Senaryo: turnuva draft'ı (mavi taraf, sen orta koridordasın) -> oyun -> maç sonu.
+// Scenario: tournament draft (blue side, you play mid) -> game -> end of game.
 
 const https = require('node:https');
 const fs = require('node:fs');
@@ -18,7 +18,7 @@ const selfsigned = require('selfsigned');
 const LOCAL_PUUID = 'mock-puuid-local';
 const POSITIONS = ['top', 'jungle', 'middle', 'bottom', 'utility'];
 
-// [aktör hücresi, tür, şampiyon]. Mavi: 0-4, kırmızı: 5-9
+// [actor cell, type, champion]. Blue: 0-4, red: 5-9
 const SCRIPT = [
   [0, 'ban', 238], [5, 'ban', 157], [1, 'ban', 875], [6, 'ban', 99], [2, 'ban', 777], [7, 'ban', 234],
   [0, 'pick', 86], [5, 'pick', 64], [6, 'pick', 61], [1, 'pick', 254], [2, 'pick', 103], [7, 'pick', 222],
@@ -26,6 +26,8 @@ const SCRIPT = [
   [8, 'pick', 111], [3, 'pick', 145], [4, 'pick', 412], [9, 'pick', 58],
 ];
 const GAME_ID = 7000000001;
+// Champions the local player can pick (owned + rotation): the scenario's plus a few more
+const PICKABLE = [...new Set(SCRIPT.map((s) => s[2]))].concat([1, 7, 84, 517]);
 
 function buildSession(done) {
   const champOf = new Map();
@@ -41,7 +43,7 @@ function buildSession(done) {
     {
       id: i + 1,
       actorCellId: cell,
-      // Rakibin sıradaki seçimi kilitlenene kadar görünmez
+      // The enemy pick in progress stays hidden until locked
       championId: i < done || (i === done && cell < 5) ? champ : 0,
       completed: i < done,
       isAllyAction: cell < 5,
@@ -104,7 +106,7 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
   const pems = await selfsigned.generate([{ name: 'commonName', value: '127.0.0.1' }], { days: 30, keySize: 2048 });
   const password = 'mock-password';
   const expectedAuth = 'Basic ' + Buffer.from(`riot:${password}`).toString('base64');
-  const log = (...a) => !quiet && console.log('[sahte LCU]', ...a);
+  const log = (...a) => !quiet && console.log('[mock LCU]', ...a);
 
   const state = { phase: 'Lobby', done: 0, inChampSelect: false, eog: null };
 
@@ -124,6 +126,8 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
         return sendJson(state.phase);
       case '/lol-champ-select/v1/session':
         return state.inChampSelect ? sendJson(buildSession(state.done)) : res.writeHead(404).end();
+      case '/lol-champ-select/v1/pickable-champion-ids':
+        return state.inChampSelect ? sendJson(PICKABLE) : res.writeHead(404).end();
       case '/lol-end-of-game/v1/eog-stats-block':
         return state.eog ? sendJson(state.eog) : res.writeHead(404).end();
       default:
@@ -154,7 +158,7 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
 
   const setPhase = (p) => {
     state.phase = p;
-    log('aşama:', p);
+    log('phase:', p);
     broadcast('/lol-gameflow/v1/gameflow-phase', p);
   };
 
@@ -171,7 +175,7 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
         await sleep(stepMs);
         state.done = i;
         const [cell, type, champ] = SCRIPT[i - 1];
-        log(`${cell < 5 ? 'mavi' : 'kırmızı'} ${type} -> ${champ}`);
+        log(`${cell < 5 ? 'blue' : 'red'} ${type} -> ${champ}`);
         broadcast('/lol-champ-select/v1/session', buildSession(i));
       }
       await sleep(stepMs);
@@ -212,7 +216,7 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
   const actualPort = server.address().port;
   const lockfilePath = path.join(os.tmpdir(), `mock-lcu-lockfile-${process.pid}`);
   fs.writeFileSync(lockfilePath, `LeagueClient:${process.pid}:${actualPort}:${password}:https`);
-  log('çalışıyor, port', actualPort);
+  log('running on port', actualPort);
 
   return {
     port: actualPort,
@@ -228,18 +232,18 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
       try {
         fs.unlinkSync(lockfilePath);
       } catch {
-        /* zaten silinmiş */
+        /* already removed */
       }
     },
   };
 }
 
-module.exports = { startMockLcu, buildSession, SCRIPT, EOG_BLOCK, GAME_ID, LOCAL_PUUID };
+module.exports = { startMockLcu, buildSession, SCRIPT, EOG_BLOCK, GAME_ID, LOCAL_PUUID, PICKABLE };
 
 if (require.main === module) {
   const stepMs = Number(process.env.MOCK_STEP_MS || 1500);
   startMockLcu({ stepMs, loop: true }).then((m) => {
-    console.log('\nUygulamayı şu ortam değişkeniyle başlatın:');
+    console.log('\nStart the app with this environment variable:');
     console.log(`  LCU_LOCKFILE=${m.lockfilePath}\n`);
     const stop = () => m.close().then(() => process.exit(0));
     process.on('SIGINT', stop);

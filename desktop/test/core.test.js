@@ -1,7 +1,7 @@
-// Uçtan uca: sahte LCU -> gerçek LcuConnector -> AppCore -> sahte veritabanı
+// End to end: mock LCU -> real LcuConnector -> AppCore -> fake database
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { startMockLcu, SCRIPT } = require('./mock-lcu');
+const { startMockLcu, SCRIPT, PICKABLE } = require('./mock-lcu');
 const { LcuConnector } = require('../src/main/lcu');
 const { AppCore } = require('../src/main/core');
 
@@ -15,7 +15,7 @@ function fakeData() {
     db,
     loadMe: async () => ({ ...me }),
     loadChampions: async () => ({ patch: '16.20.1', champions: championIds.map((id) => ({ id, name: `C${id}` })) }),
-    loadMetaScores: async () => [],
+    loadStats: async () => ({ meta: [], synergy: [], matchup: [] }),
     loadTeam: async () => ({
       team: { id: 't1', name: 'Test' },
       members: [
@@ -48,7 +48,7 @@ function fakeData() {
   };
 }
 
-test('sahte LCU senaryosu baştan sona kaydedilir', async () => {
+test('the mock LCU scenario is recorded from start to finish', async () => {
   const mock = await startMockLcu({ stepMs: 25, quiet: true });
   process.env.LCU_LOCKFILE = mock.lockfilePath;
   const lcu = new LcuConnector({ pollMs: 50 });
@@ -58,9 +58,11 @@ test('sahte LCU senaryosu baştan sona kaydedilir', async () => {
 
   const seenPhases = [];
   let maxCompleted = 0;
+  let pickable = null;
   core.on('update', (p) => {
     if (p.lcu) seenPhases.push(p.lcu.phase);
     if (p.draft) maxCompleted = Math.max(maxCompleted, p.draft.completed.length);
+    if (p.pickable) pickable = p.pickable;
   });
   const saved = new Promise((r) => core.on('saved', r));
 
@@ -71,14 +73,15 @@ test('sahte LCU senaryosu baştan sona kaydedilir', async () => {
   lcu.stop();
   await mock.close();
 
-  // Draft canlı izlendi
+  // Draft was followed live, pickable champions came from the client
   assert.equal(maxCompleted, 20);
+  assert.deepEqual(pickable, PICKABLE);
   assert.ok(seenPhases.includes('ChampSelect') && seenPhases.includes('InProgress') && seenPhases.includes('EndOfGame'));
 
-  // Hesap bağlandı
+  // Account was linked
   assert.ok(data.calls.some((c) => c[0] === 'link' && c[1] === 'mock-puuid-local' && c[2] === 'Deneme#TR1'));
 
-  // Aynı maç için tek draft kaydı, 20 aksiyon
+  // One draft row for the game, 20 actions
   assert.equal(data.db.drafts.size, 1);
   assert.equal(data.db.actions.size, 20);
   const myPick = data.db.actions.get('ally:pick:3');
@@ -88,19 +91,19 @@ test('sahte LCU senaryosu baştan sona kaydedilir', async () => {
   assert.equal(data.db.actions.get('ally:pick:2').player_id, 'p-jungle');
   assert.equal(data.db.actions.get('enemy:pick:1').player_id, null);
 
-  // Oyun başladı -> bitti, sonuç kazanç
+  // Game started -> finished, result is a win
   const draft = [...data.db.drafts.values()][0];
   assert.equal(draft.status, 'finished');
   assert.equal(draft.result, 'win');
   assert.ok(data.calls.some((c) => c[0] === 'updateDraft' && c[2] === 'played'));
 
-  // Maç sonucu tek kez yazıldı ve draft'a bağlandı
+  // Match result written once and linked to the draft
   assert.equal(data.db.results.length, 1);
   assert.equal(data.db.results[0].draft_id, draft.id);
   assert.equal(data.db.results[0].kills, 9);
 });
 
-test('dodge: oyun başlamadan lobiye dönülürse draft dodged olur', async () => {
+test('dodge: returning to lobby before the game marks the draft dodged', async () => {
   const lcu = new (require('node:events').EventEmitter)();
   lcu.get = async () => null;
   const data = fakeData();

@@ -1,5 +1,5 @@
 {
-  "supabaseUrl": "https://PROJE-KIMLIGINIZ.supabase.co",
-  "supabaseKey": "PUBLISHABLE-VEYA-ANON-ANAHTARINIZ",
+  "supabaseUrl": "https://YOUR-PROJECT.supabase.co",
+  "supabaseKey": "YOUR-PUBLISHABLE-OR-ANON-KEY",
   "leagueInstallPath": "C:\\Riot Games\\League of Legends"
 }

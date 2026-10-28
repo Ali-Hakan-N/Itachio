@@ -1,4 +1,4 @@
-// Electron giriş noktası: pencereyi açar, çekirdeği kurar, arayüzle IPC köprüsünü sağlar.
+// Electron entry point: opens the window, sets up the core, bridges IPC to the UI.
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -15,13 +15,13 @@ let configError = null;
 function loadConfig() {
   const candidates = [
     path.join(app.getAppPath(), 'config.json'),
-    path.join(path.dirname(process.execPath), 'config.json'), // exe'nin yanına konmuş config
+    path.join(path.dirname(process.execPath), 'config.json'), // config placed next to the exe
   ];
   for (const file of candidates) {
     try {
       const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (!cfg.supabaseUrl || !cfg.supabaseKey || cfg.supabaseUrl.includes('PROJE-KIMLIGINIZ')) {
-        throw new Error('config.json içinde supabaseUrl ve supabaseKey doldurulmalı');
+      if (!cfg.supabaseUrl || !cfg.supabaseKey || cfg.supabaseUrl.includes('YOUR-PROJECT')) {
+        throw new Error('supabaseUrl and supabaseKey must be filled in config.json');
       }
       return cfg;
     } catch (err) {
@@ -31,7 +31,7 @@ function loadConfig() {
       }
     }
   }
-  configError = 'config.json bulunamadı. config.example.json dosyasını kopyalayıp doldurun.';
+  configError = 'config.json not found. Copy config.example.json and fill it in.';
   return null;
 }
 
@@ -42,7 +42,7 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 680,
     backgroundColor: '#0d1117',
-    title: 'Draft Koçu',
+    title: 'Flex Drafter',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
@@ -52,7 +52,7 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  // Dış bağlantılar uygulama içinde değil tarayıcıda açılsın
+  // Open external links in the browser, not inside the app
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -63,7 +63,7 @@ function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
-// Her IPC çağrısı { ok, data } veya { ok:false, error } döner
+// Every IPC call returns { ok, data } or { ok:false, error }
 function handle(channel, fn) {
   ipcMain.handle(channel, async (_e, ...args) => {
     try {
@@ -76,7 +76,7 @@ function handle(channel, fn) {
 
 function requireTeamMember() {
   const me = core.state.me;
-  if (!me) throw new Error('Önce profil oluşturun');
+  if (!me) throw new Error('Create your profile first');
   return me;
 }
 

@@ -1,4 +1,4 @@
-// Arayüzün main process'e erişebildiği tek kapı. Sadece tanımlı çağrılar açık.
+// The UI's only door to the main process. Only the listed calls are exposed.
 const { contextBridge, ipcRenderer } = require('electron');
 
 const call = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);

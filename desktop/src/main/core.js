@@ -1,6 +1,6 @@
-// Uygulamanın beyni: LCU olaylarını dinler, draft durumunu tutar,
-// geçmişi Supabase'e kaydeder ve arayüze güncelleme yayınlar.
-// Electron'dan bağımsız yazıldı; testlerde sahte LCU ve sahte veri katmanıyla çalışır.
+// The app's core: listens to LCU events, keeps the draft state, saves history
+// to Supabase and publishes updates to the UI.
+// Independent of Electron; tests run it with a mock LCU and a fake data layer.
 
 const { EventEmitter } = require('node:events');
 const { normalizeSession } = require('./champselect');
@@ -21,20 +21,21 @@ class AppCore extends EventEmitter {
       pools: [],
       champions: [],
       patch: null,
-      meta: [],
+      stats: { meta: [], synergy: [], matchup: [] },
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
+      pickable: null, // champions you can pick in champ select (owned + free rotation)
     };
-    this.current = null; // { rowId, gameId, status } - şu anki draft'ın veritabanı kaydı
-    this.lastGame = null; // maç sonu verisini draft'a bağlamak için
+    this.current = null; // { rowId, gameId, status } - database row of the current draft
+    this.lastGame = null; // to link end-of-game data to the draft
     this.savedKeys = new Set();
     this.savedEog = new Set();
-    this.queue = Promise.resolve(); // veritabanı yazımlarını sıraya koyar
+    this.queue = Promise.resolve(); // serializes database writes
     this.championIds = new Set();
     this.#attachLcu();
   }
 
-  // ---------------- Durum ----------------
+  // ---------------- State ----------------
   snapshot() {
     return JSON.parse(JSON.stringify(this.state));
   }
@@ -43,16 +44,16 @@ class AppCore extends EventEmitter {
     this.emit('update', JSON.parse(JSON.stringify(partial)));
   }
   #enqueue(fn) {
-    this.queue = this.queue.then(fn).catch((err) => this.log.error('[kayıt]', err.message || err));
+    this.queue = this.queue.then(fn).catch((err) => this.log.error('[save]', err.message || err));
     return this.queue;
   }
 
   async loadUserData() {
     const me = await this.data.loadMe();
     const { patch, champions } = await this.data.loadChampions();
-    const meta = await this.data.loadMetaScores(patch);
+    const stats = await this.data.loadStats();
     this.championIds = new Set(champions.map((c) => c.id));
-    this.#emit({ me, patch, champions, meta });
+    this.#emit({ me, patch, champions, stats });
     await this.refreshTeam();
     await this.#linkRiotAccount();
   }
@@ -115,7 +116,7 @@ class AppCore extends EventEmitter {
       const updated = await this.data.linkRiotAccount(me, { puuid: s.puuid, riotId: s.riotId });
       if (updated && updated !== me) this.#emit({ me: updated });
     } catch (err) {
-      this.log.error('[hesap bağlama]', err.message);
+      this.log.error('[account link]', err.message);
     }
   }
 
@@ -124,7 +125,7 @@ class AppCore extends EventEmitter {
       case '/lol-gameflow/v1/gameflow-phase':
         return this.#onPhase(ev.data);
       case '/lol-champ-select/v1/session':
-        if (ev.eventType === 'Delete') return this.#emit({ draft: null });
+        if (ev.eventType === 'Delete') return this.#emit({ draft: null, pickable: null });
         return this.#onSession(ev.data);
       case '/lol-end-of-game/v1/eog-stats-block':
         return this.#onEndOfGame(ev.data);
@@ -144,18 +145,18 @@ class AppCore extends EventEmitter {
     }
 
     if (prev === 'ChampSelect' && PRE_GAME_PHASES.has(phase)) {
-      // Champ select oyuna dönüşmeden bitti: dodge
+      // Champ select ended without a game: dodge
       if (cur && cur.status === 'live') {
         cur.status = 'dodged';
         this.#enqueue(() => this.data.updateDraft(cur.rowId, { status: 'dodged', ended_at: new Date().toISOString() }));
       }
       this.current = null;
       this.savedKeys.clear();
-      this.#emit({ draft: null });
+      this.#emit({ draft: null, pickable: null });
     }
 
     if (phase === 'EndOfGame') {
-      // Olay kaçırıldıysa diye maç sonu verisini ayrıca iste
+      // Ask for end-of-game data too, in case the event was missed
       this.lcu
         .get('/lol-end-of-game/v1/eog-stats-block')
         .then((block) => block && this.#onEndOfGame(block))
@@ -165,8 +166,21 @@ class AppCore extends EventEmitter {
 
   #onSession(raw) {
     const draft = normalizeSession(raw);
-    this.#emit({ draft });
+    const isNew = !this.state.draft || this.state.draft.gameId !== draft.gameId;
+    this.#emit(isNew ? { draft, pickable: null } : { draft });
+    if (isNew) this.#loadPickable(draft.gameId);
     this.#enqueue(() => this.#persistDraft(draft));
+  }
+
+  // Pickable champions do not change during champ select; fetched once per session.
+  // Banned/picked ones are included too; the recommendation engine filters them.
+  #loadPickable(gameId) {
+    this.lcu
+      .get('/lol-champ-select/v1/pickable-champion-ids')
+      .then((ids) => {
+        if (Array.isArray(ids) && ids.length && this.state.draft?.gameId === gameId) this.#emit({ pickable: ids });
+      })
+      .catch((err) => this.log.error('[pickable champions]', err.message));
   }
 
   async #persistDraft(draft) {

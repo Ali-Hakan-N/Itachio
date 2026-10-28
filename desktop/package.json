@@ -1,8 +1,8 @@
 {
-  "name": "draft-kocu",
-  "productName": "DraftKocu",
+  "name": "flex-drafter",
+  "productName": "FlexDrafter",
   "version": "0.1.0",
-  "description": "Takım için League of Legends draft yardımcısı",
+  "description": "League of Legends draft assistant for teams",
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
@@ -21,8 +21,8 @@
     "selfsigned": "^5.5.0"
   },
   "build": {
-    "appId": "gg.draftkocu.app",
-    "productName": "DraftKocu",
+    "appId": "gg.flexdrafter.app",
+    "productName": "FlexDrafter",
     "files": [
       "src/**/*",
       "config.json",

@@ -1,5 +1,5 @@
-// LCU'nun champ select oturumunu uygulamanın sade draft modeline çevirir.
-// Saf fonksiyonlar: test edilebilir, yan etkisi yok.
+// Turns the LCU champ select session into the app's simple draft model.
+// Pure functions: testable, no side effects.
 
 const POSITIONS = ['top', 'jungle', 'middle', 'bottom', 'utility'];
 
@@ -57,12 +57,12 @@ function normalizeSession(session, now = Date.now()) {
     };
   });
 
-  // Tamamlanan ban/pick'ler, oluş sırasına göre, taraf başına sıra numarasıyla
+  // Completed bans/picks in order, numbered per side
   const counters = { 'ally:ban': 0, 'ally:pick': 0, 'enemy:ban': 0, 'enemy:pick': 0 };
   const completed = [];
   for (const a of actions) {
     if (!a.completed || (a.type !== 'ban' && a.type !== 'pick')) continue;
-    if (!(a.championId > 0)) continue; // boş geçilen ban
+    if (!(a.championId > 0)) continue; // skipped ban
     const side = a.isAllyAction ? 'ally' : 'enemy';
     const key = `${side}:${a.type}`;
     counters[key] += 1;
@@ -71,7 +71,7 @@ function normalizeSession(session, now = Date.now()) {
 
   let allyBans = completed.filter((c) => c.side === 'ally' && c.kind === 'ban').map((c) => c.championId);
   let enemyBans = completed.filter((c) => c.side === 'enemy' && c.kind === 'ban').map((c) => c.championId);
-  // Bazı modlarda banlar sadece session.bans içinde görünür
+  // In some modes bans only show up in session.bans
   if (!allyBans.length) allyBans = (session.bans?.myTeamBans || []).filter((id) => id > 0);
   if (!enemyBans.length) enemyBans = (session.bans?.theirTeamBans || []).filter((id) => id > 0);
 
@@ -101,7 +101,7 @@ function normalizeSession(session, now = Date.now()) {
   };
 }
 
-/** Önerilerde kullanılamayacak şampiyonlar: banlar + kilitli pick'ler */
+/** Champions that cannot be recommended: bans + locked picks */
 function unavailableIds(draft) {
   const ids = new Set([...draft.allyBans, ...draft.enemyBans]);
   for (const p of [...draft.ally, ...draft.enemy]) if (p.locked && p.championId) ids.add(p.championId);

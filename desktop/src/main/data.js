@@ -1,5 +1,5 @@
-// Supabase ile tüm konuşma burada. Arayüz Supabase'i doğrudan görmez;
-// main process bu sınıf üzerinden okur/yazar.
+// All Supabase access lives here. The UI never talks to Supabase directly;
+// the main process reads and writes through this class.
 
 const fs = require('node:fs');
 const { createClient } = require('@supabase/supabase-js');
@@ -16,7 +16,7 @@ function fileStorage(file) {
     try {
       fs.writeFileSync(file, JSON.stringify(obj), 'utf8');
     } catch {
-      /* oturum kaydedilemezse bir sonraki açılışta tekrar giriş istenir */
+      /* if the session cannot be saved, the user signs in again next launch */
     }
   };
   return {
@@ -43,7 +43,7 @@ class DataStore {
     this.channel = null;
   }
 
-  // ---------- Oturum ----------
+  // ---------- Session ----------
   async getUser() {
     const { data } = await this.client.auth.getSession();
     return data.session?.user ?? null;
@@ -60,7 +60,7 @@ class DataStore {
     await this.client.auth.signOut();
   }
 
-  // ---------- Profil ve takım ----------
+  // ---------- Profile and team ----------
   async loadMe() {
     const user = await this.getUser();
     if (!user) return null;
@@ -103,18 +103,34 @@ class DataStore {
     return { team, members, pools };
   }
 
-  // ---------- Oyun verisi ----------
+  // ---------- Game data ----------
   async loadChampions() {
     const meta = check(await this.client.from('app_meta').select('value').eq('key', 'current_patch').maybeSingle());
     const champions = check(await this.client.from('champions').select('id,slug,name,title,tags,image').order('name'));
     return { patch: meta?.value || null, champions };
   }
-  async loadMetaScores(patch) {
-    if (!patch) return [];
-    return check(await this.client.from('meta_scores').select('champion_id,role,score,tier,source').eq('patch', patch));
+  // Recommendation engine data. Supabase returns at most 1000 rows per request, so it is paged.
+  async loadStats() {
+    // Ordered by the full primary key so pages do not shift
+    const all = async (table, columns, order) => {
+      const rows = [];
+      for (let from = 0; ; from += 1000) {
+        let q = this.client.from(table).select(columns);
+        for (const col of order) q = q.order(col);
+        const page = check(await q.range(from, from + 999));
+        rows.push(...page);
+        if (page.length < 1000) return rows;
+      }
+    };
+    const [meta, synergy, matchup] = await Promise.all([
+      all('champion_meta', 'champion_id,role,score,tier,games,source', ['champion_id', 'role', 'source']),
+      all('champion_synergy', 'champion_id,role,ally_id,strength,games', ['champion_id', 'role', 'ally_id', 'source']),
+      all('champion_matchup', 'champion_id,role,opponent_id,strength,games', ['champion_id', 'role', 'opponent_id', 'source']),
+    ]);
+    return { meta, synergy, matchup };
   }
 
-  // ---------- Havuz ----------
+  // ---------- Pool ----------
   async upsertPool(playerId, { championId, role, comfort, notes }) {
     check(
       await this.client.from('player_pools').upsert(
@@ -129,7 +145,7 @@ class DataStore {
     );
   }
 
-  // ---------- Draft geçmişi ----------
+  // ---------- Draft history ----------
   async ensureDraft({ teamId, playerId, gameId, ourSide, patch, queueId }) {
     const row = {
       team_id: teamId,
@@ -143,7 +159,7 @@ class DataStore {
     if (!gameId) {
       return check(await this.client.from('drafts').insert(row).select('id,status').single());
     }
-    // Aynı maçı birden fazla takım üyesi kaydederse tek satır kalır
+    // One row even if several teammates record the same game
     check(
       await this.client.from('drafts').upsert(row, { onConflict: 'team_id,lcu_game_id', ignoreDuplicates: true }),
     );
@@ -179,7 +195,7 @@ class DataStore {
     );
   }
 
-  // ---------- Canlı güncelleme ----------
+  // ---------- Live updates ----------
   subscribeTeam(teamId, onChange) {
     this.unsubscribe();
     if (!teamId) return;

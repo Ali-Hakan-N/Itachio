@@ -1,6 +1,6 @@
-// LCU'nun maç sonu (end-of-game) verisini sade bir sonuca çevirir.
-// Alan adları LCU sürümleri arasında küçük farklar gösterebildiği için
-// savunmacı yazıldı; ham veri ayrıca `raw` olarak saklanıyor.
+// Turns the LCU end-of-game data into a simple result.
+// Written defensively because field names differ slightly between LCU versions;
+// the raw data is also kept as `raw`.
 
 function num(v) {
   const n = Number(v);

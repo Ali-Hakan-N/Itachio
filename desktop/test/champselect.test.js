@@ -4,7 +4,7 @@ const { normalizeSession, unavailableIds } = require('../src/main/champselect');
 const { parseEndOfGame } = require('../src/main/endofgame');
 const { buildSession, EOG_BLOCK, SCRIPT } = require('./mock-lcu');
 
-test('başlangıçta: mavi taraf, sıra bizde ban', () => {
+test('at start: blue side, our ban turn', () => {
   const d = normalizeSession(buildSession(0), 1000);
   assert.equal(d.ourSide, 'blue');
   assert.equal(d.gameId, 7000000001);
@@ -13,15 +13,15 @@ test('başlangıçta: mavi taraf, sıra bizde ban', () => {
   assert.deepEqual(d.turn, { side: 'ally', kind: 'ban', cellIds: [0] });
   assert.equal(d.isOurTurn, false);
   assert.equal(d.completed.length, 0);
-  // Yerel oyuncunun ön seçimi hover olarak görünür
+  // The local player's pre-pick shows up as a hover
   const local = d.ally.find((p) => p.isLocal);
   assert.equal(local.position, 'middle');
   assert.equal(local.hoverId, 103);
   assert.equal(local.locked, false);
 });
 
-test('rakibin sıradaki pick\'i kilitlenmeden görünmez', () => {
-  const d = normalizeSession(buildSession(7)); // kırmızı ilk pick sırası
+test('the enemy pick in progress is hidden until locked', () => {
+  const d = normalizeSession(buildSession(7)); // red side's first pick turn
   assert.equal(d.turn.side, 'enemy');
   assert.equal(d.enemy.find((p) => p.cellId === 5).championId, 0);
   const d2 = normalizeSession(buildSession(8));
@@ -29,13 +29,13 @@ test('rakibin sıradaki pick\'i kilitlenmeden görünmez', () => {
   assert.equal(d2.enemy.find((p) => p.cellId === 5).locked, true);
 });
 
-test('sıra yerel oyuncuda iken isOurTurn', () => {
-  const d = normalizeSession(buildSession(10)); // hücre 2 pick
+test('isOurTurn while the local player is acting', () => {
+  const d = normalizeSession(buildSession(10)); // cell 2 picking
   assert.equal(d.isOurTurn, true);
   assert.equal(d.ally.find((p) => p.isLocal).hoverId, 103);
 });
 
-test('draft sonu: tüm ban/pick\'ler sıralı ve doğru tarafta', () => {
+test('end of draft: all bans/picks in order and on the right side', () => {
   const d = normalizeSession(buildSession(SCRIPT.length));
   assert.equal(d.phase, 'FINALIZATION');
   assert.equal(d.turn, null);
@@ -49,13 +49,13 @@ test('draft sonu: tüm ban/pick\'ler sıralı ve doğru tarafta', () => {
   assert.equal(unavailableIds(d).size, 20);
 });
 
-test('kırmızı tarafı doğru algılar', () => {
+test('detects the red side', () => {
   const s = buildSession(3);
   s.myTeam = s.myTeam.map((p) => ({ ...p, team: 2 }));
   assert.equal(normalizeSession(s).ourSide, 'red');
 });
 
-test('boş geçilen ban kaydedilmez', () => {
+test('a skipped ban is not recorded', () => {
   const s = buildSession(2);
   s.actions[0][0].championId = 0;
   const d = normalizeSession(s);
@@ -63,7 +63,7 @@ test('boş geçilen ban kaydedilmez', () => {
   assert.equal(d.completed[0].side, 'enemy');
 });
 
-test('maç sonu verisi', () => {
+test('end-of-game data', () => {
   const r = parseEndOfGame(EOG_BLOCK);
   assert.equal(r.win, true);
   assert.equal(r.kills, 9);
