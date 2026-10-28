@@ -1,79 +1,68 @@
-# Draft Koçu
+# Flex Drafter
 
-Takım için League of Legends draft yardımcısı. Champ select'i League istemcisinden canlı okur, her oyuncunun şampiyon havuzuna göre öneri verir, draft'ları ve maç sonuçlarını takımın ortak veritabanına kaydeder.
+A League of Legends draft assistant for a team that plays Flex together. It reads champ select live from the League client, suggests the best picks for your role, and saves drafts and results to a shared database.
 
-## Nasıl çalışır
+## How it works
 
-```
-Her oyuncunun bilgisayarı                         Bulut (Supabase)
-┌───────────────┐   LCU (yerel)   ┌──────────────┐        ┌──────────────────────┐
-│ League Client │ ─────────────── │ Draft Koçu   │ ─────> │ Postgres veritabanı  │
-└───────────────┘                 │ (Electron)   │ <───── │ Auth, Realtime       │
-                                  └──────────────┘        │ Edge Function + cron │
-                                                          └──────────────────────┘
-```
+- **Desktop app (Electron).** Each player runs it on their own computer. It connects to the local League client (LCU), follows bans and picks live, and shows the top 10 champions you can pick.
+- **Supabase.** Shared database for teams, champion pools, draft history, match results and champion stats.
+- **Collector.** Runs once a day on one computer. It pulls Diamond+ matches from the Riot API (Flex first, then Solo/Duo) and turns them into meta, synergy and matchup scores.
 
-- **Masaüstü uygulaması (Electron):** League istemcisinin yerel API'sine (LCU) bağlanır. Banlar, iki takımın pick'leri, sıranın kimde olduğu ve süre anlık gelir; rakip takımı elle girmek gerekmez.
-- **Supabase:** Ortak veri deposu. Şampiyon listesi, oyuncu havuzları, draft geçmişi, maç sonuçları ve ileride meta/counter verisi burada durur. Biri havuzunu değiştirince diğerlerinin uygulaması anında güncellenir.
-- **Zamanlanmış iş:** Her gün Riot Data Dragon'dan güncel patch'i ve şampiyon listesini çeker. Veri toplayıcı (meta/counter) aynı yapıya eklenecek.
-
-Her oyuncu uygulamayı kendi bilgisayarında çalıştırır. Aynı maçı birden fazla kişi kaydederse veritabanında tek kayıt kalır.
-
-## Klasörler
+A recommendation's score is:
 
 ```
-supabase/
-  migrations/0001_init.sql      Tablolar, güvenlik kuralları (RLS), takım kurma/katılma
-  functions/sync-ddragon/       Şampiyon listesini güncelleyen Edge Function
-  cron.sql                      Fonksiyonu her gün çalıştıran zamanlama
-desktop/
-  src/main/lcu.js               League istemcisini bulma ve bağlantı
-  src/main/champselect.js       LCU champ select verisini sade draft modeline çevirme
-  src/main/endofgame.js         Maç sonu istatistiklerini okuma
-  src/main/core.js              Draft takibi ve kayıt mantığı
-  src/main/data.js              Supabase işlemleri
-  src/main/main.js              Electron penceresi ve arayüz köprüsü
-  src/renderer/                 Arayüz (draft, havuz, takım, geçmiş)
-  src/renderer/recommend.js     Öneri motoru (şimdilik konfor + meta puanı)
-  test/                         Testler ve sahte League istemcisi
+score = meta score + synergy with locked allies (up to +15) + matchup against locked enemies (±20)
 ```
 
-## Kurulum
+## Folders
 
-Bu adımları takımda **bir kişi** bir kez yapar.
+```
+desktop/     Electron app (LCU connection, draft screen, recommendation engine)
+collector/   Daily data job (Riot API -> scores -> Supabase)
+supabase/    Database migrations, champion sync function, cron
+```
 
-### 1. Supabase projesi
+## Setup
 
-1. [supabase.com](https://supabase.com) üzerinden ücretsiz bir proje açın.
-2. **SQL Editor**'da `supabase/migrations/0001_init.sql` dosyasının içeriğini çalıştırın.
-3. **Authentication > Sign In / Providers > Email** altında, isterseniz "Confirm email" seçeneğini kapatın. Açık kalırsa her oyuncu kayıt sonrası e-postasındaki bağlantıya tıklamalı.
+Done once, by one person on the team.
 
-### 2. Şampiyon listesi senkronu
+### 1. Supabase
 
-1. **Edge Functions > Deploy a new function > Via Editor** ile `sync-ddragon` adında bir fonksiyon oluşturun ve `supabase/functions/sync-ddragon/index.ts` içeriğini yapıştırın.
-2. Fonksiyonun ayarlarında **Enforce JWT Verification** seçeneğini kapatın (fonksiyon kendi parolasını kontrol ediyor).
-3. **Edge Functions > Secrets** altına `CRON_SECRET` adında, uzun rastgele bir değer ekleyin.
-4. `supabase/cron.sql` dosyasındaki `<PROJECT_REF>` ve `<CRON_SECRET>` değerlerini doldurup SQL Editor'da çalıştırın.
-5. İlk listeyi hemen almak için fonksiyonu bir kez elle çağırın:
-   ```
-   curl -X POST https://<PROJECT_REF>.supabase.co/functions/v1/sync-ddragon -H "x-cron-secret: <CRON_SECRET>"
-   ```
-   Yanıt `{"ok":true,"patch":"...","champions":...}` olmalı.
+1. Create a project on [supabase.com](https://supabase.com).
+2. Apply the migrations: `npx supabase link --project-ref <ref>` then `npx supabase db push`.
+3. Optional: turn off **Authentication > Email > Confirm email** so players can sign in right after signing up.
 
-Supabase CLI kullanıyorsanız 1-2. adımlar yerine `supabase functions deploy sync-ddragon` yeterli (`supabase/config.toml` JWT ayarını içeriyor).
+### 2. Champion sync
 
-### 3. Uygulama ayarı
+```bash
+npx supabase secrets set CRON_SECRET=<long random value>
+npx supabase functions deploy sync-ddragon
+```
 
-`desktop/config.example.json` dosyasını `desktop/config.json` olarak kopyalayıp doldurun:
+Fill in `<PROJECT_REF>` and `<CRON_SECRET>` in `supabase/cron.sql` and run it in the SQL Editor. Don't commit the filled-in file.
 
-- `supabaseUrl`: **Project Settings > API** altındaki proje adresi
-- `supabaseKey`: aynı sayfadaki **publishable** (veya eski adıyla **anon**) anahtar
+### 3. App config
 
-Bu anahtar herkese açık kullanılmak üzere tasarlanmıştır; veriyi koruyan şey veritabanındaki güvenlik kurallarıdır. Yine de `config.json` repoya girmez (`.gitignore`). **service_role / secret** anahtarını asla buraya yazmayın.
+Copy `desktop/config.example.json` to `desktop/config.json` and fill in the project URL and the **publishable** (anon) key. Never use the service_role key here.
 
-## Geliştirme
+### 4. Collector
 
-Node.js 22 gerekir.
+```bash
+cd collector
+npm install
+cp .env.example .env      # fill in SUPABASE_SERVICE_ROLE_KEY and RIOT_API_KEY
+npm run collect:dry       # quick check, writes nothing
+npm run collect           # real run (about 40 minutes)
+powershell -ExecutionPolicy Bypass -File scripts\schedule-windows.ps1   # daily at 10:00
+```
+
+- Get a Riot key at [developer.riotgames.com](https://developer.riotgames.com). Development keys expire every 24 hours; a Personal API key does not.
+- If the key has expired, the run stops and logs it without touching the data.
+- Scores are only replaced when there is enough data, so the first days of a new patch keep the previous scores.
+
+## Development
+
+Requires Node.js 22+.
 
 ```bash
 cd desktop
@@ -81,63 +70,41 @@ npm install
 npm start
 ```
 
-### League açmadan denemek
-
-Sahte bir League istemcisi, bir turnuva draft'ını, oyunu ve maç sonunu sırayla oynatır:
+Try it without League:
 
 ```bash
-# 1. terminal
-npm run dev:mock
-# yazdığı LCU_LOCKFILE yolunu kopyalayın
-
-# 2. terminal (PowerShell)
-$env:LCU_LOCKFILE="<yol>"; npm start
-# macOS / Linux
-LCU_LOCKFILE=<yol> npm start
+npm run dev:mock                       # terminal 1: mock client, prints LCU_LOCKFILE
+$env:LCU_LOCKFILE="<path>"; npm start  # terminal 2 (PowerShell)
 ```
 
-Draft'ın kaydedilmesi için giriş yapmış ve bir takıma katılmış olmanız gerekir.
+Tests: `npm test` in `desktop/` and in `collector/`.
 
-### Testler
+## Release
+
+Add `SUPABASE_URL` and `SUPABASE_KEY` as repository secrets, then push a tag:
 
 ```bash
-npm test
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-Testler champ select dönüşümünü, maç sonu okumayı ve sahte istemciyle uçtan uca akışı (bağlanma, draft kaydı, dodge, maç sonucu) kontrol eder. Veritabanı güvenlik kuralları ayrıca Postgres üzerinde üç farklı kullanıcıyla denendi.
+GitHub Actions builds the Windows installer and attaches it to the release. The exe is unsigned, so Windows may warn on first launch (**More info > Run anyway**).
 
-## Takıma dağıtma
+## Using the app
 
-Repo GitHub'dayken:
+1. Sign up and save your profile (nickname, main role).
+2. One player creates the team and shares the invite code from the **Team** tab; the others join with it.
+3. Optionally add your champions in **My pool**. They are marked in the list but don't change the score.
+4. Open League. The app finds the client on its own, and the **Draft** tab updates live in champ select.
 
-1. **Settings > Secrets and variables > Actions** altına `SUPABASE_URL` ve `SUPABASE_KEY` ekleyin.
-2. Bir sürüm etiketi gönderin:
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-3. GitHub Actions Windows kurulum dosyasını üretip **Releases** sayfasına koyar. Takım arkadaşları exe'yi oradan indirir.
+## Roadmap
 
-Exe imzasız olduğu için Windows ilk açılışta "bilinmeyen yayıncı" uyarısı gösterebilir: **Ek bilgi > Yine de çalıştır**.
+- [x] Live draft from the LCU, teams and pools, draft and result history
+- [x] Recommendations from meta, synergy and matchups
+- [x] Daily Riot API collector
+- [ ] Player stats from the Riot API
+- [ ] Our own prediction model trained on match data
 
-Kendi bilgisayarınızda üretmek için (Windows): `npm run dist` → `desktop/dist/`.
+## Legal
 
-## Kullanım
-
-1. Uygulamayı açın, hesap oluşturun.
-2. Profilinizi (takma ad, ana rol) kaydedin.
-3. Takımda ilk kişi takımı kurar, **Takım** sekmesindeki davet kodunu paylaşır; diğerleri bu kodla katılır.
-4. **Havuzum** sekmesinden oynadığınız şampiyonları rol ve konfor puanıyla ekleyin.
-5. League açıkken uygulama istemciyi kendiliğinden bulur ve LoL hesabınızı profilinize bağlar. Champ select başladığında **Draft** sekmesi canlı güncellenir.
-
-## Yol haritası
-
-- [x] **1. aşama:** LCU'dan canlı draft, takım ve havuzlar, draft + maç sonu kaydı, günlük şampiyon senkronu
-- [ ] Veri toplayıcı: meta ve counter verisini `meta_scores`, `matchups`, `synergies` tablolarına yazan zamanlanmış iş
-- [ ] Strateji motoru: meta puanı ve kompozisyon uyumu (`recommend.js`)
-- [ ] **2. aşama:** Riot API ile oyuncu istatistikleri
-- [ ] **3. aşama:** Maç verisinden eğitilen kendi tahmin modeli
-
-## Not
-
-Draft Koçu, Riot Games tarafından onaylanmamıştır ve Riot Games'in ya da League of Legends'ın üretiminde veya yönetiminde yer alan kişilerin görüşlerini yansıtmaz. League of Legends ve Riot Games, Riot Games, Inc.'in ticari markalarıdır.
+Flex Drafter isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.

@@ -2,16 +2,22 @@ node_modules/
 dist/
 out/
 
-# Kişisel ayarlar: Supabase adresi/anahtarı. Repoya girmez.
+# Local settings: Supabase URL and keys. Never committed.
 desktop/config.json
 .env
 .env.*
+!.env.example
+.claude/settings.local.json
 
-# Supabase CLI yerel dosyaları
+# Collector local files
+collector/data/
+collector/logs/
+
+# Supabase CLI local files
 supabase/.temp/
 supabase/.branches/
 
-# İşletim sistemi / editör
+# OS / editor
 .DS_Store
 Thumbs.db
 .vscode/

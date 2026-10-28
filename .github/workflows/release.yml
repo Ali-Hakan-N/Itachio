@@ -1,11 +1,11 @@
-name: Windows sürümü
+name: Windows release
 
-# "v0.1.0" gibi bir etiket gönderildiğinde Windows kurulum dosyasını üretir
-# ve GitHub Releases'a yükler. Takım arkadaşları exe'yi oradan indirir.
+# When a tag like "v0.1.0" is pushed, builds the Windows installer and
+# uploads it to GitHub Releases, where teammates download it.
 #
-# Gerekli repo secret'ları (Settings > Secrets and variables > Actions):
+# Required repository secrets (Settings > Secrets and variables > Actions):
 #   SUPABASE_URL  - https://xxxx.supabase.co
-#   SUPABASE_KEY  - publishable (veya anon) anahtar
+#   SUPABASE_KEY  - publishable (or anon) key
 
 on:
   push:
@@ -30,13 +30,13 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm test
-      - name: config.json oluştur
+      - name: Create config.json
         shell: pwsh
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          if (-not $env:SUPABASE_URL -or -not $env:SUPABASE_KEY) { throw "SUPABASE_URL ve SUPABASE_KEY secret'ları tanımlı değil" }
+          if (-not $env:SUPABASE_URL -or -not $env:SUPABASE_KEY) { throw "SUPABASE_URL and SUPABASE_KEY secrets are not set" }
           @{ supabaseUrl = $env:SUPABASE_URL; supabaseKey = $env:SUPABASE_KEY; leagueInstallPath = "C:\Riot Games\League of Legends" } |
             ConvertTo-Json | Set-Content -Encoding utf8 config.json
       - run: npx electron-builder --win nsis --publish never
