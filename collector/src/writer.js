@@ -1,0 +1,49 @@
+// Writes rows to Supabase. Each table of a source is rewritten as a whole:
+// new rows are upserted first, then the source's rows that did not come in
+// this run are deleted. If a source returned no rows for a table, that table
+// is left alone (a half-finished run must not wipe good data).
+
+const TABLES = {
+  meta: { name: 'champion_meta', conflict: 'champion_id,role,source' },
+  synergy: { name: 'champion_synergy', conflict: 'champion_id,role,ally_id,source' },
+  matchup: { name: 'champion_matchup', conflict: 'champion_id,role,opponent_id,source' },
+};
+const CHUNK = 500;
+
+function check({ data, error }) {
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+async function writeRows(client, rows, { source, collectedAt }) {
+  const stats = {};
+  for (const [kind, t] of Object.entries(TABLES)) {
+    const list = rows[kind];
+    if (!list.length) {
+      stats[kind] = { written: 0, removed: 0, skipped: true };
+      continue;
+    }
+    for (let i = 0; i < list.length; i += CHUNK) {
+      check(await client.from(t.name).upsert(list.slice(i, i + CHUNK), { onConflict: t.conflict }));
+    }
+    const removed = check(
+      await client.from(t.name).delete().eq('source', source).lt('collected_at', collectedAt).select('champion_id'),
+    );
+    stats[kind] = { written: list.length, removed: removed.length };
+  }
+  return stats;
+}
+
+async function loadChampions(client) {
+  return check(await client.from('champions').select('id,slug,name'));
+}
+
+async function startRun(client, source) {
+  return check(await client.from('collector_runs').insert({ source }).select('id').single()).id;
+}
+
+async function finishRun(client, id, fields) {
+  check(await client.from('collector_runs').update({ ...fields, finished_at: new Date().toISOString() }).eq('id', id));
+}
+
+module.exports = { writeRows, loadChampions, startRun, finishRun };
