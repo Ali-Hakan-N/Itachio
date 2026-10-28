@@ -10,7 +10,7 @@ function flatActions(session) {
 /**
  * @returns {{
  *   gameId: number|null, ourSide: 'blue'|'red', phase: string, endsAt: number|null,
- *   localCellId: number, isOurTurn: boolean, turn: null|{side:'ally'|'enemy', kind:'ban'|'pick', cellIds:number[]},
+ *   localCellId: number, isOurTurn: boolean, myPickActionId: number|null, turn: null|{side:'ally'|'enemy', kind:'ban'|'pick', cellIds:number[]},
  *   ally: Array<{cellId:number, championId:number, hoverId:number, locked:boolean, position:string, puuid:string, isLocal:boolean}>,
  *   enemy: Array<{cellId:number, championId:number, locked:boolean, position:string}>,
  *   allyBans: number[], enemyBans: number[],
@@ -75,6 +75,9 @@ function normalizeSession(session, now = Date.now()) {
   if (!allyBans.length) allyBans = (session.bans?.myTeamBans || []).filter((id) => id > 0);
   if (!enemyBans.length) enemyBans = (session.bans?.theirTeamBans || []).filter((id) => id > 0);
 
+  // The local player's next pick that is not locked yet: the app can set a hover on it
+  const myPick = actions.find((a) => a.actorCellId === localCellId && a.type === 'pick' && !a.completed);
+
   const inProgress = actions.filter((a) => a.isInProgress && !a.completed);
   const turn = inProgress.length
     ? {
@@ -92,6 +95,7 @@ function normalizeSession(session, now = Date.now()) {
     endsAt: typeof left === 'number' && left > 0 ? now + left : null,
     localCellId,
     isOurTurn: !!turn && turn.cellIds.includes(localCellId),
+    myPickActionId: myPick ? myPick.id : null,
     turn,
     ally,
     enemy,

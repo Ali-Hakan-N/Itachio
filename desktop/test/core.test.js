@@ -121,3 +121,34 @@ test('dodge: returning to lobby before the game marks the draft dodged', async (
   assert.equal(data.db.actions.size, 4);
   assert.equal(core.state.draft, null);
 });
+
+test('hover: clicking a recommendation sets the hover in the client', async () => {
+  const mock = await startMockLcu({ stepMs: 400, quiet: true });
+  process.env.LCU_LOCKFILE = mock.lockfilePath;
+  const lcu = new LcuConnector({ pollMs: 50 });
+  const core = new AppCore({ lcu, data: fakeData(), log: { error: () => {} } });
+  await core.loadUserData();
+  const firstDraft = new Promise((r) => core.on('update', (p) => p.draft && r()));
+  lcu.start();
+  await firstDraft;
+
+  const hovered = new Promise((r) =>
+    core.on('update', (p) => p.draft && p.draft.ally.find((x) => x.isLocal).hoverId === 7 && r()),
+  );
+  await core.hoverChampion(7);
+  await hovered;
+  assert.deepEqual(mock.patches, [{ actionId: 11, championId: 7 }]);
+  lcu.stop();
+  await mock.close();
+});
+
+test('hover: refused once our pick is locked', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  lcu.get = async () => null;
+  lcu.request = async () => assert.fail('no request expected');
+  const core = new AppCore({ lcu, data: fakeData(), log: { error: () => {} } });
+  await core.loadUserData();
+  const { buildSession } = require('./mock-lcu');
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
+  await assert.rejects(core.hoverChampion(7), /No pick/);
+});

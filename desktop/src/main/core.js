@@ -172,6 +172,13 @@ class AppCore extends EventEmitter {
     this.#enqueue(() => this.#persistDraft(draft));
   }
 
+  // Sets a hover (or pick intent before our turn) in the client. Locking stays in the client.
+  async hoverChampion(championId) {
+    const actionId = this.state.draft?.myPickActionId;
+    if (!actionId) throw new Error('No pick to set right now');
+    await this.lcu.request('PATCH', `/lol-champ-select/v1/session/actions/${actionId}`, { championId });
+  }
+
   // Pickable champions do not change during champ select; fetched once per session.
   // Banned/picked ones are included too; the recommendation engine filters them.
   #loadPickable(gameId) {

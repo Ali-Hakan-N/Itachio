@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   upsertPool: call('pool:upsert'),
   removePool: call('pool:remove'),
   listHistory: call('history:list'),
+  hoverChampion: call('draft:hover'),
   onState: (cb) => ipcRenderer.on('state', (_e, partial) => cb(partial)),
   onSaved: (cb) => ipcRenderer.on('saved', (_e, info) => cb(info)),
 });

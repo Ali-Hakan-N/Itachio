@@ -108,7 +108,40 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
   const expectedAuth = 'Basic ' + Buffer.from(`riot:${password}`).toString('base64');
   const log = (...a) => !quiet && console.log('[mock LCU]', ...a);
 
-  const state = { phase: 'Lobby', done: 0, inChampSelect: false, eog: null };
+  const state = { phase: 'Lobby', done: 0, inChampSelect: false, eog: null, hover: 0 };
+  const patches = []; // hovers the app sent: { actionId, championId }
+
+  // The current session, with the hover the app set on the local player's pick
+  const sessionNow = () => {
+    const s = buildSession(state.done);
+    const local = s.myTeam.find((p) => p.cellId === s.localPlayerCellId);
+    const pick = s.actions.flat().find((a) => a.actorCellId === s.localPlayerCellId && a.type === 'pick');
+    if (state.hover && local && pick && !pick.completed) {
+      local.championPickIntent = state.hover;
+      if (pick.isInProgress) {
+        local.championId = state.hover;
+        pick.championId = state.hover;
+      }
+    }
+    return s;
+  };
+
+  const patchAction = (req, res, actionId) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const pick = buildSession(state.done).actions.flat().find((a) => a.id === actionId);
+      if (!state.inChampSelect || !pick || pick.actorCellId !== 2 || pick.type !== 'pick' || pick.completed) {
+        return res.writeHead(400).end();
+      }
+      const { championId } = JSON.parse(body || '{}');
+      patches.push({ actionId, championId });
+      state.hover = championId;
+      log('hover ->', championId);
+      res.writeHead(204).end();
+      broadcast('/lol-champ-select/v1/session', sessionNow());
+    });
+  };
 
   const server = https.createServer({ key: pems.private, cert: pems.cert }, (req, res) => {
     if (req.headers.authorization !== expectedAuth) {
@@ -119,13 +152,15 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(obj));
     };
+    const actionMatch = req.method === 'PATCH' && /^\/lol-champ-select\/v1\/session\/actions\/(\d+)$/.exec(req.url);
+    if (actionMatch) return patchAction(req, res, Number(actionMatch[1]));
     switch (req.url) {
       case '/lol-summoner/v1/current-summoner':
         return sendJson({ puuid: LOCAL_PUUID, gameName: 'Deneme', tagLine: 'TR1', displayName: 'Deneme' });
       case '/lol-gameflow/v1/gameflow-phase':
         return sendJson(state.phase);
       case '/lol-champ-select/v1/session':
-        return state.inChampSelect ? sendJson(buildSession(state.done)) : res.writeHead(404).end();
+        return state.inChampSelect ? sendJson(sessionNow()) : res.writeHead(404).end();
       case '/lol-champ-select/v1/pickable-champion-ids':
         return state.inChampSelect ? sendJson(PICKABLE) : res.writeHead(404).end();
       case '/lol-end-of-game/v1/eog-stats-block':
@@ -170,13 +205,14 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
       setPhase('ChampSelect');
       state.inChampSelect = true;
       state.done = 0;
-      broadcast('/lol-champ-select/v1/session', buildSession(0), 'Create');
+      state.hover = 0;
+      broadcast('/lol-champ-select/v1/session', sessionNow(), 'Create');
       for (let i = 1; i <= SCRIPT.length && !closed; i += 1) {
         await sleep(stepMs);
         state.done = i;
         const [cell, type, champ] = SCRIPT[i - 1];
         log(`${cell < 5 ? 'blue' : 'red'} ${type} -> ${champ}`);
-        broadcast('/lol-champ-select/v1/session', buildSession(i));
+        broadcast('/lol-champ-select/v1/session', sessionNow());
       }
       await sleep(stepMs);
       state.inChampSelect = false;
@@ -206,7 +242,7 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
         if (op === 5) ws.subs.add(name);
         if (ws.subs.size >= 3) setTimeout(runScenario, stepMs);
       } catch {
-        /* yok say */
+        /* ignore */
       }
     });
     ws.on('close', () => clients.delete(ws));
@@ -223,6 +259,7 @@ async function startMockLcu({ stepMs = 1500, port = 0, loop = false, quiet = fal
     lockfilePath,
     localPuuid: LOCAL_PUUID,
     gameId: GAME_ID,
+    patches,
     finished,
     close: async () => {
       closed = true;

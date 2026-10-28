@@ -148,6 +148,8 @@ app.whenReady().then(async () => {
     await core.refreshTeam();
   });
 
+  handle('draft:hover', (championId) => core.hoverChampion(Number(championId)));
+
   handle('history:list', async () => {
     const me = core.state.me;
     return me?.team_id ? data.listHistory(me.team_id) : [];

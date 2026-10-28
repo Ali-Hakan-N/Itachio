@@ -274,8 +274,9 @@ function draftContext(d) {
 }
 
 const signed = (n) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '0');
+const tierOf = (s) => (s >= 70 ? 'S' : s >= 60 ? 'A' : s >= 50 ? 'B' : s >= 40 ? 'C' : 'D');
 
-function recRow(r) {
+function recRow(r, i, { canHover, hoverId }) {
   const parts = [`Meta ${r.base}`];
   if (r.allies.length) {
     parts.push(`<span class="up">Synergy ${signed(r.synergy)}</span>: ${r.allies.map((a) => esc(champName(a.championId))).join(', ')}`);
@@ -288,14 +289,23 @@ function recRow(r) {
       .filter(Boolean).join(' · ');
     parts.push(`<span class="${cls}">Matchup ${signed(r.matchup)}</span> (${detail})`);
   }
+  const tier = tierOf(r.base);
+  const hovering = r.championId === hoverId;
   return `
-    <div class="rec">${champImg(r.championId)}
-      <div>
-        <div class="name">${esc(champName(r.championId))}${r.inPool ? ' <span class="badge">In pool</span>' : ''}</div>
-        <div class="why">${parts.join(' · ')}</div>
-      </div>
-      <div class="score">${r.score}</div>
-    </div>`;
+    <button type="button" class="rec ${hovering ? 'hovering' : ''}" data-hover="${r.championId}"
+      ${canHover ? 'title="Hover in the client"' : 'disabled'}>
+      <span class="rank">${i + 1}</span>
+      ${champImg(r.championId)}
+      <span class="info">
+        <span class="name">${esc(champName(r.championId))}
+          <span class="tier t-${tier}">${tier}</span>
+          ${r.inPool ? '<span class="badge">In pool</span>' : ''}
+          ${hovering ? '<span class="badge live">Hovering</span>' : ''}
+        </span>
+        <span class="why">${parts.join(' · ')}</span>
+      </span>
+      <span class="score"><b>${r.score}</b><i data-w="${r.score}"></i></span>
+    </button>`;
 }
 
 function renderDraft() {
@@ -346,31 +356,43 @@ function renderDraft() {
       ${blueCol}
       <section class="center">
         <div class="phasebox ${d.isOurTurn ? 'mine' : ''}">
-          <div class="turn ${d.isOurTurn ? 'mine' : ''}">${esc(turnText)}</div>
+          <div class="turn-row">
+            <div class="turn ${d.isOurTurn ? 'mine' : ''}">${esc(turnText)}</div>
+            <div class="secs" id="tsec"></div>
+          </div>
           <div class="timer"><div id="tbar"></div></div>
         </div>
         <div>
           <h3 class="sub">${local?.locked ? `Your pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</h3>
           ${local?.locked ? '' : recs.length
-            ? `<div class="recs">${recs.map(recRow).join('')}</div>`
+            ? `<div class="recs">${recs.map((r, i) => recRow(r, i, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>`
             : `<p class="note">${hasStats
                 ? 'No pickable champions left for this role.'
                 : 'No meta data yet. Recommendations appear here after the collector runs.'}</p>`}
-          ${local?.locked || !hasStats ? '' : `<p class="note gap">Score = meta + synergy with your team + matchup against the enemy. ${S.pickable
-            ? 'Only champions you can pick (owned and free rotation) are listed.'
-            : 'Could not get your owned champions from the client; listing all champions.'}</p>`}
         </div>
       </section>
       ${redCol}
     </div>`;
 
-  // Countdown bar
+  const list = $view.querySelector('.recs');
+  // Inline style attributes are blocked by the CSP, so bar widths are set here
+  for (const bar of $view.querySelectorAll('[data-w]')) bar.style.width = `${bar.dataset.w}%`;
+  if (list) {
+    list.onclick = async (e) => {
+      const b = e.target.closest('[data-hover]');
+      if (b && !b.disabled) await run(api.hoverChampion(Number(b.dataset.hover)));
+    };
+  }
+
+  // Countdown bar and seconds
   if (d.endsAt) {
     const total = Math.max(d.endsAt - Date.now(), 1);
     const bar = document.getElementById('tbar');
+    const secs = document.getElementById('tsec');
     const tick = () => {
       const left = Math.max(d.endsAt - Date.now(), 0);
       if (bar) bar.style.width = `${(left / total) * 100}%`;
+      if (secs) secs.textContent = Math.ceil(left / 1000);
     };
     tick();
     timerHandle = setInterval(tick, 250);

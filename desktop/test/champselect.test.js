@@ -74,3 +74,8 @@ test('end-of-game data', () => {
   const lost = parseEndOfGame({ gameId: 5, localPlayer: { stats: { WIN: 0 } } });
   assert.equal(lost.win, false);
 });
+
+test('finds the local player pick action until it is locked', () => {
+  assert.equal(normalizeSession(buildSession(0)).myPickActionId, 11);
+  assert.equal(normalizeSession(buildSession(SCRIPT.length)).myPickActionId, null);
+});
