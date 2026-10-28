@@ -1,7 +1,7 @@
 {
   "name": "flex-drafter",
   "productName": "FlexDrafter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "League of Legends draft assistant for teams",
   "main": "src/main/main.js",
   "private": true,
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
+    "electron-updater": "^6.8.11",
     "ws": "^8.22.0"
   },
   "devDependencies": {
@@ -22,6 +23,13 @@
   },
   "build": {
     "appId": "gg.flexdrafter.app",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Ali-Hakan-N",
+        "repo": "lol-draft-picker"
+      }
+    ],
     "productName": "FlexDrafter",
     "files": [
       "src/**/*",

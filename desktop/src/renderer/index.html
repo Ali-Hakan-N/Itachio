@@ -17,7 +17,7 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="brand"><span class="logo" aria-hidden="true"></span>Flex<span>Drafter</span></div>
+      <div class="brand"><span class="logo" aria-hidden="true"></span>Flex<span class="brand-2">Drafter</span><small class="ver" id="ver"></small></div>
       <nav class="tabs" id="tabs" hidden>
         <button data-tab="draft" class="active">Draft</button>
         <button data-tab="pool" class="locked" disabled title="Coming soon">
@@ -29,6 +29,7 @@
       <div class="status" id="status"></div>
     </header>
     <main id="view"></main>
+    <div id="update" aria-live="polite"></div>
     <div class="toasts" id="toasts" aria-live="polite"></div>
     <script src="recommend.js"></script>
     <script src="app.js"></script>

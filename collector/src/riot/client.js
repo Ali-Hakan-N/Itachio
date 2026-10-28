@@ -37,6 +37,11 @@ class RateLimiter {
     this.pausedUntil = Math.max(this.pausedUntil, this.now() + ms);
   }
 
+  setWindows(windows) {
+    this.windows = windows;
+    this.maxWindow = Math.max(...windows.map((w) => w[1]));
+  }
+
   async #waitForSlot() {
     for (;;) {
       const now = this.now();
@@ -66,6 +71,20 @@ class RiotClient {
     this.log = log;
     this.limiters = new Map();
     this.requests = 0;
+    this.limitSpec = String(limits);
+  }
+
+  // Riot reports the key's real limits in X-App-Rate-Limit ("20:1,100:120").
+  // Adopting them uses a personal or production key to the full without any setting.
+  #adoptLimits(res) {
+    const spec = res.headers.get('x-app-rate-limit');
+    if (!spec || spec === this.limitSpec) return;
+    const windows = parseLimits(spec);
+    if (!windows.length) return;
+    this.limitSpec = spec;
+    this.windows = windows;
+    for (const l of this.limiters.values()) l.setWindows(windows);
+    this.log(`rate limit from Riot: ${spec}`);
   }
 
   #limiter(host) {
@@ -91,6 +110,7 @@ class RiotClient {
         continue;
       }
 
+      this.#adoptLimits(res);
       if (res.ok) return res.json();
       if (res.status === 404) return null;
       if (res.status === 401 || res.status === 403) {

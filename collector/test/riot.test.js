@@ -204,3 +204,54 @@ test('cross-lane matchups carry the opponent role; same lane uses the own role',
   assert.ok(cross.strength < 0);
   assert.equal(matchup.find((m) => m.champion === 2 && m.opponent === 1).opponent_role, 'middle');
 });
+
+test('client: adopts the rate limit Riot reports for the key', async () => {
+  const logs = [];
+  const fetch = async () => ({
+    ok: true, status: 200, json: async () => ({}),
+    headers: { get: (h) => (h === 'x-app-rate-limit' ? '500:10,30000:600' : null) },
+  });
+  const api = new RiotClient({ key: 'k', fetch, sleep: async () => {}, log: (m) => logs.push(m) });
+  await api.get('europe', '/x');
+  assert.deepEqual(api.windows, [[500, 10000], [30000, 600000]]);
+  assert.ok(logs.some((m) => m.includes('500:10,30000:600')));
+});
+
+test('crawl: an expired key stops every region but keeps what was collected', async () => {
+  const ingested = [];
+  let matchCalls = 0;
+  const api = {
+    get: async (host, path) => {
+      if (path.includes('/lol/league/v4/')) return path.includes('entries') ? [] : { entries: [{ puuid: `p-${host}` }, { puuid: `q-${host}` }] };
+      if (path.endsWith('/ids')) return [`${host}_1`, `${host}_2`];
+      matchCalls++;
+      if (host === 'europe' && path.endsWith('_2')) throw new RiotKeyError('key expired');
+      return fakeMatch(path.split('/').pop().toUpperCase().replace(/^([A-Z]+)_/, 'EUW1_'));
+    },
+  };
+  const stop = { reason: null };
+  const stats = await crawl({
+    api, patch: '16.21', platforms: ['euw1', 'kr'], stop, deadline: Date.now() + 60_000, since: 0, maxPerRegion: 0,
+    filterUnseen: async (ids) => ids, ingest: async (m) => { ingested.push(...m); return m.length; }, log: () => {},
+  });
+  assert.equal(stop.reason, 'key');
+  assert.ok(ingested.length >= 1); // the match before the expiry was saved
+  assert.ok(stats.europe && stats.asia);
+});
+
+test('crawl: an error in one region does not stop the others', async () => {
+  const api = {
+    get: async (host, path) => {
+      if (path.includes('/lol/league/v4/')) return path.includes('entries') ? [] : { entries: [{ puuid: `p-${host}` }] };
+      if (host === 'europe') throw new Error('HTTP 500');
+      if (path.endsWith('/ids')) return ['KR_1'];
+      return fakeMatch('KR_1');
+    },
+  };
+  const stats = await crawl({
+    api, patch: '16.21', platforms: ['euw1', 'kr'], deadline: Date.now() + 60_000, since: 0, maxPerRegion: 0,
+    filterUnseen: async (ids) => ids, ingest: async (m) => m.length, log: () => {},
+  });
+  assert.equal(stats.europe.error, 'HTTP 500');
+  assert.ok(stats.asia.matches >= 1);
+});

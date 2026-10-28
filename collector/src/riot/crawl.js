@@ -33,15 +33,18 @@ function shuffle(list, random = Math.random) {
 }
 
 /** Diamond+ players (puuid) of one ladder on one server */
-async function ladderPlayers(api, platform, ladder) {
+async function ladderPlayers(api, platform, ladder, diamondPages = 1) {
   const puuids = new Set();
   for (const apex of APEX) {
     const league = await api.get(platform, `/lol/league/v4/${apex}/by-queue/${ladder}`);
     for (const e of league?.entries || []) if (e.puuid) puuids.add(e.puuid);
   }
   for (const div of DIAMOND) {
-    const entries = await api.get(platform, `/lol/league/v4/entries/${ladder}/DIAMOND/${div}`, { page: 1 });
-    for (const e of entries || []) if (e.puuid) puuids.add(e.puuid);
+    for (let page = 1; page <= diamondPages; page++) {
+      const entries = await api.get(platform, `/lol/league/v4/entries/${ladder}/DIAMOND/${div}`, { page });
+      for (const e of entries || []) if (e.puuid) puuids.add(e.puuid);
+      if (!entries || entries.length < 200) break; // last page
+    }
   }
   return [...puuids];
 }
@@ -54,10 +57,13 @@ async function ladderPlayers(api, platform, ladder) {
  * @param {number} o.deadline          ms; no new requests start after this
  * @param {number} o.since             start of the match search window (ms)
  * @param {number} [o.maxPerRegion]    0 = no limit
+ * @param {number} [o.diamondPages]    Diamond ladder pages per division (205 players each)
+ * @param {{reason:string|null}} [o.stop]  shared: set reason to stop every region (expired key, Ctrl+C)
  * @param {(ids:string[])=>Promise<string[]>} o.filterUnseen
  * @param {(matches:object[])=>Promise<number>} o.ingest
  */
 async function crawl(o) {
+  o = { stop: { reason: null }, ...o };
   const byRegion = new Map();
   for (const p of o.platforms) {
     const region = PLATFORMS[p];
@@ -83,7 +89,7 @@ async function crawlRegion(o) {
     buffer = [];
     stats.matches += await o.ingest(batch);
   };
-  const timeLeft = () => Date.now() < o.deadline;
+  const timeLeft = () => Date.now() < o.deadline && !o.stop.reason;
   const full = () => o.maxPerRegion > 0 && stats.matches + buffer.length >= o.maxPerRegion;
 
   try {
@@ -94,7 +100,7 @@ async function crawlRegion(o) {
       // Player lists per server; a server that fails is skipped
       const lists = await Promise.all(
         o.platforms.map((p) =>
-          ladderPlayers(api, p, queue.ladder).catch((err) => {
+          ladderPlayers(api, p, queue.ladder, o.diamondPages).catch((err) => {
             if (err instanceof RiotKeyError) throw err;
             log(`${p} ${queue.name}: could not load players (${err.message}), skipped`);
             return [];
@@ -133,6 +139,16 @@ async function crawlRegion(o) {
       await flush();
       stats.byQueue[queue.name] = stats.matches - before;
       log(`${region} ${queue.name}: ${stats.byQueue[queue.name]} new matches`);
+    }
+  } catch (err) {
+    if (err instanceof RiotKeyError) {
+      // The key expired (development keys last 24 hours): stop everywhere, keep what we have
+      if (!o.stop.reason) log(`${err.message}. Stopping and saving what was collected.`);
+      o.stop.reason = 'key';
+    } else {
+      // Only this region stops; the others keep going
+      log(`${region}: stopped after an error (${err.message})`);
+      stats.error = err.message;
     }
   } finally {
     await flush().catch((err) => log(`${region}: could not write the last batch (${err.message})`));

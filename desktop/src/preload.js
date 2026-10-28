@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('api', {
   removePool: call('pool:remove'),
   listHistory: call('history:list'),
   hoverChampion: call('draft:hover'),
+  getUpdate: call('update:get'),
+  installUpdate: call('update:install'),
+  onUpdate: (cb) => ipcRenderer.on('update', (_e, state) => cb(state)),
   onState: (cb) => ipcRenderer.on('state', (_e, partial) => cb(partial)),
   onSaved: (cb) => ipcRenderer.on('saved', (_e, info) => cb(info)),
 });

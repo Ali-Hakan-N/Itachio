@@ -46,29 +46,34 @@ async function main() {
     const champions = await loadChampions(client);
     if (!champions.length) throw new Error('champions table is empty; run sync-ddragon first');
 
+    // Validates a source output and replaces the scores with it. Sources may call it
+    // during a long run too, so the app gets fresh scores without waiting for the end.
+    const publish = async (output) => {
+      const collectedAt = new Date().toISOString();
+      const rows = toRows(output, champions, { source: source.name, collectedAt });
+      for (const p of rows.problems.slice(0, 20)) log('warning:', p);
+      log(`meta ${rows.meta.length} · synergy ${rows.synergy.length} · matchup ${rows.matchup.length}`);
+      if (args.dryRun) return { written: false, note: 'dry run' };
+      if (rows.meta.length < MIN_META_ROWS) {
+        // Not an error, e.g. the first day of a new patch. Current scores stay in place.
+        const note = `only ${rows.meta.length} meta rows (need ${MIN_META_ROWS}); scores not updated`;
+        log(note);
+        return { written: false, note };
+      }
+      const stats = await writeRows(client, rows, { source: source.name, collectedAt });
+      log('scores updated', JSON.stringify(stats));
+      return { written: true, ...stats, problems: rows.problems.length };
+    };
+
     log(`source: ${source.name}`);
-    const output = await source.collect({ env, log, client, dryRun: args.dryRun });
-    const collectedAt = new Date().toISOString();
-    const rows = toRows(output, champions, { source: source.name, collectedAt });
-    const sourceStats = output.stats || null;
-
-    for (const p of rows.problems.slice(0, 20)) log('warning:', p);
-    log(`meta ${rows.meta.length} · synergy ${rows.synergy.length} · matchup ${rows.matchup.length}`);
-
+    const output = await source.collect({ env, log, client, dryRun: args.dryRun, publish });
+    const result = await publish(output);
     if (args.dryRun) {
       log('dry run: nothing written');
       return;
     }
-    if (rows.meta.length < MIN_META_ROWS) {
-      // Not an error, e.g. the first day of a new patch. Current scores stay in place.
-      const note = `only ${rows.meta.length} meta rows (need ${MIN_META_ROWS}); scores not updated`;
-      log(note);
-      await finishRun(client, runId, { status: 'ok', stats: { written: false, note, source: sourceStats } });
-      return;
-    }
-    const stats = await writeRows(client, rows, { source: source.name, collectedAt });
-    await finishRun(client, runId, { status: 'ok', stats: { ...stats, problems: rows.problems.length, source: sourceStats } });
-    log('done', JSON.stringify(stats));
+    await finishRun(client, runId, { status: 'ok', stats: { ...result, source: output.stats || null } });
+    log('done');
   } catch (err) {
     if (runId) await finishRun(client, runId, { status: 'error', error: String(err.message || err) }).catch(() => {});
     throw err;

@@ -43,4 +43,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: desktop/dist/*.exe
+          # latest.yml and the blockmap let installed apps find and download the update
+          files: |
+            desktop/dist/FlexDrafter-Setup.exe
+            desktop/dist/FlexDrafter-Setup.exe.blockmap
+            desktop/dist/latest.yml

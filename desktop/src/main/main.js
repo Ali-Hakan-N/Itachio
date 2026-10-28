@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const { LcuConnector } = require('./lcu');
 const { DataStore } = require('./data');
 const { AppCore } = require('./core');
+const { setupUpdater } = require('./updater');
 
 let win = null;
 let core = null;
@@ -103,10 +104,19 @@ app.whenReady().then(async () => {
   const config = loadConfig();
   createWindow();
 
+  const updater = setupUpdater({
+    log: fileLog,
+    send: (state) => send('update', state),
+    // Don't restart in the middle of champ select or a game
+    isBusy: () => ['ChampSelect', 'GameStart', 'InProgress'].includes(core?.state.lcu.phase),
+  });
+  handle('update:get', () => updater.state());
+  handle('update:install', () => updater.install());
+
   handle('app:init', async () => {
-    if (!config) return { configError };
+    if (!config) return { configError, version: app.getVersion() };
     const user = await data.getUser();
-    return { configError: null, user: user ? { email: user.email } : null };
+    return { configError: null, version: app.getVersion(), user: user ? { email: user.email } : null };
   });
 
   if (config) {

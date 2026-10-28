@@ -59,7 +59,7 @@ h3 { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: upp
   backdrop-filter: blur(8px);
 }
 .brand { display: flex; align-items: center; gap: 12px; font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
-.brand span:last-child { color: var(--gold); margin-left: -8px; }
+.brand .brand-2 { color: var(--gold); margin-left: -8px; }
 .logo {
   width: 16px; height: 16px; border-radius: 4px; transform: rotate(45deg);
   background: linear-gradient(135deg, var(--gold), #8f6d2c);
@@ -351,3 +351,33 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .tabs button.locked:hover { color: var(--muted); }
 .lock { width: 12px; height: 12px; fill: currentColor; }
 .slot .role { color: var(--muted); font-size: 12px; font-weight: 500; }
+
+/* ---------- Updates ---------- */
+.ver { margin-left: 4px; font-family: inherit; font-size: 11px; font-weight: 500; color: var(--faint); align-self: flex-end; padding-bottom: 2px; }
+.update-overlay {
+  position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+  background: rgba(6, 9, 15, 0.78); backdrop-filter: blur(6px);
+}
+.update-card {
+  width: 360px; padding: 34px 30px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel)); border: 1px solid var(--line-2);
+  border-radius: var(--radius-l); box-shadow: var(--shadow), 0 0 60px rgba(216, 180, 106, 0.12);
+}
+.update-card h2 { font-size: 20px; margin-top: 14px; }
+.update-card p { margin: 0; color: var(--muted); }
+.update-card .pct { font-family: var(--display); font-weight: 700; font-size: 15px; color: var(--gold); min-height: 18px; }
+.logo.big { width: 34px; height: 34px; border-radius: 8px; animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px var(--gold-dim), 0 0 32px rgba(216, 180, 106, 0.55); } }
+.progress { align-self: stretch; height: 6px; margin-top: 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.progress > div { width: 0; height: 100%; border-radius: 6px; background: linear-gradient(90deg, #8f6d2c, var(--gold)); transition: width 0.3s ease; }
+.progress.mini { width: 90px; height: 4px; margin: 0; align-self: center; }
+.update-pill {
+  position: fixed; left: 18px; bottom: 18px; z-index: 15; display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; background: var(--panel-3); border: 1px solid var(--line-2); border-left: 3px solid var(--gold);
+  border-radius: var(--radius-m); box-shadow: var(--shadow); font-weight: 500;
+}
+.update-pill .btn { padding: 6px 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .logo.big { animation: none; }
+  .progress > div { transition: none; }
+}
