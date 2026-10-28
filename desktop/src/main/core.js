@@ -168,7 +168,15 @@ class AppCore extends EventEmitter {
     const draft = normalizeSession(raw);
     const isNew = !this.state.draft || this.state.draft.gameId !== draft.gameId;
     this.#emit(isNew ? { draft, pickable: null } : { draft });
-    if (isNew) this.#loadPickable(draft.gameId);
+    if (isNew) {
+      this.#loadPickable(draft.gameId);
+      const mine = (raw.actions || []).flat().filter((a) => a.actorCellId === draft.localCellId);
+      this.log.info?.('champ select', JSON.stringify({
+        gameId: draft.gameId, localCellId: draft.localCellId, myPickActionId: draft.myPickActionId,
+        position: draft.ally.find((p) => p.isLocal)?.position || '',
+        myActions: mine.map((a) => ({ id: a.id, type: a.type, inProgress: a.isInProgress, completed: a.completed })),
+      }));
+    }
     this.#enqueue(() => this.#persistDraft(draft));
   }
 

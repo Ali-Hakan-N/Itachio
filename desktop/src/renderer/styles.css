@@ -160,7 +160,6 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .side.red .slot::before { background: var(--red); }
 .slot .who { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .slot .name { font-family: var(--display); font-weight: 600; font-size: 15px; }
-.slot .meta { color: var(--muted); font-size: 12px; }
 .slot.hover .champ { opacity: 0.5; filter: saturate(0.6); }
 .slot.acting { border-color: var(--line-2); background: var(--panel-2); }
 .slot.me { background: linear-gradient(90deg, var(--cue-dim), var(--panel) 60%); border-color: rgba(47, 211, 192, 0.25); }
@@ -204,9 +203,6 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .rec .champ { width: 38px; height: 38px; }
 .rec .info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .rec .name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
-.rec .why { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rec .why .up { color: var(--cue); font-weight: 600; }
-.rec .why .down { color: var(--red); font-weight: 600; }
 .rec .score { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; width: 56px; flex: none; }
 .rec .score b { font-family: var(--display); font-size: 19px; font-weight: 700; line-height: 1; }
 .rec .score i { display: block; height: 3px; border-radius: 3px; background: var(--muted); opacity: 0.5; }
@@ -324,3 +320,10 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .slot-score small.down { color: var(--red); }
 .slot-score.pending b { color: var(--muted); }
 .recs.pinned .rec { border-style: dashed; }
+
+/* ---------- Hover hint, off-role ---------- */
+.head-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.head-row .hint { font-size: 11px; font-weight: 500; color: var(--cue); text-transform: none; letter-spacing: 0; opacity: 0.8; }
+.rec:not(:disabled) { cursor: pointer; }
+.rec.sending { opacity: 0.7; }
+.badge.warn, .slot-score small.warn { color: var(--warn); border-color: rgba(243, 182, 63, 0.45); }

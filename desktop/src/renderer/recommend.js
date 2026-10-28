@@ -23,6 +23,7 @@
   const SOFTNESS = 1.5;
   const LANE_WEIGHT = 1;
   const OTHER_WEIGHT = 0.4;
+  const OFF_ROLE_PENALTY = 30; // a champion with no data in the slot's role is treated as off-role
 
   // If several sources give the same key, they are averaged
   function averager() {
@@ -161,20 +162,19 @@
 
   /**
    * Scores a single champion, e.g. one a player has hovered or locked.
-   * Uses the given role if the champion has meta data there, otherwise its best role.
+   * With a known role and no data for the champion there, it is off-role: its best
+   * role's score minus OFF_ROLE_PENALTY. Without a role (enemies), its best role is used.
    * Returns null when there is no meta data for the champion at all.
    */
   function evaluate({ stats, championId, role = '', allies = [], enemies = [] }) {
     const idx = buildIndex(stats || {});
-    let score = role ? idx.meta(championId, role) : null;
-    let r = role;
-    if (score === null) {
-      const best = idx.bestRole.get(championId);
-      if (!best) return null;
-      score = best.score;
-      r = best.role;
-    }
-    return scoreOne(idx, { championId, role: r, score }, allies, enemies);
+    const best = idx.bestRole.get(championId);
+    if (!best) return null;
+    const inRole = role ? idx.meta(championId, role) : null;
+    if (inRole !== null) return { ...scoreOne(idx, { championId, role, score: inRole }, allies, enemies), offRole: false };
+    if (!role) return { ...scoreOne(idx, { championId, role: best.role, score: best.score }, allies, enemies), offRole: false };
+    const score = Math.max(0, best.score - OFF_ROLE_PENALTY);
+    return { ...scoreOne(idx, { championId, role, score }, allies, enemies), offRole: true };
   }
 
   const api = { recommend, evaluate, SYNERGY_MAX, MATCHUP_MAX };

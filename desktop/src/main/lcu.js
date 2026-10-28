@@ -195,7 +195,13 @@ class LcuConnector extends EventEmitter {
             const text = Buffer.concat(chunks).toString('utf8');
             if (res.statusCode === 404 || res.statusCode === 204) return resolve(null);
             if (res.statusCode >= 400) {
-              return reject(new Error(`LCU ${method} ${urlPath} -> ${res.statusCode}`));
+              let detail = '';
+              try {
+                detail = JSON.parse(text).message || '';
+              } catch {
+                detail = text.slice(0, 200);
+              }
+              return reject(new Error(`LCU ${method} ${urlPath} -> ${res.statusCode}${detail ? `: ${detail}` : ''}`));
             }
             try {
               resolve(text ? JSON.parse(text) : null);

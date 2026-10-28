@@ -273,22 +273,9 @@ function draftContext(d) {
   };
 }
 
-const signed = (n) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '0');
 const tierOf = (s) => (s >= 70 ? 'S' : s >= 60 ? 'A' : s >= 50 ? 'B' : s >= 40 ? 'C' : 'D');
 
 function recRow(r, i, { canHover, hoverId, rank }) {
-  const parts = [`Meta ${r.base}`];
-  if (r.allies.length) {
-    parts.push(`<span class="up">Synergy ${signed(r.synergy)}</span>: ${r.allies.map((a) => esc(champName(a.championId))).join(', ')}`);
-  }
-  const strong = r.enemies.filter((e) => e.value > 0).map((e) => esc(champName(e.championId)));
-  const weak = r.enemies.filter((e) => e.value < 0).map((e) => esc(champName(e.championId)));
-  if (r.enemies.length) {
-    const cls = r.matchup >= 0 ? 'up' : 'down';
-    const detail = [strong.length ? `strong vs ${strong.join(', ')}` : '', weak.length ? `weak vs ${weak.join(', ')}` : '']
-      .filter(Boolean).join(' · ');
-    parts.push(`<span class="${cls}">Matchup ${signed(r.matchup)}</span> (${detail})`);
-  }
   const tier = tierOf(r.base);
   const hovering = r.championId === hoverId;
   return `
@@ -300,9 +287,9 @@ function recRow(r, i, { canHover, hoverId, rank }) {
         <span class="name">${esc(champName(r.championId))}
           <span class="tier t-${tier}">${tier}</span>
           ${r.inPool ? '<span class="badge">In pool</span>' : ''}
+          ${r.offRole ? '<span class="badge warn">Off-role</span>' : ''}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
-        <span class="why">${parts.join(' · ')}</span>
       </span>
       <span class="score"><b>${r.score}</b><i data-w="${r.score}"></i></span>
     </button>`;
@@ -319,7 +306,7 @@ function slotScore(d, which, p, championId) {
   const ev = Recommend.evaluate({
     stats: S.stats,
     championId,
-    role: p.position,
+    role: p.position || (p.isLocal ? S.me?.main_role || '' : ''),
     allies: isAlly ? ctx.allies : ctx.enemies.map((e) => e.championId),
     enemies: isAlly ? ctx.enemies : d.ally.filter((a) => a.locked && a.championId).map((a) => ({ championId: a.championId, position: a.position })),
   });
@@ -334,11 +321,13 @@ function slotScore(d, which, p, championId) {
   const atPick = pickScores.map.get(key);
   const changed = p.locked && atPick !== undefined && atPick !== ev.score;
 
-  const title = `Meta ${ev.base} · Synergy ${signed(ev.synergy)} · Matchup ${signed(ev.matchup)}`;
+  const label = changed
+    ? `<small class="${ev.score > atPick ? 'up' : 'down'}">picked at ${atPick}</small>`
+    : ev.offRole ? '<small class="warn">off-role</small>' : p.locked ? '' : '<small>if picked</small>';
   return `
-    <div class="slot-score ${p.locked ? '' : 'pending'}" title="${title}">
+    <div class="slot-score ${p.locked ? '' : 'pending'}">
       <b>${ev.score}</b>
-      ${changed ? `<small class="${ev.score > atPick ? 'up' : 'down'}">picked at ${atPick}</small>` : `<small>${p.locked ? 'score' : 'if picked'}</small>`}
+      ${label}
     </div>`;
 }
 
@@ -414,7 +403,10 @@ function renderDraft() {
           <div class="timer"><div id="tbar"></div></div>
         </div>
         <div>
-          <h3 class="sub">${local?.locked ? `Your pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</h3>
+          <h3 class="sub head-row">
+            <span>${local?.locked ? `Your pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</span>
+            ${!local?.locked && d.myPickActionId && recs.length ? '<span class="hint">Click to hover in the client</span>' : ''}
+          </h3>
           ${local?.locked ? pickRow : recs.length
             ? `<div class="recs">${recs.map((r, i) => recRow(r, i, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>${hoverRow}`
             : `<p class="note">${hasStats
@@ -431,7 +423,16 @@ function renderDraft() {
   if (list) {
     list.onclick = async (e) => {
       const b = e.target.closest('[data-hover]');
-      if (b && !b.disabled) await run(api.hoverChampion(Number(b.dataset.hover)));
+      if (!b || b.disabled) return;
+      for (const x of list.querySelectorAll('.rec.hovering')) x.classList.remove('hovering');
+      b.classList.add('hovering', 'sending');
+      try {
+        await run(api.hoverChampion(Number(b.dataset.hover)));
+      } catch {
+        b.classList.remove('hovering');
+      } finally {
+        b.classList.remove('sending');
+      }
     };
   }
 
@@ -460,7 +461,6 @@ function sideColumn(which, d) {
 
   const slots = players.map((p) => {
     const m = isAlly ? memberByPuuid(p.puuid) : null;
-    const who = isAlly ? (p.isLocal ? 'You' : m?.nickname || 'Teammate') : 'Enemy';
     const shown = p.locked ? p.championId : p.hoverId || 0;
     let mini = '';
     // 3 suggestions for a teammate who has not picked yet
@@ -479,7 +479,6 @@ function sideColumn(which, d) {
         ${champImg(shown, 'l')}
         <div class="who">
           <div class="name">${esc(shown ? champName(shown) : '…')}</div>
-          <div class="meta">${esc(who)}${p.position ? ' · ' + ROLE_NAME[p.position] : ''}${!p.locked && shown ? ' · hovering' : ''}</div>
         </div>
         ${shown ? slotScore(d, which, p, shown) : mini}
       </div>`;

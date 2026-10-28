@@ -92,8 +92,16 @@ test('evaluate scores one champion with the current picks', () => {
   assert.deepEqual(r.allies.map((a) => a.championId), [4]); // itself is ignored
 });
 
-test('evaluate falls back to the best role and returns null without data', () => {
+test('evaluate: no data in the slot role means off-role with a penalty', () => {
   const { evaluate } = require('../src/renderer/recommend');
-  assert.equal(evaluate({ stats, championId: 5, role: 'jungle' }).role, 'top');
+  const off = evaluate({ stats, championId: 5, role: 'jungle' }); // Yasuo only has top/mid data
+  assert.equal(off.offRole, true);
+  assert.equal(off.base, 22); // best role 52 - 30
+  assert.equal(evaluate({ stats, championId: 5, role: 'middle' }).offRole, false);
+});
+
+test('evaluate: without a role (enemies) the best role is used; null without data', () => {
+  const { evaluate } = require('../src/renderer/recommend');
+  assert.equal(evaluate({ stats, championId: 5 }).role, 'top');
   assert.equal(evaluate({ stats, championId: 99, role: 'middle' }), null);
 });

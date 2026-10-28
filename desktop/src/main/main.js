@@ -12,6 +12,25 @@ let core = null;
 let data = null;
 let configError = null;
 
+// Errors go to the console and to a log file in the app's data folder
+const logFile = () => path.join(app.getPath('userData'), 'flex-drafter.log');
+const writeLog = (level, args) => {
+  const line = `${new Date().toISOString()} ${level} ${args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ')}
+`;
+  try {
+    fs.appendFileSync(logFile(), line);
+  } catch {
+    /* logging must never break the app */
+  }
+};
+const fileLog = {
+  error: (...args) => {
+    console.error(...args);
+    writeLog('ERROR', args);
+  },
+  info: (...args) => writeLog('INFO', args),
+};
+
 function loadConfig() {
   const candidates = [
     path.join(app.getAppPath(), 'config.json'),
@@ -97,7 +116,7 @@ app.whenReady().then(async () => {
       storageFile: path.join(app.getPath('userData'), 'session.json'),
     });
     const lcu = new LcuConnector({ installPath: config.leagueInstallPath });
-    core = new AppCore({ lcu, data });
+    core = new AppCore({ lcu, data, log: fileLog });
     core.on('update', (partial) => send('state', partial));
     core.on('saved', (info) => send('saved', info));
     lcu.start();
@@ -148,7 +167,15 @@ app.whenReady().then(async () => {
     await core.refreshTeam();
   });
 
-  handle('draft:hover', (championId) => core.hoverChampion(Number(championId)));
+  handle('draft:hover', async (championId) => {
+    try {
+      await core.hoverChampion(Number(championId));
+      fileLog.info('hover', championId, 'ok');
+    } catch (err) {
+      fileLog.error('hover', championId, err);
+      throw err;
+    }
+  });
 
   handle('history:list', async () => {
     const me = core.state.me;
