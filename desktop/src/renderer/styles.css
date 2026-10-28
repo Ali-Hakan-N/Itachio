@@ -350,3 +350,4 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .tabs button.locked { display: inline-flex; align-items: center; gap: 6px; opacity: 0.4; cursor: not-allowed; }
 .tabs button.locked:hover { color: var(--muted); }
 .lock { width: 12px; height: 12px; fill: currentColor; }
+.slot .role { color: var(--muted); font-size: 12px; font-weight: 500; }

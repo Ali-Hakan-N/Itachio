@@ -463,6 +463,8 @@ function sideColumn(which, d) {
   const slots = players.map((p) => {
     const m = isAlly ? memberByPuuid(p.puuid) : null;
     const shown = p.locked ? p.championId : p.hoverId || 0;
+    // Same as the client: roles of our team; enemy roles are hidden in ranked
+    const roleLabel = ROLE_NAME[p.position || (p.isLocal ? S.me?.main_role : '')] || '';
     let mini = '';
     // 3 suggestions for a teammate who has not picked yet
     if (isAlly && !p.isLocal && !p.locked && !shown && m) {
@@ -480,6 +482,7 @@ function sideColumn(which, d) {
         ${champImg(shown, 'l')}
         <div class="who">
           <div class="name">${esc(shown ? champName(shown) : '…')}</div>
+          ${roleLabel ? `<div class="role">${roleLabel}</div>` : ''}
         </div>
         ${shown ? slotScore(d, which, p, shown, scores) : mini}
       </div>`;
@@ -510,7 +513,7 @@ function renderPool() {
         <div id="editor"></div>
       </section>
       <section>
-        <h2 class="sub">My pool</h2>
+        <h2 class="sub">Pool</h2>
         <div id="plist"></div>
       </section>
     </div>`;

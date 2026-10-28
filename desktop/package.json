@@ -35,7 +35,8 @@
     },
     "nsis": {
       "oneClick": true,
-      "perMachine": false
+      "perMachine": false,
+      "artifactName": "FlexDrafter-Setup.exe"
     }
   }
 }
