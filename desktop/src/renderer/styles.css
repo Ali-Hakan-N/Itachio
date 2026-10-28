@@ -318,7 +318,7 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .slot-score small { font-size: 10px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; }
 .slot-score small.up { color: var(--cue); }
 .slot-score small.down { color: var(--red); }
-.slot-score.pending b { color: var(--muted); }
+.slot-score.pending b { opacity: 0.6; }
 .recs.pinned .rec { border-style: dashed; }
 
 /* ---------- Hover hint, off-role ---------- */
@@ -327,3 +327,26 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .rec:not(:disabled) { cursor: pointer; }
 .rec.sending { opacity: 0.7; }
 .badge.warn, .slot-score small.warn { color: var(--warn); border-color: rgba(243, 182, 63, 0.45); }
+
+/* ---------- Colored scores ---------- */
+.sc { font-family: var(--display); font-weight: 700; }
+.sc-S { background: linear-gradient(180deg, #ffe2a1, var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 0 18px rgba(216, 180, 106, 0.35); }
+.sc-A { color: var(--cue); text-shadow: 0 0 14px rgba(47, 211, 192, 0.3); }
+.sc-B { color: #8fb4ff; }
+.sc-C { color: #c3cad6; }
+.sc-D { color: #f08a8c; }
+.rec .score i.bar-S { background: linear-gradient(90deg, #8f6d2c, var(--gold)); opacity: 1; }
+.rec .score i.bar-A { background: var(--cue); opacity: 0.9; }
+.rec .score i.bar-B { background: #8fb4ff; opacity: 0.8; }
+.rec .score i.bar-C { background: #c3cad6; opacity: 0.5; }
+.rec .score i.bar-D { background: #f08a8c; opacity: 0.6; }
+
+/* ---------- Team average ---------- */
+.side-head .avg { margin-left: auto; margin-right: 10px; display: flex; align-items: baseline; gap: 6px; }
+.side-head .avg small { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--faint); }
+.side-head .avg b { font-size: 22px; line-height: 1; }
+
+/* ---------- Locked tab ---------- */
+.tabs button.locked { display: inline-flex; align-items: center; gap: 6px; opacity: 0.4; cursor: not-allowed; }
+.tabs button.locked:hover { color: var(--muted); }
+.lock { width: 12px; height: 12px; fill: currentColor; }

@@ -127,7 +127,7 @@ api.onSaved((info) => {
 
 $tabs.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-tab]');
-  if (!b) return;
+  if (!b || b.disabled) return;
   tab = b.dataset.tab;
   for (const x of $tabs.querySelectorAll('button')) x.classList.toggle('active', x === b);
   renderMain();
@@ -286,12 +286,11 @@ function recRow(r, i, { canHover, hoverId, rank }) {
       <span class="info">
         <span class="name">${esc(champName(r.championId))}
           <span class="tier t-${tier}">${tier}</span>
-          ${r.inPool ? '<span class="badge">In pool</span>' : ''}
           ${r.offRole ? '<span class="badge warn">Off-role</span>' : ''}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
       </span>
-      <span class="score"><b>${r.score}</b><i data-w="${r.score}"></i></span>
+      <span class="score"><b class="sc sc-${tierOf(r.score)}">${r.score}</b><i class="bar-${tierOf(r.score)}" data-w="${r.score}"></i></span>
     </button>`;
 }
 
@@ -300,7 +299,7 @@ const pickScores = { gameId: null, map: new Map() };
 
 // Score of a champion on the board, against everything locked so far.
 // Enemy champions are scored from the enemy side: their allies are the enemy picks.
-function slotScore(d, which, p, championId) {
+function slotScore(d, which, p, championId, sink) {
   const ctx = draftContext(d);
   const isAlly = which === 'ally';
   const ev = Recommend.evaluate({
@@ -311,6 +310,7 @@ function slotScore(d, which, p, championId) {
     enemies: isAlly ? ctx.enemies : d.ally.filter((a) => a.locked && a.championId).map((a) => ({ championId: a.championId, position: a.position })),
   });
   if (!ev) return '';
+  sink.push(ev.score);
 
   if (pickScores.gameId !== d.gameId) {
     pickScores.gameId = d.gameId;
@@ -326,7 +326,7 @@ function slotScore(d, which, p, championId) {
     : ev.offRole ? '<small class="warn">off-role</small>' : p.locked ? '' : '<small>if picked</small>';
   return `
     <div class="slot-score ${p.locked ? '' : 'pending'}">
-      <b>${ev.score}</b>
+      <b class="sc sc-${tierOf(ev.score)}">${ev.score}</b>
       ${label}
     </div>`;
 }
@@ -458,6 +458,7 @@ function sideColumn(which, d) {
   const bans = isAlly ? d.allyBans : d.enemyBans;
   const blocked = unavailable(d);
   const acting = new Set(d.turn && d.turn.side === which ? d.turn.cellIds : []);
+  const scores = [];
 
   const slots = players.map((p) => {
     const m = isAlly ? memberByPuuid(p.puuid) : null;
@@ -480,13 +481,18 @@ function sideColumn(which, d) {
         <div class="who">
           <div class="name">${esc(shown ? champName(shown) : '…')}</div>
         </div>
-        ${shown ? slotScore(d, which, p, shown) : mini}
+        ${shown ? slotScore(d, which, p, shown, scores) : mini}
       </div>`;
   });
 
+  const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
   return `
     <section class="side ${color}">
-      <div class="side-head"><h2>${isAlly ? 'Your team' : 'Enemy team'}</h2><span>${color === 'blue' ? 'Blue side' : 'Red side'}</span></div>
+      <div class="side-head">
+        <h2>${isAlly ? 'Your team' : 'Enemy team'}</h2>
+        ${avg === null ? '' : `<div class="avg" title="Average score of the champions shown"><small>avg</small><b class="sc sc-${tierOf(avg)}">${avg}</b></div>`}
+        <span>${color === 'blue' ? 'Blue side' : 'Red side'}</span>
+      </div>
       ${slots.join('')}
       <div class="bans">${bans.length ? bans.map((id) => champImg(id, 's')).join('') : '<span class="note">No bans</span>'}</div>
     </section>`;
@@ -637,12 +643,10 @@ function renderTeam() {
     </div>
     <div class="members">
       ${S.members.map((m) => {
-        const pool = S.pools.filter((p) => p.player_id === m.id).sort((a, b) => b.comfort - a.comfort);
         return `
           <div class="member">
             <div class="top"><span class="nick">${esc(m.nickname)}${m.id === S.me.id ? ' (you)' : ''}</span><span class="muted">${esc(ROLE_NAME[m.main_role] || '')}</span></div>
             <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
-            <div class="icons">${pool.length ? pool.slice(0, 14).map((p) => champImg(p.champion_id, 's')).join('') : '<span class="note">Empty pool</span>'}</div>
           </div>`;
       }).join('')}
     </div>`;

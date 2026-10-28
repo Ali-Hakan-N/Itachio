@@ -3,11 +3,16 @@
 //   score = clamp(M + Synergy + Matchup, 0, 100)
 //
 //   M         the champion's meta score in the role (0-100, average over sources)
-//   Synergy   = SYNERGY_MAX × tanh(Σ s / SOFTNESS)
-//             s: synergy strength with each locked ally (0..1)
-//   Matchup   = MATCHUP_MAX × tanh(Σ w·m / SOFTNESS)
-//             m: strength against each locked enemy (-1..1; + strong, - weak)
+//   Synergy   = SYNERGY_MAX × tanh(Σ s / SYNERGY_SOFTNESS)
+//             s: synergy strength with each locked ally (0..1; 1 = +5 win-rate points)
+//   Matchup   = MATCHUP_MAX × tanh(Σ w·m / MATCHUP_SOFTNESS)
+//             m: strength against each locked enemy (-1..1; 1 = ±6 win-rate points)
 //             w: lane opponent 1, others 0.4
+//
+// Calibration: in the meta score one win-rate point is worth about 3 score points
+// (12 points per standard deviation, 0.6 weight, ~2.5 points of win-rate spread).
+// The softness values give synergy and matchups the same exchange rate for small
+// effects: a +1.5 point synergy adds ~4, a lane counter worth 6 points adds ~16.
 //
 // Strengths arrive already adjusted for sample size by the producer
 // (collector/src/riot/score.js); they are not shrunk again here.
@@ -20,7 +25,8 @@
 (function (root) {
   const SYNERGY_MAX = 15;
   const MATCHUP_MAX = 20;
-  const SOFTNESS = 1.5;
+  const SYNERGY_SOFTNESS = 1.0;
+  const MATCHUP_SOFTNESS = 0.9;
   const LANE_WEIGHT = 1;
   const OTHER_WEIGHT = 0.4;
   const OFF_ROLE_PENALTY = 30; // a champion with no data in the slot's role is treated as off-role
@@ -115,8 +121,8 @@
       enemyHits.push({ championId: e.championId, value: v, lane });
     }
 
-    const synergy = SYNERGY_MAX * Math.tanh(synSum / SOFTNESS);
-    const matchup = MATCHUP_MAX * Math.tanh(muSum / SOFTNESS);
+    const synergy = SYNERGY_MAX * Math.tanh(synSum / SYNERGY_SOFTNESS);
+    const matchup = MATCHUP_MAX * Math.tanh(muSum / MATCHUP_SOFTNESS);
     return {
       championId: c.championId,
       role: c.role,
