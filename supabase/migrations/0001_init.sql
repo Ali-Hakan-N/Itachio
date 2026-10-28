@@ -1,23 +1,23 @@
 -- =====================================================================
--- LoL Draft Picker - ilk şema
--- Supabase SQL Editor'a yapıştırıp bir kez çalıştırın.
+-- LoL Draft Picker - initial schema
+-- Run once (supabase db push, or paste into the SQL Editor).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- 1) Ortak oyun verisi (herkes okur, sadece sunucu tarafı yazar)
+-- 1) Shared game data (everyone reads, only the server side writes)
 -- ---------------------------------------------------------------------
 
--- Küçük anahtar/değer tablosu: güncel patch gibi bilgiler
+-- Small key/value table: things like the current patch
 create table public.app_meta (
   key        text primary key,
   value      text not null,
   updated_at timestamptz not null default now()
 );
 
--- Data Dragon'dan gelen şampiyon listesi
+-- Champion list from Data Dragon
 create table public.champions (
-  id         integer primary key,          -- Riot sayısal anahtarı (Ahri = 103)
-  slug       text not null unique,         -- Data Dragon kimliği ("Ahri", "MonkeyKing")
+  id         integer primary key,          -- Riot numeric key (Ahri = 103)
+  slug       text not null unique,         -- Data Dragon id ("Ahri", "MonkeyKing")
   name       text not null,
   title      text,
   tags       text[] not null default '{}', -- Mage, Assassin, Tank...
@@ -26,15 +26,14 @@ create table public.champions (
   updated_at timestamptz not null default now()
 );
 
--- Strateji aşaması için hazır tablolar. Veri toplayıcı (cron) doldurur.
--- Her satır hangi patch'e ve hangi kaynağa ait olduğunu taşır; böylece
--- kaynak değiştirmek veya birden fazla kaynağı karşılaştırmak kolaydır.
+-- Placeholder strategy tables (replaced in 0002_meta_engine.sql).
+-- Each row carries its patch and source, so sources can be swapped or compared.
 create table public.meta_scores (
   champion_id  integer not null references public.champions(id) on delete cascade,
   role         text    not null,
   patch        text    not null,
   source       text    not null,           -- 'scrape:siteX', 'riot-api', 'model-v1'...
-  score        numeric,                    -- kaynağın normalize puanı (0-100)
+  score        numeric,                    -- source's normalized score (0-100)
   tier         text,
   win_rate     numeric,
   pick_rate    numeric,
@@ -50,7 +49,7 @@ create table public.matchups (
   role         text    not null,
   patch        text    not null,
   source       text    not null,
-  score        numeric,                    -- + : champion_id avantajlı
+  score        numeric,                    -- + : champion_id has the edge
   win_rate     numeric,
   games        integer,
   collected_at timestamptz not null default now(),
@@ -70,7 +69,7 @@ create table public.synergies (
 );
 
 -- ---------------------------------------------------------------------
--- 2) Takım ve oyuncular
+-- 2) Teams and players
 -- ---------------------------------------------------------------------
 
 create table public.teams (
@@ -87,13 +86,13 @@ create table public.players (
   team_id    uuid references public.teams(id) on delete set null,
   nickname   text not null check (char_length(nickname) between 2 and 32),
   main_role  text check (main_role in ('top','jungle','middle','bottom','utility')),
-  puuid      text unique,                  -- LoL hesabı (exe otomatik doldurur)
-  riot_id    text,                         -- "İsim#TAG"
+  puuid      text unique,                  -- LoL account (filled in by the app)
+  riot_id    text,                         -- "Name#TAG"
   created_at timestamptz not null default now()
 );
 create index players_team_idx on public.players(team_id);
 
--- Oyuncunun şampiyon havuzu
+-- A player's champion pool
 create table public.player_pools (
   player_id   uuid     not null references public.players(id) on delete cascade,
   champion_id integer  not null references public.champions(id) on delete cascade,
@@ -105,13 +104,13 @@ create table public.player_pools (
 );
 
 -- ---------------------------------------------------------------------
--- 3) Draft geçmişi ve maç sonuçları (kendi veri setiniz)
+-- 3) Draft history and match results (your own data set)
 -- ---------------------------------------------------------------------
 
 create table public.drafts (
   id          uuid primary key default gen_random_uuid(),
   team_id     uuid not null references public.teams(id) on delete cascade,
-  lcu_game_id bigint,                      -- aynı maçı iki exe yazarsa tek kayıt kalır
+  lcu_game_id bigint,                      -- one row even if two apps record the same game
   queue_id    integer,
   our_side    text check (our_side in ('blue','red')),
   source      text not null default 'lcu' check (source in ('lcu','manual')),
@@ -131,7 +130,7 @@ create table public.draft_actions (
   draft_id    uuid    not null references public.drafts(id) on delete cascade,
   side        text    not null check (side in ('ally','enemy')),
   kind        text    not null check (kind in ('ban','pick')),
-  seq         integer not null,            -- o tarafın kaçıncı ban/pick'i
+  seq         integer not null,            -- that side's nth ban/pick
   champion_id integer not null references public.champions(id),
   role        text,
   player_id   uuid references public.players(id) on delete set null,
@@ -155,14 +154,14 @@ create table public.match_results (
   damage      integer,
   vision      integer,
   duration_s  integer,
-  raw         jsonb,                       -- LCU'nun ham verisi, ileride yeniden işlemek için
+  raw         jsonb,                       -- raw LCU data, for reprocessing later
   created_at  timestamptz not null default now(),
   unique (game_id, player_id)
 );
 create index match_results_team_idx on public.match_results(team_id, created_at desc);
 
 -- ---------------------------------------------------------------------
--- 4) Yardımcı fonksiyonlar
+-- 4) Helper functions
 -- ---------------------------------------------------------------------
 
 create or replace function public.my_player_id()
@@ -175,36 +174,36 @@ returns uuid language sql stable security definer set search_path = public as $$
   select team_id from public.players where user_id = auth.uid()
 $$;
 
--- Takım kur: takımı oluşturur ve çağıranı içine koyar
+-- Create a team and put the caller in it
 create or replace function public.create_team(p_name text)
 returns public.teams language plpgsql security definer set search_path = public as $$
 declare t public.teams;
 begin
   if public.my_player_id() is null then
-    raise exception 'Önce oyuncu profili oluşturulmalı';
+    raise exception 'Create your player profile first';
   end if;
   insert into public.teams(name) values (trim(p_name)) returning * into t;
   update public.players set team_id = t.id where user_id = auth.uid();
   return t;
 end $$;
 
--- Takıma katıl: davet koduyla
+-- Join a team with an invite code
 create or replace function public.join_team(p_code text)
 returns public.teams language plpgsql security definer set search_path = public as $$
 declare t public.teams;
 begin
   if public.my_player_id() is null then
-    raise exception 'Önce oyuncu profili oluşturulmalı';
+    raise exception 'Create your player profile first';
   end if;
   select * into t from public.teams where join_code = upper(trim(p_code));
   if t.id is null then
-    raise exception 'Geçersiz takım kodu';
+    raise exception 'Invalid team code';
   end if;
   update public.players set team_id = t.id where user_id = auth.uid();
   return t;
 end $$;
 
--- Takımdan ayrıl
+-- Leave the team
 create or replace function public.leave_team()
 returns void language sql security definer set search_path = public as $$
   update public.players set team_id = null where user_id = auth.uid()
@@ -216,7 +215,7 @@ grant execute on function public.create_team(text), public.join_team(text),
   public.leave_team(), public.my_player_id(), public.my_team_id() to authenticated;
 
 -- ---------------------------------------------------------------------
--- 5) Yetkiler ve Row Level Security
+-- 5) Grants and row level security
 -- ---------------------------------------------------------------------
 
 alter table public.app_meta      enable row level security;
@@ -231,11 +230,11 @@ alter table public.drafts        enable row level security;
 alter table public.draft_actions enable row level security;
 alter table public.match_results enable row level security;
 
--- Giriş yapmamış kimse hiçbir şeye erişemez
+-- Signed-out users can access nothing
 revoke all on all tables in schema public from anon;
 
--- Ortak oyun verisi: giriş yapan herkes okur; yazmayı sadece service_role
--- (cron/Edge Function) yapar, o da RLS'i zaten atlar.
+-- Shared game data: every signed-in user reads; only service_role writes
+-- (cron / Edge Function / collector), and it bypasses RLS anyway.
 grant select on public.app_meta, public.champions, public.meta_scores,
   public.matchups, public.synergies to authenticated;
 revoke insert, update, delete on public.app_meta, public.champions,
@@ -247,14 +246,14 @@ create policy "read" on public.meta_scores for select to authenticated using (tr
 create policy "read" on public.matchups    for select to authenticated using (true);
 create policy "read" on public.synergies   for select to authenticated using (true);
 
--- Takımlar: sadece kendi takımını görürsün. Kurma/katılma fonksiyonlarla.
+-- Teams: you only see your own team. Create/join go through functions.
 grant select on public.teams to authenticated;
 revoke insert, update, delete on public.teams from authenticated;
 create policy "own team" on public.teams for select to authenticated
   using (id = public.my_team_id());
 
--- Oyuncular: takım arkadaşlarını görürsün, sadece kendi profilini düzenlersin.
--- team_id'yi doğrudan değiştirmek yasak (sadece create/join fonksiyonları).
+-- Players: you see your teammates and edit only your own profile.
+-- team_id cannot be changed directly (only via create/join functions).
 revoke insert, update, delete on public.players from authenticated;
 grant select on public.players to authenticated;
 grant insert (user_id, nickname, main_role, puuid, riot_id) on public.players to authenticated;
@@ -267,7 +266,7 @@ create policy "create self" on public.players for insert to authenticated
 create policy "update self" on public.players for update to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 
--- Havuzlar: takımın tüm havuzlarını görürsün, sadece kendininkini düzenlersin.
+-- Pools: you see the whole team's pools and edit only your own.
 grant select, insert, update, delete on public.player_pools to authenticated;
 create policy "see team pools" on public.player_pools for select to authenticated
   using (exists (select 1 from public.players p
@@ -280,7 +279,7 @@ create policy "update own" on public.player_pools for update to authenticated
 create policy "delete own" on public.player_pools for delete to authenticated
   using (player_id = public.my_player_id());
 
--- Draft'lar ve maç sonuçları: takım içi okuma/yazma
+-- Drafts and match results: read/write within the team
 grant select, insert, update on public.drafts to authenticated;
 create policy "team read"   on public.drafts for select to authenticated
   using (team_id = public.my_team_id());
@@ -304,7 +303,7 @@ create policy "insert own" on public.match_results for insert to authenticated
   with check (team_id = public.my_team_id() and player_id = public.my_player_id());
 
 -- ---------------------------------------------------------------------
--- 6) Realtime: biri havuzunu değiştirince diğerlerinin uygulaması güncellensin
+-- 6) Realtime: when someone edits their pool, teammates' apps update
 -- ---------------------------------------------------------------------
 alter publication supabase_realtime add table public.player_pools;
 alter publication supabase_realtime add table public.players;

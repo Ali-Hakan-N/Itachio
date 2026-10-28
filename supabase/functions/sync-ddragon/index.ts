@@ -1,9 +1,9 @@
 // Supabase Edge Function: sync-ddragon
-// Riot Data Dragon'dan güncel patch'i ve şampiyon listesini çekip
-// `champions` ve `app_meta` tablolarına yazar.
+// Fetches the current patch and champion list from Riot Data Dragon and
+// writes them to the `champions` and `app_meta` tables.
 //
-// Çağrı: POST /functions/v1/sync-ddragon  (header: x-cron-secret: <CRON_SECRET>)
-// Zamanlama: supabase/cron.sql
+// Call: POST /functions/v1/sync-ddragon  (header: x-cron-secret: <CRON_SECRET>)
+// Schedule: supabase/cron.sql
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
