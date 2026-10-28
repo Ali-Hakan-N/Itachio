@@ -276,7 +276,7 @@ function draftContext(d) {
 const signed = (n) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '0');
 const tierOf = (s) => (s >= 70 ? 'S' : s >= 60 ? 'A' : s >= 50 ? 'B' : s >= 40 ? 'C' : 'D');
 
-function recRow(r, i, { canHover, hoverId }) {
+function recRow(r, i, { canHover, hoverId, rank }) {
   const parts = [`Meta ${r.base}`];
   if (r.allies.length) {
     parts.push(`<span class="up">Synergy ${signed(r.synergy)}</span>: ${r.allies.map((a) => esc(champName(a.championId))).join(', ')}`);
@@ -294,7 +294,7 @@ function recRow(r, i, { canHover, hoverId }) {
   return `
     <button type="button" class="rec ${hovering ? 'hovering' : ''}" data-hover="${r.championId}"
       ${canHover ? 'title="Hover in the client"' : 'disabled'}>
-      <span class="rank">${i + 1}</span>
+      <span class="rank">${rank ?? i + 1}</span>
       ${champImg(r.championId)}
       <span class="info">
         <span class="name">${esc(champName(r.championId))}
@@ -306,6 +306,40 @@ function recRow(r, i, { canHover, hoverId }) {
       </span>
       <span class="score"><b>${r.score}</b><i data-w="${r.score}"></i></span>
     </button>`;
+}
+
+// Score each champion had when it was locked, to show how later picks changed it
+const pickScores = { gameId: null, map: new Map() };
+
+// Score of a champion on the board, against everything locked so far.
+// Enemy champions are scored from the enemy side: their allies are the enemy picks.
+function slotScore(d, which, p, championId) {
+  const ctx = draftContext(d);
+  const isAlly = which === 'ally';
+  const ev = Recommend.evaluate({
+    stats: S.stats,
+    championId,
+    role: p.position,
+    allies: isAlly ? ctx.allies : ctx.enemies.map((e) => e.championId),
+    enemies: isAlly ? ctx.enemies : d.ally.filter((a) => a.locked && a.championId).map((a) => ({ championId: a.championId, position: a.position })),
+  });
+  if (!ev) return '';
+
+  if (pickScores.gameId !== d.gameId) {
+    pickScores.gameId = d.gameId;
+    pickScores.map.clear();
+  }
+  const key = `${which}:${p.cellId}`;
+  if (p.locked && !pickScores.map.has(key)) pickScores.map.set(key, ev.score);
+  const atPick = pickScores.map.get(key);
+  const changed = p.locked && atPick !== undefined && atPick !== ev.score;
+
+  const title = `Meta ${ev.base} · Synergy ${signed(ev.synergy)} · Matchup ${signed(ev.matchup)}`;
+  return `
+    <div class="slot-score ${p.locked ? '' : 'pending'}" title="${title}">
+      <b>${ev.score}</b>
+      ${changed ? `<small class="${ev.score > atPick ? 'up' : 'down'}">picked at ${atPick}</small>` : `<small>${p.locked ? 'score' : 'if picked'}</small>`}
+    </div>`;
 }
 
 function renderDraft() {
@@ -351,6 +385,23 @@ function renderDraft() {
         limit: 10,
       });
 
+  // After locking: your pick with its live breakdown
+  let pickRow = '';
+  if (local?.locked) {
+    const ev = Recommend.evaluate({ stats: S.stats, championId: local.championId, role, ...draftContext(d) });
+    if (ev) pickRow = `<div class="recs pinned">${recRow({ ...ev, inPool: false }, 0, { canHover: false, rank: '✓' })}</div>`;
+  }
+
+  // The champion you are hovering, if it is not already in the list
+  let hoverRow = '';
+  if (local && !local.locked && local.hoverId && !recs.some((r) => r.championId === local.hoverId)) {
+    const ev = Recommend.evaluate({ stats: S.stats, championId: local.hoverId, role, ...draftContext(d) });
+    if (ev) {
+      const row = { ...ev, inPool: myPool().some((p) => p.champion_id === local.hoverId) };
+      hoverRow = `<h3 class="sub gap">Your hover</h3><div class="recs pinned">${recRow(row, 0, { canHover: false, hoverId: local.hoverId, rank: '•' })}</div>`;
+    }
+  }
+
   $view.innerHTML = `
     <div class="board">
       ${blueCol}
@@ -364,8 +415,8 @@ function renderDraft() {
         </div>
         <div>
           <h3 class="sub">${local?.locked ? `Your pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</h3>
-          ${local?.locked ? '' : recs.length
-            ? `<div class="recs">${recs.map((r, i) => recRow(r, i, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>`
+          ${local?.locked ? pickRow : recs.length
+            ? `<div class="recs">${recs.map((r, i) => recRow(r, i, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>${hoverRow}`
             : `<p class="note">${hasStats
                 ? 'No pickable champions left for this role.'
                 : 'No meta data yet. Recommendations appear here after the collector runs.'}</p>`}
@@ -413,7 +464,7 @@ function sideColumn(which, d) {
     const shown = p.locked ? p.championId : p.hoverId || 0;
     let mini = '';
     // 3 suggestions for a teammate who has not picked yet
-    if (isAlly && !p.isLocal && !p.locked && m) {
+    if (isAlly && !p.isLocal && !p.locked && !shown && m) {
       // We cannot know what a teammate owns; use their pool if they have one, else everything
       const theirPool = S.pools.filter((x) => x.player_id === m.id).map((x) => x.champion_id);
       const picks = Recommend.recommend({
@@ -430,7 +481,7 @@ function sideColumn(which, d) {
           <div class="name">${esc(shown ? champName(shown) : '…')}</div>
           <div class="meta">${esc(who)}${p.position ? ' · ' + ROLE_NAME[p.position] : ''}${!p.locked && shown ? ' · hovering' : ''}</div>
         </div>
-        ${mini}
+        ${shown ? slotScore(d, which, p, shown) : mini}
       </div>`;
   });
 

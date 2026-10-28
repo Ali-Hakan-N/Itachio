@@ -82,3 +82,18 @@ test('without a role each champion is suggested in its best role', () => {
   assert.equal(r.find((x) => x.championId === 5).role, 'top');
   assert.equal(r[0].championId, 4);
 });
+
+test('evaluate scores one champion with the current picks', () => {
+  const r = require('../src/renderer/recommend').evaluate({
+    stats, championId: 3, role: 'middle', allies: [4, 3], enemies: [{ championId: 2, position: 'middle' }],
+  });
+  assert.equal(r.base, 55);
+  assert.ok(r.synergy > 0 && r.matchup > 0);
+  assert.deepEqual(r.allies.map((a) => a.championId), [4]); // itself is ignored
+});
+
+test('evaluate falls back to the best role and returns null without data', () => {
+  const { evaluate } = require('../src/renderer/recommend');
+  assert.equal(evaluate({ stats, championId: 5, role: 'jungle' }).role, 'top');
+  assert.equal(evaluate({ stats, championId: 99, role: 'middle' }), null);
+});

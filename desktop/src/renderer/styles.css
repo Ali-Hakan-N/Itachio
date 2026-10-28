@@ -315,3 +315,12 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 @media (prefers-reduced-motion: reduce) {
   .timer > div, .rec, .tabs button, .gcell { transition: none; }
 }
+
+/* ---------- Live score on the board ---------- */
+.slot-score { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+.slot-score b { font-family: var(--display); font-size: 20px; font-weight: 700; line-height: 1; }
+.slot-score small { font-size: 10px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.slot-score small.up { color: var(--cue); }
+.slot-score small.down { color: var(--red); }
+.slot-score.pending b { color: var(--muted); }
+.recs.pinned .rec { border-style: dashed; }

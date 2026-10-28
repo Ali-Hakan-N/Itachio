@@ -92,6 +92,42 @@
     return idx;
   }
 
+  // Scores one champion in a role against the current locked picks
+  function scoreOne(idx, c, allies, enemies) {
+    const allyHits = [];
+    let synSum = 0;
+    for (const a of allies) {
+      if (a === c.championId) continue;
+      const v = idx.synergy(c.championId, c.role, a);
+      if (v === null || v <= 0) continue;
+      synSum += v;
+      allyHits.push({ championId: a, value: v });
+    }
+
+    const enemyHits = [];
+    let muSum = 0;
+    for (const e of enemies) {
+      const v = idx.matchup(c.championId, c.role, e.championId);
+      if (v === null || v === 0) continue;
+      const lane = e.position ? e.position === c.role : idx.bestRole.get(e.championId)?.role === c.role;
+      muSum += (lane ? LANE_WEIGHT : OTHER_WEIGHT) * v;
+      enemyHits.push({ championId: e.championId, value: v, lane });
+    }
+
+    const synergy = SYNERGY_MAX * Math.tanh(synSum / SOFTNESS);
+    const matchup = MATCHUP_MAX * Math.tanh(muSum / SOFTNESS);
+    return {
+      championId: c.championId,
+      role: c.role,
+      base: Math.round(c.score),
+      synergy: Math.round(synergy),
+      matchup: Math.round(matchup),
+      score: Math.round(Math.min(100, Math.max(0, c.score + synergy + matchup))),
+      allies: allyHits.sort((x, y) => y.value - x.value),
+      enemies: enemyHits.sort((x, y) => Math.abs(y.value) - Math.abs(x.value)),
+    };
+  }
+
   /**
    * @param {object} p
    * @param {{meta:object[], synergy:object[], matchup:object[]}} p.stats
@@ -118,44 +154,30 @@
     const out = [];
     for (const c of candidates) {
       if (unavailable.has(c.championId) || (allowed && !allowed.has(c.championId))) continue;
-
-      const allyHits = [];
-      let synSum = 0;
-      for (const a of allies) {
-        const v = idx.synergy(c.championId, c.role, a);
-        if (v === null || v <= 0) continue;
-        synSum += v;
-        allyHits.push({ championId: a, value: v });
-      }
-
-      const enemyHits = [];
-      let muSum = 0;
-      for (const e of enemies) {
-        const v = idx.matchup(c.championId, c.role, e.championId);
-        if (v === null || v === 0) continue;
-        const lane = e.position ? e.position === c.role : idx.bestRole.get(e.championId)?.role === c.role;
-        muSum += (lane ? LANE_WEIGHT : OTHER_WEIGHT) * v;
-        enemyHits.push({ championId: e.championId, value: v, lane });
-      }
-
-      const synergy = SYNERGY_MAX * Math.tanh(synSum / SOFTNESS);
-      const matchup = MATCHUP_MAX * Math.tanh(muSum / SOFTNESS);
-      out.push({
-        championId: c.championId,
-        role: c.role,
-        base: Math.round(c.score),
-        synergy: Math.round(synergy),
-        matchup: Math.round(matchup),
-        score: Math.round(Math.min(100, Math.max(0, c.score + synergy + matchup))),
-        allies: allyHits.sort((x, y) => y.value - x.value),
-        enemies: enemyHits.sort((x, y) => Math.abs(y.value) - Math.abs(x.value)),
-        inPool: inPool.has(c.championId),
-      });
+      out.push({ ...scoreOne(idx, c, allies, enemies), inPool: inPool.has(c.championId) });
     }
     return out.sort((a, b) => b.score - a.score || b.base - a.base).slice(0, limit);
   }
 
-  const api = { recommend, SYNERGY_MAX, MATCHUP_MAX };
+  /**
+   * Scores a single champion, e.g. one a player has hovered or locked.
+   * Uses the given role if the champion has meta data there, otherwise its best role.
+   * Returns null when there is no meta data for the champion at all.
+   */
+  function evaluate({ stats, championId, role = '', allies = [], enemies = [] }) {
+    const idx = buildIndex(stats || {});
+    let score = role ? idx.meta(championId, role) : null;
+    let r = role;
+    if (score === null) {
+      const best = idx.bestRole.get(championId);
+      if (!best) return null;
+      score = best.score;
+      r = best.role;
+    }
+    return scoreOne(idx, { championId, role: r, score }, allies, enemies);
+  }
+
+  const api = { recommend, evaluate, SYNERGY_MAX, MATCHUP_MAX };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Recommend = api;
 })(typeof window !== 'undefined' ? window : globalThis);
