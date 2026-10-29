@@ -103,11 +103,25 @@ test('training leaves out pair layers when the pairs are only noise', () => {
   const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
   assert.equal(data.syn.length, 0);
   assert.equal(data.vs.length, 0);
-  // Temporary pairs: only the few that pass by chance
-  const pairKeys = (g) => model.keys.filter((k) => k.startsWith(`${g}:`)).length;
-  assert.ok(data.synT.length <= 0.1 * pairKeys('s'), `temporary synergy ${data.synT.length} of ${pairKeys('s')}`);
-  assert.ok(data.vsT.length <= 0.1 * pairKeys('v'), `temporary matchup ${data.vsT.length} of ${pairKeys('v')}`);
-  for (const [, , , , w, se, games] of [...data.synT, ...data.vsT]) assert.ok(Math.abs(w) > 1.5 * se && games >= 30);
+  // Temporary pairs: with only noise the false discovery control lets (almost) nothing through
+  assert.ok(data.synT.length + data.vsT.length <= 2, `temporary ${data.synT.length} + ${data.vsT.length}`);
+});
+
+test('temporary pairs: real pairs of a layer that is not proven still come through', () => {
+  const matches = synthetic(6000);
+  const { share, games } = roleShares(matches);
+  // Reject every pair layer on purpose
+  const model = train(matches, { share, tagOf: () => 'None' }, { ...FAST, acceptSe: 1e9 });
+  assert.ok(model.metrics.layers.slice(1).every((l) => !l.accepted));
+  const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
+  const find = (list, a, ra, b, rb) => list.find((x) => x[0] === a && x[1] === ra && x[2] === b && x[3] === rb);
+  const syn = find(data.synT, 2, 2, 3, 1);
+  const vs = find(data.vsT, 4, 3, 5, 3);
+  assert.ok(syn && syn[4] > 0.1, `synergy ${syn}`);
+  assert.ok(vs && vs[4] > 0.1, `matchup ${vs}`);
+  for (const [, , , , w, se, n] of [...data.synT, ...data.vsT]) assert.ok(se > 0 && n >= 30 && Number.isFinite(w));
+  // Few false pairs next to the planted ones
+  assert.ok(data.synT.length + data.vsT.length <= 6, `temporary ${data.synT.length} + ${data.vsT.length}`);
 });
 
 test('worker: trains in a background thread, and stops when asked', async () => {

@@ -7,10 +7,10 @@
 // Only layers the training proved (cross-validated) are in the model.
 //
 // Temporary pairs (synT/vsT): while the synergy or matchup layer is not proven as a
-// whole, the training still exports single pairs with evidence (weight / standard error
-// above 1.5). They count with the learned weight, phased in by evidence: none at 1.5
-// standard errors, full from TEMP_FULL_Z, so pairs entering or leaving between trainings
-// never jump. Each pair is capped at TEMP_PAIR and all of them together at TEMP_TOTAL
+// whole, the training still tests single pairs one by one and exports those that pass
+// (false discovery rate 10%, collector/src/model/train.js). They count with their
+// estimated weight, phased in by evidence (weight / standard error): none at 1.5, full
+// from TEMP_FULL_Z, so a weakly backed pair has little effect. Each pair is capped at TEMP_PAIR and all of them together at TEMP_TOTAL
 // standard deviations of strength (on the display scale about 9 and 20 points). Pairs
 // in any roles count, not only lane opponents. They disappear by themselves once the
 // training proves the layer.
