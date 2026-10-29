@@ -88,3 +88,16 @@ test('our ban: action id while it is open, with the hovered champion', () => {
   assert.equal(during.banHoverId, 777);
   assert.equal(normalizeSession(buildSession(5)).myBanActionId, null);
 });
+
+test('pick numbers stay the same when the second of two simultaneous picks locks first', () => {
+  const act = (id, cell, champ, completed) => ({ id, actorCellId: cell, championId: champ, completed, isAllyAction: cell < 5, isInProgress: !completed, type: 'pick' });
+  const session = (first, second) => ({
+    gameId: 1, localPlayerCellId: 0,
+    myTeam: [0, 1].map((c) => ({ cellId: c, team: 1 })), theirTeam: [],
+    actions: [[act(1, 0, 143, first), act(2, 1, 53, second)]],
+  });
+  const early = normalizeSession(session(false, true)).completed; // cell 1 locked first
+  const both = normalizeSession(session(true, true)).completed;
+  assert.deepEqual(early.map((a) => [a.seq, a.championId]), [[2, 53]]);
+  assert.deepEqual(both.map((a) => [a.seq, a.championId]), [[1, 143], [2, 53]]);
+});

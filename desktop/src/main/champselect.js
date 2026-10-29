@@ -58,15 +58,17 @@ function normalizeSession(session, now = Date.now()) {
     };
   });
 
-  // Completed bans/picks in order, numbered per side
+  // Completed bans/picks in order. seq numbers every ban/pick action of a side by its place
+  // in the session, completed or not, so it never changes: two players pick at the same
+  // time and the second may lock first.
   const counters = { 'ally:ban': 0, 'ally:pick': 0, 'enemy:ban': 0, 'enemy:pick': 0 };
   const completed = [];
   for (const a of actions) {
-    if (!a.completed || (a.type !== 'ban' && a.type !== 'pick')) continue;
-    if (!(a.championId > 0)) continue; // skipped ban
+    if (a.type !== 'ban' && a.type !== 'pick') continue;
     const side = a.isAllyAction ? 'ally' : 'enemy';
     const key = `${side}:${a.type}`;
     counters[key] += 1;
+    if (!a.completed || !(a.championId > 0)) continue; // open, or a skipped ban
     completed.push({ side, kind: a.type, seq: counters[key], championId: a.championId, actorCellId: a.actorCellId });
   }
 

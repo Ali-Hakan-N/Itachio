@@ -822,8 +822,9 @@ async function renderHistory() {
     $view.innerHTML = '<div class="empty-state"><h2>No games yet</h2></div>';
     return;
   }
-  const picks = (r, side) =>
-    r.draft_actions.filter((a) => a.side === side && a.kind === 'pick').sort((a, b) => a.seq - b.seq).map((a) => champImg(a.champion_id, 's')).join('');
+  // Each champion once: drafts recorded before 0.1.22 can hold a pick twice
+  const picks = (r, side) => [...new Set(r.draft_actions.filter((a) => a.side === side && a.kind === 'pick').sort((a, b) => a.seq - b.seq).map((a) => a.champion_id))]
+    .map((id) => champImg(id, 's')).join('');
   const statusText = { live: 'In progress', played: 'Played', dodged: 'Dodged', finished: '' };
   $view.innerHTML = `
     <div class="hist">
