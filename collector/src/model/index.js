@@ -227,16 +227,49 @@ function trainInWorker({ matches, share, tags, log, shouldStop, pollMs = BUSY_PO
   });
 }
 
+// Patch strings ("16.21") compared as versions
+const patchOrder = (a, b) => {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  return 0;
+};
+
 /**
- * Trains on the stored matches of the patch and uploads the model, only while the
+ * Training set: the newest MAX_TRAIN_MATCHES matches, current patch first. After a
+ * new patch the older patches fill the rest, so the model keeps its data and the new
+ * patch replaces the old one as it comes in. Returns { matches, byPatch }.
+ */
+function loadTrainingMatches(patch) {
+  const current = patch.replace(/[^0-9.]/g, '');
+  const patches = fs.existsSync(DATA_DIR)
+    ? fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.jsonl')).map((f) => f.slice(0, -6))
+    : [];
+  const order = [current, ...patches.filter((p) => patchOrder(p, current) < 0).sort((a, b) => patchOrder(b, a))];
+  const parts = [];
+  const byPatch = {};
+  let room = MAX_TRAIN_MATCHES;
+  for (const p of order) {
+    if (room <= 0) break;
+    const stored = loadMatches(p);
+    const take = stored.length > room ? stored.slice(-room) : stored;
+    if (!take.length) continue;
+    parts.unshift(take);
+    byPatch[p] = take.length;
+    room -= take.length;
+  }
+  return { matches: parts.flat(), byPatch };
+}
+
+/**
+ * Trains on the stored matches (loadTrainingMatches) and uploads the model, only while the
  * computer is free (no game, low GPU load). Waits up to waitMs for that; a training
  * that a game interrupts is dropped and tried again later. ignoreBusy trains right
  * away regardless (manual runs).
  * Returns the metrics, or null if there was too little data or no free time.
  */
 async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = false }) {
-  const stored = loadMatches(patch);
-  const matches = stored.length > MAX_TRAIN_MATCHES ? stored.slice(-MAX_TRAIN_MATCHES) : stored;
+  const { matches, byPatch } = loadTrainingMatches(patch);
   if (matches.length < MIN_MATCHES) {
     log(`model: ${matches.length} single matches stored, ${MIN_MATCHES} needed to train`);
     return null;
@@ -257,7 +290,7 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const tags = await loadTags(client);
   const { share, games } = roleShares(matches);
   const t0 = Date.now();
-  log(`model: training on ${matches.length} matches`);
+  log(`model: training on ${matches.length} matches (${Object.entries(byPatch).map(([p, n]) => `${p}: ${n}`).join(', ')})`);
   const model = await trainInWorker({
     matches,
     share,
@@ -285,4 +318,4 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   return m;
 }
 
-module.exports = { storeMatches, loadMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
+module.exports = { storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
