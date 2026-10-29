@@ -19,10 +19,12 @@
 // Order and strategy are the model's; only the presentation is stretched. The scale
 // is fixed per model, not per draft. Picks with few games in the data are marked unsure.
 //
-// Personal layer: how the player does on the champion, from their own games
-// (collector/src/players): personal = { byKey: { "<champ>:<role name>": { delta, games } },
-// unplayed }. delta is in log-odds and adds to the model's logit; champions the player
-// has not played get unplayed. Only for players with an analysis.
+// Personal layer: how the player does on the champion (collector/src/players), from two
+// sources: personal = { history, team }, each { byKey: { "<champ>:<role name>": { delta,
+// games } }, unplayed } (champions not played there get unplayed). delta is in log-odds,
+// already shrunk hard toward the player's own level for champions with few games. The
+// two add up, count PERSONAL_WEIGHT of that, and are capped at PERSONAL_CAP standard
+// deviations of strength (about 7 points): a nudge, never what makes a pick.
 //
 // Composition (comp): every champion has learned style numbers u (collector comp.js); a
 // team's style is their sum T, and a team gains Σ_k a_k tanh(T_k + c_k) plus Tᵀ M T_enemy
@@ -90,6 +92,8 @@
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
   const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
+  const PERSONAL_WEIGHT = 0.5;
+  const PERSONAL_CAP = 0.4; // in standard deviations of strength
   const MIN_PICK_RATE = 0.005; // share of teams picking it in the role, to be recommended
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
@@ -154,6 +158,12 @@
     ix.sd = sd > 1e-6 ? sd : 0.08;
     ix.lambda = Math.max(0, model.counterpick?.lambda || 0);
     ix.priorGames = Math.max(1, model.lambdas?.tau?.c || 100);
+    // How popular each champion is in each role (rank 1 = most picked), shown, not scored
+    ix.popRank = new Map();
+    for (let r = 0; r < 5; r++) {
+      [...champ].filter(([key]) => Number(key.split(':')[1]) === r).sort((x, y) => y[1].games - x[1].games)
+        .forEach(([key], i) => ix.popRank.set(key, i + 1));
+    }
     // Usual standard error of strength per role, weighted by games
     ix.seRef = [0, 1, 2, 3, 4].map((r) => {
       let n = 0;
@@ -319,6 +329,8 @@
       baseLogit: base,
       offRole: share < OFF_ROLE_SHARE,
       games: e ? e.games : 0,
+      pickRate: e && ix.matches ? e.games / (2 * ix.matches) : 0,
+      popRank: ix.popRank.get(self) || 0,
       uncertainty: Math.round((50 * SPREAD * Math.sqrt(variance)) / ix.sd),
       unsure: !e || e.games < UNSURE_GAMES,
       allies: allyHits.sort((x, y) => y.value - x.value),
@@ -449,12 +461,20 @@
   // The player's own layer on top of the model; personal is what it adds in points
   function personalize(ix, row, personal) {
     if (!personal) return row;
-    const own = personal.byKey?.[`${row.championId}:${row.role}`];
-    const delta = own ? own.delta : personal.unplayed || 0;
-    if (!delta) return { ...row, personal: 0, personalGames: own?.games || 0 };
+    let sum = 0;
+    let games = 0;
+    for (const src of [personal.history, personal.team]) {
+      if (!src) continue;
+      const own = src.byKey?.[`${row.championId}:${row.role}`];
+      sum += own ? own.delta : src.unplayed || 0;
+      games += own?.games || 0;
+    }
+    const cap = PERSONAL_CAP * ix.sd;
+    const delta = Math.max(-cap, Math.min(cap, PERSONAL_WEIGHT * sum));
+    if (!delta) return { ...row, personal: 0, personalGames: games };
     const logit = row.logit + delta;
     const score = Math.round(toScore(ix, logit));
-    return { ...row, logit, score, personal: score - row.score, personalGames: own?.games || 0 };
+    return { ...row, logit, score, personal: score - row.score, personalGames: games };
   }
 
   /**

@@ -1,12 +1,12 @@
-// Player analysis from the team's own games: the Flex games all five team members played
-// together, recorded by the app (drafts with queue 440 and every ally pick linked to a
-// team member). Each is read once from Riot by its match id (server + game id) and kept
-// in data/players/team-games.jsonl. How each player does on each champion (analyze.js)
-// goes to player_champion_stats; games before a player's stats_reset_at (reset in the
-// app) do not count for them.
-//
-// Players are matched to the Riot data by their pick in the recorded draft (champion on
-// our side), so no account lookup is needed.
+// Player analysis, two kinds, each written to player_champion_stats with its source:
+//   history  every Solo/Duo and Flex game of the player in the current patch, from Riot
+//            (history.js, by Riot ID)
+//   team     the Flex games all five team members played together, recorded by the app
+//            (drafts with queue 440 and every ally pick linked to a team member), read
+//            once from Riot by match id (server + game id) into data/players/team-games.jsonl.
+//            Players are matched by their pick in the recorded draft. Games before a
+//            player's stats_reset_at (reset in the app) do not count for them.
+// How each player does on each champion comes from analyze.js for both.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,6 +15,8 @@ const { PLATFORMS } = require('../riot/crawl');
 const { toCompact } = require('../model/features');
 const { analyzePlayers } = require('./analyze');
 const { RiotKeyError } = require('../riot/client');
+const { currentPatch } = require('../riot/store');
+const { patchGames } = require('./history');
 
 // Set to false to pause the analysis (the app reads player_champion_stats with PLAYER_STATS)
 const ENABLED = true;
@@ -103,17 +105,54 @@ async function teamDrafts(client, players) {
   return out;
 }
 
+/** Replaces the rows of one source for these players */
+async function writeStats(client, source, byPlayer, model, log) {
+  const { rows, nE, familiarity } = analyzePlayers(model, byPlayer);
+  const ids = [...byPlayer.keys()];
+  check(await client.from('player_champion_stats').delete().in('player_id', ids).eq('source', source));
+  const stamp = new Date().toISOString();
+  for (let i = 0; i < rows.length; i += 500) {
+    check(await client.from('player_champion_stats').insert(rows.slice(i, i + 500).map((r) => ({ ...r, source, updated_at: stamp }))));
+  }
+  const count = [...byPlayer.values()].reduce((a, g) => a + g.length, 0);
+  log(`players: ${source}: ${byPlayer.size} players, ${count} games, ${rows.length} champion rows · early shrinkage ${nE.toFixed(1)} games · unplayed champions ${familiarity >= 0 ? '+' : ''}${familiarity.toFixed(3)} log-odds`);
+}
+
+/** History: every team member's Solo/Duo and Flex games of the current patch */
+async function updateHistory({ client, api, log, model, players }) {
+  const patch = await currentPatch(client);
+  const byPlayer = new Map();
+  for (const p of players.filter((x) => x.riot_id)) {
+    try {
+      const games = await patchGames(api, p.riot_id, patch, log);
+      if (games.length) byPlayer.set(p.id, games);
+    } catch (err) {
+      if (err instanceof RiotKeyError) throw err;
+      log(`players: could not load a player's matches (${err.message}), skipped`);
+    }
+  }
+  if (!byPlayer.size) return log(`players: history: no games of patch ${patch} yet`);
+  await writeStats(client, 'history', byPlayer, model, log);
+}
+
 /**
- * Updates player_champion_stats for every team member, from the team's own games.
+ * Updates player_champion_stats for every team member: their own games of the patch
+ * (history) and the team's full Flex games (team).
  * data: the exported model to compare against (newest snapshot when not given).
  */
 async function updatePlayers({ client, api, log, data = null }) {
   if (!ENABLED) return log('players: analysis is paused');
   const model = data || check(await client.from('model_snapshots').select('data').order('id', { ascending: false }).limit(1).maybeSingle())?.data;
   if (!model) return log('players: no model yet, skipped');
-  const players = check(await client.from('players').select('id,team_id,stats_reset_at').not('team_id', 'is', null));
+  const players = check(await client.from('players').select('id,team_id,riot_id,stats_reset_at').not('team_id', 'is', null));
+  await updateHistory({ client, api, log, model, players });
+  await updateTeam({ client, api, log, model, players });
+}
+
+/** Team: the Flex games the whole team played together */
+async function updateTeam({ client, api, log, model, players }) {
   const games = await teamDrafts(client, players);
-  if (!games.length) return log('players: no Flex games of a full team recorded yet');
+  if (!games.length) return log('players: team: no Flex games of a full team recorded yet');
 
   // New games from Riot
   const cache = loadCache();
@@ -149,17 +188,9 @@ async function updatePlayers({ client, api, log, data = null }) {
       byPlayer.get(p.playerId).push({ id: g.matchId, start: entry.start, m: entry.m, side, role });
     }
   }
-  if (!byPlayer.size) return log(`players: ${games.length} team games, none usable yet`);
-
-  const { rows, nE, familiarity } = analyzePlayers(model, byPlayer);
-  const ids = [...byPlayer.keys()];
-  check(await client.from('player_champion_stats').delete().in('player_id', ids));
-  const stamp = new Date().toISOString();
-  for (let i = 0; i < rows.length; i += 500) {
-    check(await client.from('player_champion_stats').insert(rows.slice(i, i + 500).map((r) => ({ ...r, updated_at: stamp }))));
-  }
-  const count = [...byPlayer.values()].reduce((a, g) => a + g.length, 0);
-  log(`players: ${games.length} team games (${fetched} new), ${byPlayer.size} players, ${count} player games, ${rows.length} champion rows · early shrinkage ${nE.toFixed(1)} games · unplayed champions ${familiarity >= 0 ? '+' : ''}${familiarity.toFixed(3)} log-odds`);
+  if (!byPlayer.size) return log(`players: team: ${games.length} games, none usable yet`);
+  log(`players: team: ${games.length} full-team Flex games (${fetched} new)`);
+  await writeStats(client, 'team', byPlayer, model, log);
 }
 
 module.exports = { updatePlayers, teamGame, teamDrafts };

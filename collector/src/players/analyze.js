@@ -24,10 +24,10 @@
 const { laneAdvantage } = require('../model/early');
 const { matchLogit } = require('../model/predict');
 
-const N_E_MIN = 3;
+const N_E_MIN = 10; // a few good games must not make a champion look mastered
 const N_E_MAX = 50;
 const N_E_DEFAULT = 10;
-const TAU_LATE = 25; // in units of p(1-p): about 100 games
+const TAU_LATE = 50; // in units of p(1-p): about 200 games
 const FIRST_GAMES = 3;
 const N_FAM = 10;
 const F_PRIOR = 20; // games of evidence before the familiarity estimate moves freely

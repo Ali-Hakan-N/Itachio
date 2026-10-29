@@ -115,22 +115,23 @@ class DataStore {
     return { team, members, pools, playerStats: PLAYER_STATS ? await this.loadPlayerStats(ids) : {} };
   }
 
-  // How each player does on each champion (collector/src/players):
-  // { playerId: { byKey: { "<champ>:<role>": { delta, games, wins, early, late } }, unplayed } }
+  // How each player does on each champion (collector/src/players), per source (history:
+  // their games of the patch, team: the team's full Flex games):
+  // { playerId: { history|team: { byKey: { "<champ>:<role>": { delta, games, wins, early, late } }, unplayed } } }
   async loadPlayerStats(playerIds) {
     if (!playerIds.length) return {};
     const rows = [];
     for (let from = 0; ; from += 1000) {
       const page = check(
-        await this.client.from('player_champion_stats').select('player_id,champion_id,role,games,wins,early,late,delta')
-          .in('player_id', playerIds).order('player_id').order('champion_id').order('role').range(from, from + 999),
+        await this.client.from('player_champion_stats').select('player_id,champion_id,role,source,games,wins,early,late,delta')
+          .in('player_id', playerIds).order('player_id').order('champion_id').order('role').order('source').range(from, from + 999),
       );
       rows.push(...page);
       if (page.length < 1000) break;
     }
     const out = {};
     for (const r of rows) {
-      const p = (out[r.player_id] ||= { byKey: {}, unplayed: 0 });
+      const p = ((out[r.player_id] ||= {})[r.source] ||= { byKey: {}, unplayed: 0 });
       if (r.champion_id === 0) p.unplayed = Number(r.delta);
       else {
         p.byKey[`${r.champion_id}:${r.role}`] = {

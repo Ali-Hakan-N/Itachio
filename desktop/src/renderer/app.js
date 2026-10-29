@@ -27,7 +27,12 @@ let S = null; // state from the main process
 let tab = 'draft';
 let screen = 'loading'; // loading | config | login | profile | team | main
 let configError = null;
-const statsUi = { player: null }; // whose champion statistics are shown (default: me)
+// Whose champion statistics are shown (default: me), and from which games
+const statsUi = { player: null, source: 'history' };
+const STAT_SOURCES = [
+  ['history', 'This patch', 'All of the player\'s Solo/Duo and Flex games of the current patch, from Riot.'],
+  ['team', 'With the team', 'Only the Flex games the whole team played together, recorded by the app.'],
+];
 
 const $view = document.getElementById('view');
 const $status = document.getElementById('status');
@@ -351,8 +356,18 @@ const personalOf = (playerId) => (playerId && S.playerStats?.[playerId]) || null
 const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
 
 // Notes on a recommendation, shown together in one icon's tooltip: [{ kind, title, text }]
+// Champions this high in their role's pick rates are flagged as meta (information only)
+const META_RANK = 5;
+
 function recNotes(r) {
   const notes = [];
+  if (r.popRank && r.popRank <= META_RANK) {
+    notes.push({
+      kind: '',
+      title: `Meta: #${r.popRank} most picked`,
+      text: `Picked by ${(r.pickRate * 100).toFixed(1)}% of teams in this role. Popularity does not count in the score, which is about winning.`,
+    });
+  }
   if (r.offRole) notes.push({ kind: 'warn', title: 'Off-role', text: 'Rarely played in this role.' });
   if (r.unsure && !r.offRole) notes.push({ kind: '', title: 'Low data', text: `Few games behind it: rough estimate, ±${r.uncertainty} points.` });
   if (Math.abs(r.personal || 0) >= PERSONAL_BADGE) {
@@ -676,13 +691,14 @@ function sideColumn(which, d) {
 }
 
 // ---------- Champions ----------
-// How each player does on each champion, from the Flex games the whole team played
-// together (collector/src/players): games, record, and what they add to that player's
-// scores, split into the laning phase and the rest of the game
+// How each player does on each champion (collector/src/players), from two kinds of games:
+// their own games of the patch, and the team's full Flex games. Games, record, and the
+// effect split into the laning phase and the rest of the game
 function renderChampions() {
   const members = S.members || [];
   const id = statsUi.player && members.some((m) => m.id === statsUi.player) ? statsUi.player : S.me?.id;
-  const stats = (S.playerStats || {})[id];
+  const source = STAT_SOURCES.find(([k]) => k === statsUi.source) || STAT_SOURCES[0];
+  const stats = ((S.playerStats || {})[id] || {})[source[0]];
   const pts = (x) => Engine.points(S.model, x);
   const signed = (n) => `<b class="${n > 0 ? 'up' : n < 0 ? 'down' : ''}">${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}</b>`;
   const rows = stats
@@ -694,10 +710,11 @@ function renderChampions() {
     <div class="champ-stats">
       <div class="toolbar">
         <h2>Champion statistics</h2>
+        <div class="seg" id="src">${STAT_SOURCES.map(([k, label]) => `<button data-src="${k}" class="${k === source[0] ? 'active' : ''}">${label}</button>`).join('')}</div>
         <span class="grow"></span>
         <select id="who">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}${m.id === S.me?.id ? ' (you)' : ''}</option>`).join('')}</select>
       </div>
-      <p class="note">Only Flex games the whole team played together count. Each game is compared with what the model expected from the draft; champions with few games stay close to the player's usual level. These values add to the player's scores in champ select.</p>
+      <p class="note">${source[2]} Each game is compared with what the model expected from the draft; champions with few games stay close to the player's usual level. Both kinds count a little in the player's scores in champ select.</p>
       ${rows.length
         ? `<div class="stats-table">
             <div class="stats-row head"><span>Champion</span><span>Games</span><span>Record</span><span title="Laning phase compared with an average player in the same matchup">Lane</span><span title="The rest of the game, beyond the draft and the lane">Rest</span><span title="What it adds to this player's score for the champion">Effect</span></div>
@@ -711,9 +728,17 @@ function renderChampions() {
                 <span>${signed(pts(r.delta))}</span>
               </div>`).join('')}
           </div>
-          <p class="note">Champions not played with the team: ${signed(pts(stats.unplayed))}</p>`
-        : '<p class="note">No full-team Flex games analyzed for this player yet. They show up a few hours after the games, once the collector has read them.</p>'}
+          <p class="note">Champions not played here: ${signed(pts(stats.unplayed))}</p>`
+        : `<p class="note">${source[0] === 'team'
+            ? 'No full-team Flex games analyzed for this player yet. They show up a few hours after the games, once the collector has read them.'
+            : 'No games of this patch analyzed for this player yet. The collector reads them every few hours.'}</p>`}
     </div>`;
+  document.getElementById('src').onclick = (e) => {
+    const b = e.target.closest('[data-src]');
+    if (!b) return;
+    statsUi.source = b.dataset.src;
+    renderChampions();
+  };
   document.getElementById('who').onchange = (e) => {
     statsUi.player = e.target.value;
     renderChampions();

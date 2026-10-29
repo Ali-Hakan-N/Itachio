@@ -440,3 +440,6 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .stats-row .who small, .stats-row small { display: block; color: var(--muted); font-size: 11px; }
 .stats-row b.up, .note b.up { color: var(--cue); }
 .stats-row b.down, .note b.down { color: var(--red); }
+.seg { display: flex; gap: 4px; padding: 3px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; margin-left: 14px; }
+.seg button { background: none; border: 0; padding: 5px 12px; border-radius: 999px; color: var(--muted); font-weight: 500; }
+.seg button.active { color: var(--bg); background: var(--ink); font-weight: 600; }

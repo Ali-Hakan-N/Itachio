@@ -118,3 +118,23 @@ test('team drafts: only finished Flex games where all five picks are team member
   assert.equal(games[0].region, 'europe');
   assert.equal(games[0].picks.length, 5);
 });
+
+test('history game: found by account, with its patch; remakes are skipped', () => {
+  const { historyGame } = require('../src/players/history');
+  const roles = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY'];
+  const raw = {
+    metadata: { matchId: 'EUW1_5' },
+    info: {
+      queueId: 420, gameDuration: 1800, gameVersion: '16.21.1', gameStartTimestamp: 5, teams: [],
+      participants: roles.flatMap((r, i) => [
+        { puuid: i === 2 ? 'me' : `b${i}`, championId: i + 1, teamPosition: r, teamId: 100, win: true },
+        { puuid: `r${i}`, championId: i + 11, teamPosition: r, teamId: 200, win: false },
+      ]),
+    },
+  };
+  const g = historyGame(raw, 'me');
+  assert.equal(g.patch, '16.21');
+  assert.equal(g.side, 'b');
+  assert.equal(g.role, 2);
+  assert.ok(historyGame({ ...raw, info: { ...raw.info, gameDuration: 100 } }, 'me').skip);
+});
