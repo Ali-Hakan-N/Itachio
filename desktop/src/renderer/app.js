@@ -12,15 +12,15 @@ const ROLE_NAME = Object.fromEntries(ROLES);
 
 const PHASE_TEXT = {
   None: 'Idle',
-  Lobby: 'In lobby',
-  Matchmaking: 'In queue',
-  ReadyCheck: 'Match found',
-  ChampSelect: 'Champ select',
-  GameStart: 'Loading game',
-  InProgress: 'In game',
-  WaitingForStats: 'Waiting for stats',
-  PreEndOfGame: 'Game over',
-  EndOfGame: 'Post game',
+  Lobby: 'In Lobby',
+  Matchmaking: 'In Queue',
+  ReadyCheck: 'Match Found',
+  ChampSelect: 'Champ Select',
+  GameStart: 'Loading Game',
+  InProgress: 'In Game',
+  WaitingForStats: 'Waiting for Stats',
+  PreEndOfGame: 'Game Over',
+  EndOfGame: 'Post Game',
 };
 
 let S = null; // state from the main process
@@ -30,8 +30,8 @@ let configError = null;
 // Whose champion statistics are shown (default: me), and from which games
 const statsUi = { player: null, source: 'history' };
 const STAT_SOURCES = [
-  ['history', 'This patch'], // the player's Solo/Duo and Flex games of the patch
-  ['team', 'With the team'], // the Flex games the whole team played together
+  ['history', 'This Patch'], // the player's Solo/Duo and Flex games of the patch
+  ['team', 'With the Team'], // the Flex games the whole team played together
 ];
 
 const $view = document.getElementById('view');
@@ -102,7 +102,7 @@ function renderUpdate() {
       <div class="update-overlay">
         <div class="update-card">
           <span class="logo big" aria-hidden="true"></span>
-          <h2>Installing update</h2>
+          <h2>Installing Update</h2>
           <p>The app restarts in a moment.</p>
           ${bar('')}
         </div>
@@ -210,7 +210,7 @@ function renderStatus() {
 function renderConfig() {
   $view.innerHTML = `
     <div class="card">
-      <h2>Setup incomplete</h2>
+      <h2>Setup Incomplete</h2>
       <p>${esc(configError)}</p>
       <p>Copy <b>config.example.json</b> in the app folder to <b>config.json</b>,
       fill in your Supabase project URL and key, then restart the app.</p>
@@ -221,11 +221,11 @@ function renderLogin(mode = 'signin') {
   const signup = mode === 'signup';
   $view.innerHTML = `
     <form class="card" id="f">
-      <h2>${signup ? 'Create account' : 'Sign in'}</h2>
+      <h2>${signup ? 'Create Account' : 'Sign In'}</h2>
       <label>Email <input name="email" type="email" required autocomplete="email"></label>
       <label>Password <input name="password" type="password" required minlength="6" autocomplete="${signup ? 'new-password' : 'current-password'}"></label>
       <div class="err" id="err"></div>
-      <button class="btn primary" type="submit">${signup ? 'Create account' : 'Sign in'}</button>
+      <button class="btn primary" type="submit">${signup ? 'Create Account' : 'Sign In'}</button>
       <button class="link" type="button" id="swap">${signup ? 'Have an account? Sign in' : 'No account? Create one'}</button>
     </form>`;
   document.getElementById('swap').onclick = () => renderLogin(signup ? 'signin' : 'signup');
@@ -249,11 +249,11 @@ function renderProfile() {
   const me = S?.me;
   $view.innerHTML = `
     <form class="card" id="f">
-      <h2>Player profile</h2>
+      <h2>Player Profile</h2>
       <p>Your teammates will see you by this name. Your LoL account links automatically while the client is open.</p>
       <label>Nickname <input name="nickname" required minlength="2" maxlength="32" value="${esc(me?.nickname || S?.lcu?.summoner?.riotId?.split('#')[0] || '')}"></label>
-      <button class="btn primary" type="submit">Save profile</button>
-      ${me ? '' : '<button class="link" type="button" id="out">Sign out</button>'}
+      <button class="btn primary" type="submit">Save Profile</button>
+      ${me ? '' : '<button class="link" type="button" id="out">Sign Out</button>'}
     </form>`;
   // Editing an existing profile: sign out lives in the Team tab
   if (!me) document.getElementById('out').onclick = signOut;
@@ -267,12 +267,12 @@ function renderProfile() {
 function renderTeamSetup() {
   $view.innerHTML = `
     <div class="card">
-      <h2>Join your team</h2>
+      <h2>Join Your Team</h2>
       <p>Enter the 8-character code from a teammate.</p>
       <form class="row" id="join"><input name="code" placeholder="Team code" required class="grow upper"><button class="btn primary">Join</button></form>
       <p class="gap">First one on the team? Create it and share the code with your friends.</p>
-      <form class="row" id="create"><input name="name" placeholder="Team name" required minlength="2" class="grow"><button class="btn">Create team</button></form>
-      <button class="link" type="button" id="out">Sign out</button>
+      <form class="row" id="create"><input name="name" placeholder="Team name" required minlength="2" class="grow"><button class="btn">Create Team</button></form>
+      <button class="link" type="button" id="out">Sign Out</button>
     </div>`;
   document.getElementById('out').onclick = signOut;
   document.getElementById('join').onsubmit = async (e) => {
@@ -355,12 +355,12 @@ function recNotes(r) {
   if (r.popRank && r.popRank <= META_RANK) {
     notes.push({
       kind: '',
-      title: `Meta: #${r.popRank} most picked`,
+      title: `Meta: #${r.popRank} Most Picked`,
       text: `Picked by ${(r.pickRate * 100).toFixed(1)}% of teams in this role. Popularity does not count in the score, which is about winning.`,
     });
   }
   if (r.offRole) notes.push({ kind: 'warn', title: 'Off-role', text: 'Rarely played in this role.' });
-  if (r.unsure && !r.offRole) notes.push({ kind: '', title: 'Low data', text: `Few games behind it: rough estimate, ±${r.uncertainty} points.` });
+  if (r.unsure && !r.offRole) notes.push({ kind: '', title: 'Low Data', text: `Few games behind it: rough estimate, ±${r.uncertainty} points.` });
   if (Math.abs(r.personal || 0) >= PERSONAL_BADGE) {
     notes.push({
       kind: r.personal > 0 ? 'good' : 'warn',
@@ -371,10 +371,10 @@ function recNotes(r) {
     });
   }
   if (r.counterRisk >= COUNTER_RISK_BADGE) {
-    notes.push({ kind: 'warn', title: `Counter risk −${r.counterRisk}`, text: 'Easy to answer: expected loss once the enemy picks in the roles they have open.' });
+    notes.push({ kind: 'warn', title: `Counter Risk −${r.counterRisk}`, text: 'Easy to answer: expected loss once the enemy picks in the roles they have open.' });
   }
   if (r.counterRisk <= -COUNTER_RISK_BADGE) {
-    notes.push({ kind: 'good', title: `Safe blind +${-r.counterRisk}`, text: 'What the enemy usually picks in their open roles does badly against it.' });
+    notes.push({ kind: 'good', title: `Safe Blind +${-r.counterRisk}`, text: 'What the enemy usually picks in their open roles does badly against it.' });
   }
   return notes;
 }
@@ -511,7 +511,7 @@ function renderDraft() {
     const connected = S.lcu?.connected;
     $view.innerHTML = `
       <div class="empty-state">
-        <h2>${connected ? 'Waiting for champ select' : 'League client is closed'}</h2>
+        <h2>${connected ? 'Waiting for Champ Select' : 'League Client Is Closed'}</h2>
         <p>${connected
           ? 'Queue up. When champ select starts, the draft shows up here live with your recommendations.'
           : 'Open the League of Legends client. The app finds it and connects on its own.'}</p>
@@ -522,10 +522,10 @@ function renderDraft() {
 
   const blocked = unavailable(d);
   const turnText = !d.turn
-    ? d.phase === 'FINALIZATION' ? 'Finalization' : 'Waiting'
+    ? d.phase === 'FINALIZATION' ? 'Finalization' : PHASE_TEXT[S.lcu?.phase] || 'Waiting'
     : d.isOurTurn
-      ? d.turn.kind === 'ban' ? 'Your turn to ban' : 'Your turn to pick'
-      : `${d.turn.side === 'ally' ? 'Your team is' : 'Enemy is'} ${d.turn.kind === 'ban' ? 'banning' : 'picking'}`;
+      ? d.turn.kind === 'ban' ? 'Your Turn to Ban' : 'Your Turn to Pick'
+      : `${d.turn.side === 'ally' ? 'Your Team Is' : 'Enemy Is'} ${d.turn.kind === 'ban' ? 'Banning' : 'Picking'}`;
 
   // Our team is always on the left, whichever side we play
   const allyCol = sideColumn('ally', d);
@@ -561,7 +561,7 @@ function renderDraft() {
   const banBlock = d.myBanActionId
     ? `<div>
         <h3 class="sub head-row">
-          <span>Ban suggestions</span>
+          <span>Ban Suggestions</span>
           ${bans.length ? '<span class="hint">Click to hover the ban in the client</span>' : ''}
         </h3>
         ${bans.length
@@ -586,7 +586,7 @@ function renderDraft() {
     });
     if (ev) {
       const row = { ...ev, inPool: myPool().some((p) => p.champion_id === local.hoverId) };
-      hoverRow = `<h3 class="sub gap">Your hover</h3><div class="recs pinned">${recRow(row, 0, { canHover: false, hoverId: local.hoverId, rank: '•' })}</div>`;
+      hoverRow = `<h3 class="sub gap">Your Hover</h3><div class="recs pinned">${recRow(row, 0, { canHover: false, hoverId: local.hoverId, rank: '•' })}</div>`;
     }
   }
 
@@ -604,7 +604,7 @@ function renderDraft() {
         ${banBlock}
         <div>
           <h3 class="sub head-row">
-            <span>${local?.locked ? `Your pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</span>
+            <span>${local?.locked ? `Your Pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</span>
             ${!local?.locked && d.myPickActionId && recs.length ? '<span class="hint">Click to hover in the client</span>' : ''}
           </h3>
           ${local?.locked ? pickRow : recs.length
@@ -694,9 +694,9 @@ function sideColumn(which, d) {
   return `
     <section class="side ${color}">
       <div class="side-head">
-        <h2>${isAlly ? 'Your team' : 'Enemy team'}</h2>
+        <h2>${isAlly ? 'Your Team' : 'Enemy Team'}</h2>
         ${avg === null ? '' : `<div class="avg" title="Average score of the champions shown"><small>avg</small><b class="sc sc-${tierOf(avg)}">${avg}</b></div>`}
-        <span>${color === 'blue' ? 'Blue side' : 'Red side'}</span>
+        <span>${color === 'blue' ? 'Blue Side' : 'Red Side'}</span>
       </div>
       ${slots.join('')}
       <div class="bans">${bans.length ? bans.map((id) => champImg(id, 's')).join('') : '<span class="note">No bans</span>'}</div>
@@ -725,7 +725,7 @@ function renderChampions() {
         <h2>Champion Statistics</h2>
         <div class="seg" id="src">${STAT_SOURCES.map(([k, label]) => `<button data-src="${k}" class="${k === source[0] ? 'active' : ''}">${label}</button>`).join('')}</div>
         <span class="grow"></span>
-        <select id="who">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}${m.id === S.me?.id ? ' (you)' : ''}</option>`).join('')}</select>
+        <select id="who">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
       </div>
       ${rows.length
         ? `<div class="stats-table">
@@ -763,12 +763,12 @@ function renderTeam() {
     <div class="team-head">
       <h2>${esc(t?.name || '')}</h2>
       <span class="muted">Invite code</span><span class="code">${esc(t?.join_code || '')}</span>
-      <button class="btn ghost" id="copy">Copy code</button>
+      <button class="btn ghost" id="copy">Copy Code</button>
       <span class="grow"></span>
-      <button class="btn ghost" id="prof">Edit profile</button>
-      <button class="btn ghost danger" id="reset">Reset my champion data</button>
-      <button class="btn ghost" id="leave">Leave team</button>
-      <button class="btn ghost" id="out">Sign out</button>
+      <button class="btn ghost" id="prof">Edit Profile</button>
+      <button class="btn ghost danger" id="reset">Reset My Champion Data</button>
+      <button class="btn ghost" id="leave">Leave Team</button>
+      <button class="btn ghost" id="out">Sign Out</button>
     </div>
     <div class="members">
       ${S.members.map((m) => {
@@ -776,10 +776,10 @@ function renderTeam() {
         return `
           <div class="member">
             <div class="top">
-              <span class="nick">${esc(m.nickname)}${m.id === S.me.id ? ' (you)' : ''}${owner ? ' <span class="badge owner">Owner</span>' : ''}</span>
+              <span class="nick">${esc(m.nickname)}${owner ? ' <span class="badge owner">Owner</span>' : ''}</span>
             </div>
             <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
-            ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove from team</button>` : ''}
+            ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove From Team</button>` : ''}
           </div>`;
       }).join('')}
     </div>`;
@@ -819,23 +819,53 @@ async function renderHistory() {
   const rows = await run(api.listHistory());
   if (tab !== 'history') return;
   if (!rows.length) {
-    $view.innerHTML = '<div class="empty-state"><h2>No games yet</h2></div>';
+    $view.innerHTML = '<div class="empty-state"><h2>No Games Yet</h2></div>';
     return;
   }
-  // Each champion once: drafts recorded before 0.1.22 can hold a pick twice
-  const picks = (r, side) => [...new Set(r.draft_actions.filter((a) => a.side === side && a.kind === 'pick').sort((a, b) => a.seq - b.seq).map((a) => a.champion_id))]
-    .map((id) => champImg(id, 's')).join('');
-  const statusText = { live: 'In progress', played: 'Played', dodged: 'Dodged', finished: '' };
+  // A side's picks with their roles: each champion once (drafts recorded before 0.1.22 can
+  // hold a pick twice), roles guessed where the draft does not have them
+  const side = (r, which) => {
+    const seen = new Set();
+    const list = r.draft_actions
+      .filter((a) => a.side === which && a.kind === 'pick' && !seen.has(a.champion_id) && seen.add(a.champion_id))
+      .sort((a, b) => a.seq - b.seq)
+      .map((a) => ({ championId: a.champion_id, position: a.role || '' }));
+    const guess = list.length === 5 ? Engine.guessRoles({ model: S.model, players: list }) : null;
+    return guess ? list.map((p, i) => ({ ...p, position: guess.roles[i] })) : list;
+  };
+  // Every champion scored on the final board, from its own team's side, and the team's average
+  const scored = (team, other) => {
+    const picks = team.map((p) => {
+      const ev = Engine.evaluate({
+        stats: S.stats, model: S.model, championId: p.championId, role: p.position,
+        allies: team.filter((x) => x !== p), enemies: other,
+      });
+      return { ...p, score: ev ? ev.score : null };
+    });
+    const known = picks.filter((p) => p.score !== null);
+    return { picks, avg: known.length ? Math.round(known.reduce((a, p) => a + p.score, 0) / known.length) : null };
+  };
+  const teamHtml = (t) => `<div class="hteam">${t.picks.map((p) => `
+      <span class="hpick">${champImg(p.championId, 's')}${p.score === null ? '' : `<b class="sc sc-${tierOf(p.score)}">${p.score}</b>`}</span>`).join('')}</div>`;
+  const avgHtml = (t) => (t.avg === null ? '<span class="havg"></span>' : `<span class="havg sc sc-${tierOf(t.avg)}">${t.avg}</span>`);
+  const statusText = { live: 'In Progress', played: 'Played', dodged: 'Dodged', finished: '' };
   $view.innerHTML = `
     <div class="hist">
-      ${rows.map((r) => `
+      ${rows.map((r) => {
+        const us = side(r, 'ally');
+        const them = side(r, 'enemy');
+        const ours = scored(us, them);
+        const theirs = scored(them, us);
+        return `
         <div class="hrow">
           <span class="muted">${new Date(r.started_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</span>
           <span class="tag ${r.our_side || ''}">${r.our_side === 'red' ? 'Red' : 'Blue'}</span>
           <span class="${r.result || 'muted'}">${r.result === 'win' ? 'Win' : r.result === 'loss' ? 'Loss' : statusText[r.status] || ''}</span>
-          <div class="icons">${picks(r, 'ally')}</div>
-          <div class="icons">${picks(r, 'enemy')}</div>
-        </div>`).join('')}
+          ${teamHtml(ours)}
+          <div class="hscore">${avgHtml(ours)}<span class="hvs">vs</span>${avgHtml(theirs)}</div>
+          ${teamHtml(theirs)}
+        </div>`;
+      }).join('')}
     </div>`;
 }
 

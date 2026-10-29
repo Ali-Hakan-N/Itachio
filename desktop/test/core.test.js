@@ -206,7 +206,7 @@ test('model: a newer model is taken between drafts, never during one', async () 
   lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(3), eventType: 'Update' });
   assert.equal(await core.refreshModel(), false); // in champ select: wait
   assert.equal(core.state.model.snapshotId, 1);
-  lcu.emit('event', { uri: '/lol-champ-select/v1/session', eventType: 'Delete' });
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'WaitingForStats' }); // the game is over
   assert.equal(await core.refreshModel(), true);
   assert.equal(core.state.model.snapshotId, 2);
 });
@@ -231,4 +231,21 @@ test('model: the newest model is taken when champ select starts, then kept for t
   lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(2), eventType: 'Update' });
   assert.equal(await core.refreshModel(), false);
   assert.equal(core.state.model.snapshotId, 2);
+});
+
+test('the draft stays on screen during the game and goes when it ends', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  lcu.get = async () => null;
+  const core = new AppCore({ lcu, data: fakeData(), log: { error: () => {}, info: () => {} } });
+  await core.loadUserData();
+  const { buildSession } = require('./mock-lcu');
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'ChampSelect' });
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', eventType: 'Delete' });
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'GameStart' });
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'InProgress' });
+  await core.queue;
+  assert.ok(core.state.draft, 'still shown in game');
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'WaitingForStats' });
+  assert.equal(core.state.draft, null);
 });

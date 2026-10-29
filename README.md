@@ -4,7 +4,7 @@ Pick better in champ select. Itachio watches your League of Legends draft live a
 
 ## Download
 
-**[Download Itachio for Windows](https://github.com/Ali-Hakan-N/lol-draft-picker/releases/latest/download/Itachio-Setup.exe)**
+**[Download Itachio for Windows](https://github.com/Ali-Hakan-N/Itachio/releases/latest/download/Itachio-Setup.exe)**
 
 ## Install
 

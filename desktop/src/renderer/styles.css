@@ -294,9 +294,15 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 /* ---------- History ---------- */
 .hist { display: flex; flex-direction: column; gap: 8px; max-width: 1000px; margin: 0 auto; }
 .hrow {
-  display: grid; grid-template-columns: 130px 64px 90px 1fr 1fr; align-items: center; gap: 12px;
+  display: grid; grid-template-columns: 120px 56px 64px 1fr auto 1fr; align-items: center; gap: 12px;
   padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m);
 }
+.hteam { display: flex; gap: 6px; }
+.hpick { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.hpick b { font-size: 11px; font-weight: 700; line-height: 1; }
+.hscore { display: flex; align-items: baseline; gap: 10px; justify-content: center; min-width: 120px; }
+.havg { font-family: var(--display); font-size: 22px; font-weight: 800; min-width: 2ch; text-align: center; }
+.hvs { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
 .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 999px; justify-self: start; }
 .tag.blue { color: var(--blue); background: var(--blue-dim); }
 .tag.red { color: var(--red); background: var(--red-dim); }

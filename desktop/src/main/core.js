@@ -10,6 +10,8 @@ globalThis.Recommend = globalThis.Recommend || require('../renderer/recommend');
 const { Engine } = require('../renderer/model');
 
 const PRE_GAME_PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck']);
+// The draft stays on screen while the game is played and goes when it is over
+const AFTER_GAME_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
 const MODEL_CHECK_MS = 10 * 60 * 1000; // how often to look for a newer model
 
 class AppCore extends EventEmitter {
@@ -161,7 +163,8 @@ class AppCore extends EventEmitter {
       case '/lol-gameflow/v1/gameflow-phase':
         return this.#onPhase(ev.data);
       case '/lol-champ-select/v1/session':
-        if (ev.eventType === 'Delete') return this.#emit({ draft: null, pickable: null });
+        // Champ select is over: the draft stays until the game ends (or a dodge, #onPhase)
+        if (ev.eventType === 'Delete') return this.#emit({ pickable: null });
         return this.#onSession(ev.data);
       case '/lol-end-of-game/v1/eog-stats-block':
         return this.#onEndOfGame(ev.data);
@@ -190,6 +193,8 @@ class AppCore extends EventEmitter {
       this.savedKeys.clear();
       this.#emit({ draft: null, pickable: null });
     }
+
+    if (AFTER_GAME_PHASES.has(phase) && this.state.draft) this.#emit({ draft: null });
 
     if (phase === 'EndOfGame') {
       // Ask for end-of-game data too, in case the event was missed
