@@ -22,8 +22,8 @@
   --radius-m: 10px;
   --radius-l: 14px;
   --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.28);
-  --display: 'Sora', 'Inter', 'Segoe UI', system-ui, sans-serif;
-  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --display: 'Open Sans', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Open Sans', 'Segoe UI', system-ui, sans-serif;
   font-size: 14px;
   color: var(--ink);
   background: var(--bg);

@@ -253,9 +253,10 @@ function renderProfile() {
       <p>Your teammates will see you by this name. Your LoL account links automatically while the client is open.</p>
       <label>Nickname <input name="nickname" required minlength="2" maxlength="32" value="${esc(me?.nickname || S?.lcu?.summoner?.riotId?.split('#')[0] || '')}"></label>
       <button class="btn primary" type="submit">Save profile</button>
-      <button class="link" type="button" id="out">Sign out</button>
+      ${me ? '' : '<button class="link" type="button" id="out">Sign out</button>'}
     </form>`;
-  document.getElementById('out').onclick = signOut;
+  // Editing an existing profile: sign out lives in the Team tab
+  if (!me) document.getElementById('out').onclick = signOut;
   document.getElementById('f').onsubmit = async (e) => {
     e.preventDefault();
     S = await run(api.saveProfile(Object.fromEntries(new FormData(e.target))));
@@ -428,6 +429,28 @@ function banRow(r, i, { canHover, hoverId }) {
     </button>`;
 }
 
+// Our side for ban suggestions: picks and pick intents, and for a teammate who has not
+// shown one yet, the champion they play most in their role this patch (their history
+// statistics), so bans go to what beats the champions our players actually play
+function banAllies(d, blocked) {
+  const out = draftContext(d).allies;
+  const taken = new Set(out.map((p) => p.championId));
+  for (const p of d.ally) {
+    if (shownChamp(p) || !p.position) continue;
+    const id = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
+    const byKey = (S.playerStats?.[id] || {}).history?.byKey || {};
+    const usual = Object.entries(byKey)
+      .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }))
+      .filter((x) => x.role === p.position && !blocked.has(x.championId) && !taken.has(x.championId))
+      .sort((a, b) => b.games - a.games)[0];
+    if (usual) {
+      out.push({ championId: usual.championId, position: p.position });
+      taken.add(usual.championId);
+    }
+  }
+  return out;
+}
+
 // Score each champion had when it was locked, to show how later picks changed it
 const pickScores = { gameId: null, map: new Map() };
 
@@ -530,7 +553,7 @@ function renderDraft() {
     ? Engine.recommendBans({
         model: S.model,
         unavailable: blocked,
-        allies: draftContext(d).allies,
+        allies: banAllies(d, blocked),
         enemies: d.enemy.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position })),
         limit: 10,
       })
