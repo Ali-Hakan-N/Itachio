@@ -230,10 +230,11 @@ function trainInWorker({ matches, share, tags, log, shouldStop, pollMs = BUSY_PO
 /**
  * Trains on the stored matches of the patch and uploads the model, only while the
  * computer is free (no game, low GPU load). Waits up to waitMs for that; a training
- * that a game interrupts is dropped and tried again later.
+ * that a game interrupts is dropped and tried again later. ignoreBusy trains right
+ * away regardless (manual runs).
  * Returns the metrics, or null if there was too little data or no free time.
  */
-async function trainAndPublish({ client, patch, log, waitMs = 0 }) {
+async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = false }) {
   const stored = loadMatches(patch);
   const matches = stored.length > MAX_TRAIN_MATCHES ? stored.slice(-MAX_TRAIN_MATCHES) : stored;
   if (matches.length < MIN_MATCHES) {
@@ -242,7 +243,7 @@ async function trainAndPublish({ client, patch, log, waitMs = 0 }) {
   }
 
   const deadline = Date.now() + waitMs;
-  for (let first = true; ; first = false) {
+  for (let first = true; !ignoreBusy; first = false) {
     const state = await idle.busyNow(log);
     if (!state.busy) break;
     if (Date.now() >= deadline) {
@@ -263,6 +264,7 @@ async function trainAndPublish({ client, patch, log, waitMs = 0 }) {
     tags,
     log,
     shouldStop: async () => {
+      if (ignoreBusy) return false;
       const state = await idle.busyNow();
       if (state.busy) log(`model: training stopped, ${idle.describe(state)}; it runs again when the computer is free`);
       return state.busy;

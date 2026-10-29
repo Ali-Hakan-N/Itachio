@@ -59,10 +59,12 @@ if ($Stop) {
 if (-not (Test-Path (Join-Path $Dir '.env'))) { throw ".env not found: $Dir\.env (copy it from .env.example)" }
 New-Item -ItemType Directory -Force (Join-Path $Dir 'logs') | Out-Null
 
-# Hidden PowerShell starts node directly; the collector writes its own log
-$Run = "Set-Location -LiteralPath '$Dir'; node --env-file=.env src/run.js --log logs\collect.log"
-$Action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-  -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$Run`""
+# A headless console host runs node with no window at all. (A hidden PowerShell is not
+# enough on Windows 11: Windows Terminal opens console programs in its own window.)
+# The collector writes its own log.
+$Node = (Get-Command node -ErrorAction Stop).Source
+$Action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\conhost.exe" `
+  -Argument "--headless `"$Node`" --env-file=.env src\run.js --log logs\collect.log" -WorkingDirectory $Dir
 $Trigger = New-ScheduledTaskTrigger -Daily -At $At
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 23 -Minutes 55) `
   -MultipleInstances IgnoreNew -RunOnlyIfNetworkAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
