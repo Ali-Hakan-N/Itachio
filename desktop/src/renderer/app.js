@@ -333,6 +333,10 @@ function enemyContext(d, exceptCell) {
 // 50 is an average champion; 67 is one standard deviation above it, 80 two
 // Recommendations look ahead (model.js); a pick losing (or gaining) this many points to the enemy's answers is flagged
 const COUNTER_RISK_BADGE = 3;
+// The player's own layer (their games on the champion) is shown from this many points
+const PERSONAL_BADGE = 2;
+// Personal layer of a player on the board, when they are in the team and analyzed
+const personalOf = (playerId) => (playerId && S.playerStats?.[playerId]) || null;
 const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
 
 function recRow(r, i, { canHover, hoverId, rank }) {
@@ -348,6 +352,7 @@ function recRow(r, i, { canHover, hoverId, rank }) {
           <span class="tier t-${tier}">${tier}</span>
           ${r.offRole ? '<span class="badge warn">Off-role</span>' : ''}
           ${r.unsure && !r.offRole ? `<span class="badge" title="Rough estimate: ±${r.uncertainty} points">Low data</span>` : ''}
+          ${Math.abs(r.personal || 0) >= PERSONAL_BADGE ? `<span class="badge ${r.personal > 0 ? 'good' : 'warn'}" title="${r.personalGames ? `From your ${r.personalGames} games on it` : 'You have not played it: champions you rarely play go worse for you'}">You ${r.personal > 0 ? '+' : '−'}${Math.abs(r.personal)}</span>` : ''}
           ${r.counterRisk >= COUNTER_RISK_BADGE ? `<span class="badge warn" title="Expected loss once the enemy answers this pick in the roles they have open">Counter risk −${r.counterRisk}</span>` : ''}
           ${r.counterRisk <= -COUNTER_RISK_BADGE ? `<span class="badge good" title="Expected gain: what the enemy usually picks in their open roles does badly against it">Safe blind +${-r.counterRisk}</span>` : ''}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
@@ -393,6 +398,7 @@ function slotScore(d, which, p, championId, sink) {
     // A hover on our side is scored like the recommendations: after the enemy's answers
     lookAhead: isAlly && !p.locked,
     unavailable: unavailable(d),
+    personal: isAlly ? personalOf(p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id) : null,
   });
   if (!ev) return '';
   sink.push(ev.score);
@@ -458,6 +464,7 @@ function renderDraft() {
         ...draftContext(d, local?.cellId),
         pool: myPool().map((p) => p.champion_id),
         limit: 10,
+        personal: personalOf(S.me?.id),
       });
 
   // Our ban is still open: what to ban, against our picks and intents and their locks
@@ -485,7 +492,7 @@ function renderDraft() {
   // After locking: your pick with its live breakdown
   let pickRow = '';
   if (local?.locked) {
-    const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: local.championId, role, ...draftContext(d, local.cellId) });
+    const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: local.championId, role, ...draftContext(d, local.cellId), personal: personalOf(S.me?.id) });
     if (ev) pickRow = `<div class="recs pinned">${recRow({ ...ev, inPool: false }, 0, { canHover: false, rank: '✓' })}</div>`;
   }
 
@@ -494,7 +501,7 @@ function renderDraft() {
   if (local && !local.locked && local.hoverId && !recs.some((r) => r.championId === local.hoverId)) {
     const ev = Engine.evaluate({
       stats: S.stats, model: S.model, championId: local.hoverId, role, ...draftContext(d, local.cellId),
-      lookAhead: true, unavailable: blocked,
+      lookAhead: true, unavailable: blocked, personal: personalOf(S.me?.id),
     });
     if (ev) {
       const row = { ...ev, inPool: myPool().some((p) => p.champion_id === local.hoverId) };

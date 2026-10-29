@@ -77,7 +77,7 @@ function loadMatches(patch) {
  *          synergy <S_a, S_b>, a against b <P_a, Q_b> - <P_b, Q_a>
  *   synE/vsE: [[a, ra, b, rb, weight]] pairs through the early game layer (model/early.js),
  *          when it was kept: added to syn/vs (same sign rules)
- *   early: { matches, kept, accuracy of the early state alone, kappa } or null. When kept,
+ *   early: { matches, kept, accuracy of the early state alone, kappa, beta, laneMean } or null. When kept,
  *          champion strength through the early game is already included in champ and off
  *   banRate: { "<champ>": share of matches it was banned in } (when enough matches have bans)
  *   counterpick: { lambda, se, picks } how much players pick against their opponents (choice.js)
@@ -134,6 +134,9 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
         matches: model.early.matches,
         kept: model.early.kept,
         accuracy: round(model.early.surrogate.accuracy, 4),
+        // For player analysis: how the early state is priced, and each champion's average lane
+        beta: model.early.surrogate.beta.map((b) => round(b, 5)),
+        laneMean: Object.fromEntries(Object.entries(model.early.laneMean || {}).map(([k, v]) => [k, round(v, 4)])),
         kappa: model.early.kappa ? Object.fromEntries(Object.entries(model.early.kappa).map(([p, k]) => [p, round(k, 4)])) : null,
       }
     : null;

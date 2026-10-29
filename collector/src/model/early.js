@@ -317,6 +317,22 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
   }
   // Everything else (matches without early data) from the model on all early matches
   const full = fitEarly(D, S, rows, on, lambdas);
+  // Average lane result of every champion:role, from its own side, in log-odds: what an
+  // average player gets with it. Player analysis compares a player's lanes with this.
+  const laneSum = new Map();
+  for (const r of rows) {
+    const a = components(full.sur.beta, S[r]);
+    const m = matches[r];
+    for (let k = 0; k < 5; k++) {
+      for (const [key, v] of [[`${m.b[k]}:${k}`, a[k]], [`${m.r[k]}:${k}`, -a[k]]]) {
+        const e = laneSum.get(key) || { sum: 0, n: 0 };
+        e.sum += v;
+        e.n++;
+        laneSum.set(key, e);
+      }
+    }
+  }
+  const laneMean = Object.fromEntries([...laneSum].map(([key, e]) => [key, e.sum / e.n]));
   const hasEarly = new Uint8Array(D.y.length);
   for (const r of rows) hasEarly[r] = 1;
   for (let r = 0; r < D.y.length; r++) if (!hasEarly[r]) put(r, full.w);
@@ -325,10 +341,17 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
   return {
     matches: rows.length,
     surrogate: { ...surrogate, beta: Array.from(full.sur.beta) },
+    laneMean,
     lambdas,
     features: { c: feat[0], s: feat[1], v: feat[2] },
     weights: { c: only(0), s: only(1), v: only(2) },
   };
 }
 
-module.exports = { earlyModel, earlyState, fitSurrogate, LANE_FIELDS, DIM };
+/** Lane result of role k in a match, from blue's side, in log-odds (needs the surrogate beta) */
+function laneAdvantage(beta, m, k) {
+  const s = earlyState(m);
+  return s ? components(beta, s)[k] : null;
+}
+
+module.exports = { earlyModel, earlyState, fitSurrogate, laneAdvantage, LANE_FIELDS, DIM };

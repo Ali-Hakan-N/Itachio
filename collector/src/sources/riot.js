@@ -26,12 +26,14 @@ const { crawl, PLATFORMS } = require('../riot/crawl');
 const { score } = require('../riot/score');
 const store = require('../riot/store');
 const model = require('../model');
+const players = require('../players');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const DRY_RUN_MAX_PER_REGION = 5;
 const TRAIN_EVERY_MS = 60 * 60_000;
 const TRAIN_CHECK_MS = 5 * 60_000;
+const PLAYERS_EVERY_MS = 3 * 60 * 60_000; // player analysis after a training, at most this often
 const FINAL_TRAIN_WAIT_MS = 3 * 60 * 60_000;
 // scripts/schedule-windows.ps1 -Stop creates this file: stop cleanly, like Ctrl+C
 const STOP_FILE = path.join(__dirname, '..', '..', 'data', 'stop');
@@ -119,14 +121,20 @@ module.exports = {
     // Model training: about once an hour, when the computer is free
     let lastTrain = 0;
     let training = null;
+    let lastPlayers = 0;
     const trainTimer = dryRun
       ? null
       : setInterval(() => {
           if (training || Date.now() - lastTrain < TRAIN_EVERY_MS) return;
           training = model
             .trainAndPublish({ client, patch, log })
-            .then((m) => {
-              if (m) lastTrain = Date.now();
+            .then(async (m) => {
+              if (!m) return;
+              lastTrain = Date.now();
+              // Players are compared with the model just trained
+              if (Date.now() - lastPlayers < PLAYERS_EVERY_MS) return;
+              lastPlayers = Date.now();
+              await players.updatePlayers({ client, api, log }).catch((err) => log(`player analysis failed (${err.message})`));
             })
             .catch((err) => log(`model training failed (${err.message})`))
             .finally(() => (training = null));

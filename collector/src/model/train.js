@@ -583,7 +583,7 @@ function train(matches, ctx, options = {}) {
  */
 function earlyResult(D, early, cfg, params, se, log) {
   if (!early) return null;
-  const out = { matches: early.matches, surrogate: early.surrogate, lambdas: early.lambdas, kept: cfg.groups.has('e'), pairs: { c: [], s: [], v: [] } };
+  const out = { matches: early.matches, surrogate: early.surrogate, laneMean: early.laneMean, lambdas: early.lambdas, kept: cfg.groups.has('e'), pairs: { c: [], s: [], v: [] } };
   if (!out.kept) return out;
   out.kappa = {};
   out.kappaSe = {};

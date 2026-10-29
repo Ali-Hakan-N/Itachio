@@ -19,6 +19,11 @@
 // Order and strategy are the model's; only the presentation is stretched. The scale
 // is fixed per model, not per draft. Picks with few games in the data are marked unsure.
 //
+// Personal layer: how the player does on the champion, from their own games
+// (collector/src/players): personal = { byKey: { "<champ>:<role name>": { delta, games } },
+// unplayed }. delta is in log-odds and adds to the model's logit; champions the player
+// has not played get unplayed. Only for players with an analysis.
+//
 // Looking ahead: a pick is scored by what it is worth once the enemy has answered it.
 // For every role the enemy still has open, their pick there follows a choice model
 // learned from real matches (collector, counterpickTendency):
@@ -269,6 +274,17 @@
     return total;
   }
 
+  // The player's own layer on top of the model; personal is what it adds in points
+  function personalize(ix, row, personal) {
+    if (!personal) return row;
+    const own = personal.byKey?.[`${row.championId}:${row.role}`];
+    const delta = own ? own.delta : personal.unplayed || 0;
+    if (!delta) return { ...row, personal: 0, personalGames: own?.games || 0 };
+    const logit = row.logit + delta;
+    const score = Math.round(toScore(ix, logit));
+    return { ...row, logit, score, personal: score - row.score, personalGames: own?.games || 0 };
+  }
+
   // Score with the enemy's answers taken into account; counterRisk is what they cost in points
   function lookAhead(ix, row, r, open) {
     if (!open.length) return { ...row, counterRisk: 0 };
@@ -278,7 +294,7 @@
   }
 
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
-  function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10 }) {
+  function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10, personal = null }) {
     const ix = index(model);
     const allowed = pickable ? new Set(pickable) : null;
     const inPool = new Set(pool);
@@ -287,7 +303,8 @@
     for (const [championId, best] of ix.bestRole) {
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
-      out.push({ ...lookAhead(ix, scoreOne(ix, championId, r, allies, enemies), r, open), inPool: inPool.has(championId) });
+      const row = personalize(ix, scoreOne(ix, championId, r, allies, enemies), personal);
+      out.push({ ...lookAhead(ix, row, r, open), inPool: inPool.has(championId) });
     }
     return out.sort((x, y) => y.logit - x.logit || y.games - x.games).slice(0, limit);
   }
@@ -296,11 +313,11 @@
    * Same arguments and result as Recommend.evaluate, plus model. With lookAhead the score
    * takes the enemy's answers into account like recommend() (for a pick not locked yet).
    */
-  function evaluate({ model, championId, role = '', allies = [], enemies = [], lookAhead: ahead = false, unavailable = new Set() }) {
+  function evaluate({ model, championId, role = '', allies = [], enemies = [], lookAhead: ahead = false, unavailable = new Set(), personal = null }) {
     const ix = index(model);
     if (!ix.bestRole.has(championId)) return null;
     const r = role ? ROLE_INDEX[role] : ix.bestRole.get(championId).r;
-    const row = scoreOne(ix, championId, r, allies, enemies);
+    const row = personalize(ix, scoreOne(ix, championId, r, allies, enemies), personal);
     return ahead ? lookAhead(ix, row, r, answers(ix, allies, enemies, unavailable)) : row;
   }
 

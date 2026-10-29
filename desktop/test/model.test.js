@@ -188,3 +188,17 @@ test('look ahead: easy-to-counter picks score lower while the enemy can still an
   assert.equal(ev.score, a.score);
   assert.equal(evaluate({ model: m, championId: 30, role: 'top' }).counterRisk, undefined);
 });
+
+test('personal layer: the player\'s own results on a champion move its score', () => {
+  const personal = { byKey: { '2:top': { delta: 0.1, games: 40 } }, unplayed: -0.05 };
+  const plain = evaluate({ model, championId: 2, role: 'top' });
+  const mine = evaluate({ model, championId: 2, role: 'top', personal });
+  assert.ok(mine.score > plain.score && mine.personal > 0 && mine.personalGames === 40);
+  // A champion the player never played gets the unplayed value
+  const other = evaluate({ model, championId: 1, role: 'top', personal });
+  assert.ok(other.personal < 0 && other.personalGames === 0);
+  // Recommendations rank with it
+  const top = (p) => recommend({ model, role: 'top', personal: p }).map((r) => r.championId);
+  assert.equal(top(null)[0], 1);
+  assert.equal(top({ byKey: { '2:top': { delta: 0.5, games: 80 } }, unplayed: 0 })[0], 2);
+});

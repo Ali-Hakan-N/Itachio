@@ -30,6 +30,7 @@ class AppCore extends EventEmitter {
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
       pickScores: {}, // average score of each player's picks
+      playerStats: {}, // how each player does on each champion
       pickable: null, // champions you can pick in champ select (owned + free rotation)
     };
     this.current = null; // { rowId, gameId, status } - database row of the current draft
@@ -91,8 +92,8 @@ class AppCore extends EventEmitter {
 
   async refreshTeam() {
     const me = await this.data.loadMe();
-    const { team, members, pools, pickScores } = await this.data.loadTeam(me?.team_id);
-    this.#emit({ me, team, members, pools, pickScores: pickScores || {} });
+    const { team, members, pools, pickScores, playerStats } = await this.data.loadTeam(me?.team_id);
+    this.#emit({ me, team, members, pools, pickScores: pickScores || {}, playerStats: playerStats || {} });
     this.data.subscribeTeam?.(team?.id, () => this.#debouncedTeamRefresh(), me?.id);
   }
   #debouncedTeamRefresh() {
@@ -286,6 +287,7 @@ class AppCore extends EventEmitter {
         role: (cellInfo.get(a.actorCellId) || {}).position || '',
         allies: before.filter((x) => x.side === a.side).map(asPick),
         enemies: before.filter((x) => x.side !== a.side).map(asPick),
+        personal: this.state.playerStats[(cellInfo.get(a.actorCellId) || {}).playerId] || null,
       });
       return ev ? ev.score : null;
     } catch (err) {

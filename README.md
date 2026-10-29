@@ -26,6 +26,8 @@ Pick better in champ select. Flex Drafter watches your League of Legends draft l
 5. Every champion on the board has a live score. It changes as new picks come in, and a locked pick shows the score it had when it was locked.
 6. Each team's average score is shown at the top of its side.
 
+Scores include what is still to come: a pick that is easy to counter while the enemy can still answer shows **Counter risk**, one that holds up well blind shows **Safe blind**. They also include how you play the champion, from your own Flex and Solo/Duo games (**You +N** or **You −N**).
+
 Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), blue (B), gray (C), red (D).
 
 ## Questions
