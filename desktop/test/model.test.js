@@ -275,8 +275,8 @@ test('uncertain strength counts less: a rare pick scores below an equally strong
   assert.ok(score(8, surer) > score(8));
 });
 
-test('off-meta picks (picked by under 0.5% of teams in the role) are not recommended, but still scored', () => {
-  const m = { ...model, matches: 10000, champ: { ...model.champ, '8:0': [0.5, 60, 0.9, 0.02] } };
+test('off-meta picks (picked by under 1% of teams in the role) are not recommended, but still scored', () => {
+  const m = { ...model, matches: 10000, champ: { ...model.champ, '8:0': [0.5, 150, 0.9, 0.02] } };
   assert.ok(!recommend({ model: m, role: 'top', limit: 20 }).some((x) => x.championId === 8));
   assert.ok(evaluate({ model: m, championId: 8, role: 'top' }).score > 0);
 });

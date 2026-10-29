@@ -30,8 +30,8 @@ let configError = null;
 // Whose champion statistics are shown (default: me), and from which games
 const statsUi = { player: null, source: 'history' };
 const STAT_SOURCES = [
-  ['history', 'This patch', 'All of the player\'s Solo/Duo and Flex games of the current patch, from Riot.'],
-  ['team', 'With the team', 'Only the Flex games the whole team played together, recorded by the app.'],
+  ['history', 'This patch'], // the player's Solo/Duo and Flex games of the patch
+  ['team', 'With the team'], // the Flex games the whole team played together
 ];
 
 const $view = document.getElementById('view');
@@ -709,12 +709,11 @@ function renderChampions() {
   $view.innerHTML = `
     <div class="champ-stats">
       <div class="toolbar">
-        <h2>Champion statistics</h2>
+        <h2>Champion Statistics</h2>
         <div class="seg" id="src">${STAT_SOURCES.map(([k, label]) => `<button data-src="${k}" class="${k === source[0] ? 'active' : ''}">${label}</button>`).join('')}</div>
         <span class="grow"></span>
         <select id="who">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}${m.id === S.me?.id ? ' (you)' : ''}</option>`).join('')}</select>
       </div>
-      <p class="note">${source[2]} Each game is compared with what the model expected from the draft; champions with few games stay close to the player's usual level. Both kinds count a little in the player's scores in champ select.</p>
       ${rows.length
         ? `<div class="stats-table">
             <div class="stats-row head"><span>Champion</span><span>Games</span><span>Record</span><span title="Laning phase compared with an average player in the same matchup">Lane</span><span title="The rest of the game, beyond the draft and the lane">Rest</span><span title="What it adds to this player's score for the champion">Effect</span></div>
@@ -729,9 +728,7 @@ function renderChampions() {
               </div>`).join('')}
           </div>
           <p class="note">Champions not played here: ${signed(pts(stats.unplayed))}</p>`
-        : `<p class="note">${source[0] === 'team'
-            ? 'No full-team Flex games analyzed for this player yet. They show up a few hours after the games, once the collector has read them.'
-            : 'No games of this patch analyzed for this player yet. The collector reads them every few hours.'}</p>`}
+        : '<p class="note">No games yet.</p>'}
     </div>`;
   document.getElementById('src').onclick = (e) => {
     const b = e.target.closest('[data-src]');
