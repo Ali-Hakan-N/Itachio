@@ -35,11 +35,12 @@
 // future picks, and the composition is taken with the expected final styles of both
 // teams.
 //
-// Rare picks are not recommended: a champion played in a role in less than
-// OFF_ROLE_SHARE of its games (off-role), or picked there by less than MIN_PICK_RATE of
-// teams, is left out of the list (it can still be hovered and scored). Its few games come
-// mostly from players who specialize in it, so its results say little about what it
-// does for anyone else, and its estimates rest on little data.
+// Uncertain strength counts less: a champion's strength in a role is scored at what the
+// data supports with some confidence, its estimate minus UNCERTAINTY_Z standard errors
+// beyond the role's usual (games-weighted) standard error. Rare picks (off-role, niche)
+// rest on few games, mostly from players who specialize in them, so their estimates are
+// both noisy and flattering; this lowers them in proportion, and less and less as their
+// games add up. Champions never seen in a role are not recommended.
 //
 // The look-ahead terms (the rest of the draft, the enemy's answers) add up many pair
 // weights; for a champion with few games in the role each of them is noisy. They count
@@ -86,7 +87,7 @@
   const SPREAD = 0.35; // how far one standard deviation of strength moves the score
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
-  const MIN_PICK_RATE = 0.0025; // share of teams picking it in the role, to be recommended
+  const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
   const ANSWER_MIN_GAMES = 20; // enemy answers considered when looking ahead
@@ -150,6 +151,17 @@
     ix.sd = sd > 1e-6 ? sd : 0.08;
     ix.lambda = Math.max(0, model.counterpick?.lambda || 0);
     ix.priorGames = Math.max(1, model.lambdas?.tau?.c || 100);
+    // Usual standard error of strength per role, weighted by games
+    ix.seRef = [0, 1, 2, 3, 4].map((r) => {
+      let n = 0;
+      let sum = 0;
+      for (const [key, e] of champ) {
+        if (Number(key.split(':')[1]) !== r || !e.se) continue;
+        n += e.games;
+        sum += e.games * e.se;
+      }
+      return n ? sum / n : 0;
+    });
     if (model.comp) {
       const k = model.comp.k;
       const M = Array.from({ length: k }, () => new Float64Array(k));
@@ -247,7 +259,8 @@
     const self = `${championId}:${r}`;
     const e = ix.champ.get(self);
     const share = e ? e.share : 0;
-    const base = (e ? e.w : 0) + ix.off[r] * -Math.log(Math.max(share, ix.floor)) - ix.center;
+    const doubt = e && e.se ? UNCERTAINTY_Z * Math.max(0, e.se - ix.seRef[r]) : 0;
+    const base = (e ? e.w : 0) + ix.off[r] * -Math.log(Math.max(share, ix.floor)) - ix.center - doubt;
     const tag = ix.tags.get(championId) || 'None';
     // Champions never seen in this role have no standard error: treat them as very unsure
     let variance = e ? e.se * e.se : 1;
@@ -505,8 +518,7 @@
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
       const entry = ix.champ.get(`${championId}:${r}`);
-      // Off-role or rarely picked: not recommended (see above)
-      if (!entry || entry.share < OFF_ROLE_SHARE || (ix.matches && entry.games / (2 * ix.matches) < MIN_PICK_RATE)) continue;
+      if (!entry) continue; // never seen in this role (see above)
       const rest = ix.matches ? restFor(r) : null;
       const typ = typical(ix, r, allies, enemies, rest, unavailable);
       const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);

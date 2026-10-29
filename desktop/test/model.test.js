@@ -256,15 +256,16 @@ test('composition: a champion that gives the team the style it lacks scores high
   assert.ok(none[1] - none[2] > has[1] - has[2], `${none[1] - none[2]} > ${has[1] - has[2]}`);
 });
 
-test('rare picks are not recommended: off-role or picked by too few teams', () => {
+test('uncertain strength counts less: a rare pick scores below an equally strong common one', () => {
+  // Same estimated strength; 8 rests on few games (large standard error), 1 on many
   const m = {
     ...model, matches: 10000,
-    champ: { ...model.champ, '8:0': [0.5, 30, 0.9], '9:0': [0.5, 400, 0.02] },
+    champ: { ...model.champ, '1:0': [0.15, 900, 0.95, 0.02], '2:0': [0, 900, 0.95, 0.02], '8:0': [0.15, 30, 0.9, 0.15] },
   };
-  const ids = recommend({ model: m, role: 'top', limit: 20 }).map((x) => x.championId);
-  assert.ok(!ids.includes(8), 'picked by 0.15% of teams');
-  assert.ok(!ids.includes(9), 'off-role');
-  assert.ok(ids.includes(1));
-  // Still scored when hovered
-  assert.ok(evaluate({ model: m, championId: 8, role: 'top' }).score > 0);
+  const rec = recommend({ model: m, role: 'top', limit: 20 });
+  const score = (id) => rec.find((x) => x.championId === id).score;
+  assert.ok(score(8) < score(1), `${score(8)} < ${score(1)}`);
+  // No filter: it is still listed, just lower; and the penalty fades as the error shrinks
+  const surer = { ...m, champ: { ...m.champ, '8:0': [0.15, 300, 0.9, 0.05] } };
+  assert.ok(recommend({ model: surer, role: 'top', limit: 20 }).find((x) => x.championId === 8).score > score(8));
 });
