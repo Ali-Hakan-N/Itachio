@@ -156,12 +156,19 @@ class DataStore {
     return { meta, synergy, matchup };
   }
 
-  // Newest learned win model (collector/src/model), one JSON document
+  // Newest learned win model (collector/src/model), one JSON document, tagged with its snapshot id
   async loadModel() {
     const row = check(
-      await this.client.from('model_snapshots').select('data').order('id', { ascending: false }).limit(1).maybeSingle(),
+      await this.client.from('model_snapshots').select('id,data').order('id', { ascending: false }).limit(1).maybeSingle(),
     );
-    return row?.data || null;
+    return row?.data ? { ...row.data, snapshotId: row.id } : null;
+  }
+  // Id of the newest model, a cheap check before downloading it
+  async latestModelId() {
+    const row = check(
+      await this.client.from('model_snapshots').select('id').order('id', { ascending: false }).limit(1).maybeSingle(),
+    );
+    return row?.id ?? null;
   }
 
   // ---------- Pool ----------

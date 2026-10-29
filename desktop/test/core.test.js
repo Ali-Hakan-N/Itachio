@@ -188,3 +188,25 @@ test('hover: a ban suggestion is hovered on our ban action', async () => {
   lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(5), eventType: 'Update' });
   await assert.rejects(core.hoverChampion(157, 'ban'), /No ban/);
 });
+
+test('model: a newer model is taken between drafts, never during one', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  lcu.get = async () => null;
+  const data = fakeData();
+  let latest = 1;
+  data.loadModel = async () => ({ snapshotId: latest, champ: {} });
+  data.latestModelId = async () => latest;
+  const core = new AppCore({ lcu, data, log: { error: () => {} } });
+  await core.loadUserData();
+  core.clearUserData(); // stops the timer; refreshModel is called by hand
+  assert.equal(core.state.model.snapshotId, 1);
+  assert.equal(await core.refreshModel(), false); // nothing new
+  latest = 2;
+  const { buildSession } = require('./mock-lcu');
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(3), eventType: 'Update' });
+  assert.equal(await core.refreshModel(), false); // in champ select: wait
+  assert.equal(core.state.model.snapshotId, 1);
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', eventType: 'Delete' });
+  assert.equal(await core.refreshModel(), true);
+  assert.equal(core.state.model.snapshotId, 2);
+});

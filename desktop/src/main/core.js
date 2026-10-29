@@ -10,6 +10,7 @@ globalThis.Recommend = globalThis.Recommend || require('../renderer/recommend');
 const { Engine } = require('../renderer/model');
 
 const PRE_GAME_PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck']);
+const MODEL_CHECK_MS = 10 * 60 * 1000; // how often to look for a newer model
 
 class AppCore extends EventEmitter {
   constructor({ lcu, data, log = console }) {
@@ -67,6 +68,25 @@ class AppCore extends EventEmitter {
     this.#emit({ me, patch, champions, stats, model });
     await this.refreshTeam();
     await this.#linkRiotAccount();
+    this.#watchModel();
+  }
+
+  // The collector uploads a new model after each training. Take it when it appears, but
+  // never during champ select: scores stay the same for the whole draft.
+  #watchModel() {
+    clearInterval(this._modelTimer);
+    this._modelTimer = setInterval(() => this.refreshModel().catch((err) => this.log.error('[model]', err.message)), MODEL_CHECK_MS);
+    this._modelTimer.unref?.();
+  }
+  async refreshModel() {
+    if (this.state.draft || !this.data.latestModelId) return false;
+    const id = await this.data.latestModelId();
+    if (id === null || id === this.state.model?.snapshotId) return false;
+    const model = await this.data.loadModel();
+    if (!model || this.state.draft) return false;
+    this.#emit({ model });
+    this.log.info?.('model', `updated to snapshot ${model.snapshotId}`);
+    return true;
   }
 
   async refreshTeam() {
@@ -81,6 +101,7 @@ class AppCore extends EventEmitter {
   }
 
   clearUserData() {
+    clearInterval(this._modelTimer);
     this.data.unsubscribe?.();
     this.#emit({ me: null, team: null, members: [], pools: [] });
   }
