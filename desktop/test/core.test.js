@@ -16,6 +16,7 @@ function fakeData() {
     loadMe: async () => ({ ...me }),
     loadChampions: async () => ({ patch: '16.20.1', champions: championIds.map((id) => ({ id, name: `C${id}` })) }),
     loadStats: async () => ({ meta: [], synergy: [], matchup: [] }),
+    loadModel: async () => null,
     loadTeam: async () => ({
       team: { id: 't1', name: 'Test' },
       members: [

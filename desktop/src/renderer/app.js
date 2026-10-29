@@ -1,4 +1,4 @@
-/* global api, Recommend */
+/* global api, Engine */
 // UI. State comes from the main process (api.onState); this file only renders and sends requests.
 
 const ROLES = [
@@ -323,7 +323,7 @@ const shownChamp = (p) => (p.locked ? p.championId : p.hoverId || 0);
 function draftContext(d, exceptCell = null) {
   const others = (list) => list.filter((p) => p.cellId !== exceptCell && shownChamp(p));
   return {
-    allies: others(d.ally).map(shownChamp),
+    allies: others(d.ally).map((p) => ({ championId: shownChamp(p), position: p.position })),
     enemies: others(d.enemy).map((p) => ({ championId: shownChamp(p), position: p.position })),
   };
 }
@@ -332,12 +332,13 @@ function draftContext(d, exceptCell = null) {
 function enemyContext(d, exceptCell) {
   const others = (list) => list.filter((p) => p.cellId !== exceptCell && shownChamp(p));
   return {
-    allies: others(d.enemy).map(shownChamp),
+    allies: others(d.enemy).map((p) => ({ championId: shownChamp(p), position: p.position })),
     enemies: others(d.ally).map((p) => ({ championId: shownChamp(p), position: p.position })),
   };
 }
 
-const tierOf = (s) => (s >= 70 ? 'S' : s >= 60 ? 'A' : s >= 50 ? 'B' : s >= 40 ? 'C' : 'D');
+// Fixed scale: 50 is an average champion, about 15 points per standard deviation
+const tierOf = (s) => (s >= 75 ? 'S' : s >= 63 ? 'A' : s >= 52 ? 'B' : s >= 40 ? 'C' : 'D');
 
 function recRow(r, i, { canHover, hoverId, rank }) {
   const tier = tierOf(r.base);
@@ -365,8 +366,8 @@ const pickScores = { gameId: null, map: new Map() };
 // Enemy champions are scored from the enemy side: their allies are the enemy picks.
 function slotScore(d, which, p, championId, sink) {
   const isAlly = which === 'ally';
-  const ev = Recommend.evaluate({
-    stats: S.stats,
+  const ev = Engine.evaluate({
+    stats: S.stats, model: S.model,
     championId,
     role: p.position || (p.isLocal ? S.me?.main_role || '' : ''),
     ...(isAlly ? draftContext(d, p.cellId) : enemyContext(d, p.cellId)),
@@ -426,8 +427,8 @@ function renderDraft() {
   const hasStats = S.stats?.meta?.length > 0;
   const recs = local?.locked
     ? []
-    : Recommend.recommend({
-        stats: S.stats,
+    : Engine.recommend({
+        stats: S.stats, model: S.model,
         role,
         // Teammates' hovers are taken too: don't suggest what a friend is about to pick
         unavailable: new Set([...blocked, ...d.ally.filter((p) => !p.isLocal && shownChamp(p)).map(shownChamp)]),
@@ -440,14 +441,14 @@ function renderDraft() {
   // After locking: your pick with its live breakdown
   let pickRow = '';
   if (local?.locked) {
-    const ev = Recommend.evaluate({ stats: S.stats, championId: local.championId, role, ...draftContext(d, local.cellId) });
+    const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: local.championId, role, ...draftContext(d, local.cellId) });
     if (ev) pickRow = `<div class="recs pinned">${recRow({ ...ev, inPool: false }, 0, { canHover: false, rank: '✓' })}</div>`;
   }
 
   // The champion you are hovering, if it is not already in the list
   let hoverRow = '';
   if (local && !local.locked && local.hoverId && !recs.some((r) => r.championId === local.hoverId)) {
-    const ev = Recommend.evaluate({ stats: S.stats, championId: local.hoverId, role, ...draftContext(d, local.cellId) });
+    const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: local.hoverId, role, ...draftContext(d, local.cellId) });
     if (ev) {
       const row = { ...ev, inPool: myPool().some((p) => p.champion_id === local.hoverId) };
       hoverRow = `<h3 class="sub gap">Your hover</h3><div class="recs pinned">${recRow(row, 0, { canHover: false, hoverId: local.hoverId, rank: '•' })}</div>`;
@@ -533,8 +534,8 @@ function sideColumn(which, d) {
     if (isAlly && !p.isLocal && !p.locked && !shown && m) {
       // We cannot know what a teammate owns; use their pool if they have one, else everything
       const theirPool = S.pools.filter((x) => x.player_id === m.id).map((x) => x.champion_id);
-      const picks = Recommend.recommend({
-        stats: S.stats, role: p.position, unavailable: blocked, pickable: theirPool.length ? theirPool : null,
+      const picks = Engine.recommend({
+        stats: S.stats, model: S.model, role: p.position, unavailable: blocked, pickable: theirPool.length ? theirPool : null,
         ...draftContext(d, p.cellId), limit: 3,
       });
       mini = `<div class="mini">${picks.map((r) => champImg(r.championId, 's')).join('')}</div>`;

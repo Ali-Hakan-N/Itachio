@@ -6,13 +6,24 @@ For whoever runs the backend. Players only need the [README](../README.md).
 
 - **Desktop app (Electron).** Connects to the local League client (LCU), follows champ select live and shows the top 10 picks for your role. Clicking a pick hovers it in the client.
 - **Supabase.** Shared database for teams, pools, draft history, match results and champion stats.
-- **Collector.** Runs once a day on one computer. Pulls Diamond+ matches from the Riot API (Flex first, then Solo/Duo) and turns them into meta, synergy and matchup scores.
+- **Collector.** Runs once a day on one computer, up to ~23 hours (until the development key expires). Pulls Diamond+ matches from the Riot API (Flex first, then Solo/Duo), keeps each match on that computer, trains a win model on them every hour and uploads the model.
+
+## Scoring
+
+The win model is a logistic regression for "does blue win", learned from single matches:
 
 ```
-score = meta score + synergy with locked allies (±15) + matchups against locked enemies (±20)
+logit = strength(champion, role) + off-role(role) × -ln(share of the champion's games in that role)
+      + Σ synergy(champion, role, ally, ally role)
+      + Σ matchup(champion, role, enemy, enemy role)
+      + class pairs (Mage + Tank, Fighter vs Mage ...) so unseen pairs still count a little
 ```
 
-Matchups cover every enemy, weighted by role pair (same lane 1, bot lane 0.7, jungle 0.6, other 0.4). Synergy is negative for pairs that do worse together than expected.
+- L2 regularization per group pulls weights with little data toward zero; no thresholds. Its strength is picked on a held-out 10% of the matches, and the log prints the holdout accuracy and log loss next to an always-50% baseline.
+- Scores use a fixed 0-100 scale: `50 + 50 × tanh(pointsPerLogit × (logit - center) / 50)`. 50 is an average champion; one standard deviation of champion strength is 15 points. The scale is the same for every draft.
+- Until a model exists (2,000 single matches), the app falls back to the older aggregate scores (`champion_meta`, `champion_synergy`, `champion_matchup`).
+
+Single matches live in `collector/data/matches/<patch>.jsonl` (about 70 bytes each, not committed). Only the model goes to Supabase (`model_snapshots`, newest 3 kept).
 
 ## Folders
 

@@ -130,6 +130,14 @@ class DataStore {
     return { meta, synergy, matchup };
   }
 
+  // Newest learned win model (collector/src/model), one JSON document
+  async loadModel() {
+    const row = check(
+      await this.client.from('model_snapshots').select('data').order('id', { ascending: false }).limit(1).maybeSingle(),
+    );
+    return row?.data || null;
+  }
+
   // ---------- Pool ----------
   async upsertPool(playerId, { championId, role, comfort, notes }) {
     check(

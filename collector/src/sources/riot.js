@@ -1,6 +1,11 @@
 // Riot API source: collects new Diamond+ matches into the raw counters, then
 // computes meta / synergy / matchup from all counters of the current patch.
 //
+// Every new match is also stored as a single row on this computer. The win model
+// (src/model) is trained on them about once an hour, in a background thread and only
+// while no game is running; after collecting it waits up to 3 hours for a free
+// computer to train the final model.
+//
 // It runs until the time budget ends, the key expires (development keys last
 // 24 hours) or Ctrl+C. Scores are also refreshed every RIOT_RESCORE_MIN minutes
 // while it runs. Ctrl+C stops cleanly and saves; a second Ctrl+C quits at once.
@@ -20,8 +25,12 @@ const { RiotClient } = require('../riot/client');
 const { crawl, PLATFORMS } = require('../riot/crawl');
 const { score } = require('../riot/score');
 const store = require('../riot/store');
+const model = require('../model');
 
 const DRY_RUN_MAX_PER_REGION = 5;
+const TRAIN_EVERY_MS = 60 * 60_000;
+const TRAIN_CHECK_MS = 5 * 60_000;
+const FINAL_TRAIN_WAIT_MS = 3 * 60 * 60_000;
 
 module.exports = {
   name: 'riot',
@@ -60,6 +69,22 @@ module.exports = {
         .finally(() => (rescoring = null));
     };
 
+    // Model training: about once an hour, when the computer is free
+    let lastTrain = 0;
+    let training = null;
+    const trainTimer = dryRun
+      ? null
+      : setInterval(() => {
+          if (training || Date.now() - lastTrain < TRAIN_EVERY_MS) return;
+          training = model
+            .trainAndPublish({ client, patch, log })
+            .then((m) => {
+              if (m) lastTrain = Date.now();
+            })
+            .catch((err) => log(`model training failed (${err.message})`))
+            .finally(() => (training = null));
+        }, TRAIN_CHECK_MS);
+
     log(`patch ${patch} · ${platforms.length} servers · up to ${minutes} min${dryRun ? ' · dry run (no writes)' : ''}`);
     const crawlStats = await crawl({
       api,
@@ -75,16 +100,24 @@ module.exports = {
         ? async (m) => m.length
         : async (m) => {
             const added = await store.ingest(client, m);
+            model.storeMatches(patch, m);
             maybeRescore();
             return added;
           },
       log,
     });
+    clearInterval(trainTimer);
     await rescoring;
+    await training;
     log(`riot: ${api.requests} requests${stop.reason ? ` · stopped (${stop.reason})` : ''}`);
 
     const output = await scoreNow();
     log(`patch ${patch} total: ${output.totalMatches} matches`);
+    if (!dryRun) {
+      await model
+        .trainAndPublish({ client, patch, log, waitMs: FINAL_TRAIN_WAIT_MS })
+        .catch((err) => log(`model training failed (${err.message})`));
+    }
     return {
       ...output,
       stats: { patch, totalMatches: output.totalMatches, requests: api.requests, stoppedBy: stop.reason, regions: crawlStats },

@@ -29,6 +29,13 @@ function loadSource(name) {
 }
 
 async function main() {
+  // Low priority: games and other programs get the CPU first, even while the model trains
+  try {
+    const os = require('node:os');
+    os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);
+  } catch {
+    /* not allowed on this system: run at normal priority */
+  }
   const args = parseArgs(process.argv.slice(2));
   const env = process.env;
   const log = (...m) => console.log(new Date().toISOString(), ...m);

@@ -22,6 +22,7 @@ class AppCore extends EventEmitter {
       champions: [],
       patch: null,
       stats: { meta: [], synergy: [], matchup: [] },
+      model: null, // learned win model; when missing the older scoring is used
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
       pickable: null, // champions you can pick in champ select (owned + free rotation)
@@ -51,9 +52,15 @@ class AppCore extends EventEmitter {
   async loadUserData() {
     const me = await this.data.loadMe();
     const { patch, champions } = await this.data.loadChampions();
-    const stats = await this.data.loadStats();
+    const [stats, model] = await Promise.all([
+      this.data.loadStats(),
+      this.data.loadModel().catch((err) => {
+        this.log.error('[model]', err.message);
+        return null;
+      }),
+    ]);
     this.championIds = new Set(champions.map((c) => c.id));
-    this.#emit({ me, patch, champions, stats });
+    this.#emit({ me, patch, champions, stats, model });
     await this.refreshTeam();
     await this.#linkRiotAccount();
   }
