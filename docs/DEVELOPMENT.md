@@ -115,5 +115,5 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-GitHub Actions builds `FlexDrafter-Setup.exe` and attaches it to the release. The README links to `releases/latest/download/FlexDrafter-Setup.exe`, so the link stays the same for every version. The exe is unsigned, so Windows may warn on first launch (**More info > Run anyway**).
+GitHub Actions builds `Itachio-Setup.exe` and attaches it to the release. The README links to `releases/latest/download/Itachio-Setup.exe`, so the link stays the same for every version. The exe is unsigned, so Windows may warn on first launch (**More info > Run anyway**).
 

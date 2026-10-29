@@ -82,7 +82,8 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 680,
     backgroundColor: '#0d1117',
-    title: 'Flex Drafter',
+    title: 'Itachio',
+    icon: path.join(__dirname, '..', 'renderer', 'logo.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),

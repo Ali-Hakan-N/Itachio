@@ -45,6 +45,6 @@ jobs:
         with:
           # latest.yml and the blockmap let installed apps find and download the update
           files: |
-            desktop/dist/FlexDrafter-Setup.exe
-            desktop/dist/FlexDrafter-Setup.exe.blockmap
+            desktop/dist/Itachio-Setup.exe
+            desktop/dist/Itachio-Setup.exe.blockmap
             desktop/dist/latest.yml

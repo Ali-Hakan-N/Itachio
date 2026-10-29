@@ -1,8 +1,8 @@
 {
   "name": "flex-drafter",
   "productName": "FlexDrafter",
-  "version": "0.1.22",
-  "description": "League of Legends draft assistant for teams",
+  "version": "0.1.23",
+  "description": "Itachio: League of Legends draft assistant for teams",
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
@@ -41,10 +41,13 @@
         "nsis"
       ]
     },
+    "icon": "build/icon.png",
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "artifactName": "FlexDrafter-Setup.exe"
+      "artifactName": "Itachio-Setup.exe",
+      "shortcutName": "Itachio",
+      "uninstallDisplayName": "Itachio"
     }
   }
 }

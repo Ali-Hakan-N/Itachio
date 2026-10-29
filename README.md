@@ -1,14 +1,14 @@
-# Flex Drafter
+# Itachio
 
-Pick better in champ select. Flex Drafter watches your League of Legends draft live and shows the 10 best champions for your role, based on the current meta, your team's picks and the enemy's picks.
+Pick better in champ select. Itachio watches your League of Legends draft live and shows the 10 best champions for your role, based on the current meta, your team's picks and the enemy's picks.
 
 ## Download
 
-**[Download Flex Drafter for Windows](https://github.com/Ali-Hakan-N/lol-draft-picker/releases/latest/download/FlexDrafter-Setup.exe)**
+**[Download Itachio for Windows](https://github.com/Ali-Hakan-N/lol-draft-picker/releases/latest/download/Itachio-Setup.exe)**
 
 ## Install
 
-1. Run `FlexDrafter-Setup.exe`. It installs and opens on its own.
+1. Run `Itachio-Setup.exe`. It installs and opens on its own.
 2. Windows may say it protected your PC, because the app isn't signed. Click **More info**, then **Run anyway**.
 
 ## First launch
@@ -19,7 +19,7 @@ Pick better in champ select. Flex Drafter watches your League of Legends draft l
 
 ## In champ select
 
-1. Keep Flex Drafter open and start League. The app finds the client by itself; the dot at the top right turns green.
+1. Keep Itachio open and start League. The app finds the client by itself; the dot at the top right turns green.
 2. When champ select starts, the **Draft** tab shows both teams and your top 10 picks.
 3. While your ban is open, **Ban suggestions** show the 10 champions most worth banning, scored 0 to 100. Click one to hover it as your ban in the client.
 4. Click a champion in the pick list to hover it in the client. You still lock in from the client.
@@ -32,7 +32,7 @@ Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), b
 
 ## Questions
 
-**The app says it's waiting for the League client.** Open League. If it still doesn't connect, restart Flex Drafter.
+**The app says it's waiting for the League client.** Open League. If it still doesn't connect, restart Itachio.
 
 **No recommendations show up.** Champion stats are refreshed once a day. If it's a brand new patch, give it a day.
 
@@ -40,8 +40,8 @@ Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), b
 
 **What is the Champions tab?** How each of you plays each champion, from the Flex games your whole team played together. It counts in your scores in champ select. To start over, use **Reset my champion data** in the Team tab.
 
-**Is this allowed?** Flex Drafter only reads champ select and sets a hover when you click. It never locks in or plays for you.
+**Is this allowed?** Itachio only reads champ select and sets a hover when you click. It never locks in or plays for you.
 
 ---
 
-Flex Drafter isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
+Itachio isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
