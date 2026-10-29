@@ -1,11 +1,12 @@
 // Turns matches into features for the win model. Pure functions.
 //
-// A compact match: { id, q, w, b, r, x?, lb?, lr?, f? }
+// A compact match: { id, q, w, b, r, x?, lb?, lr?, f?, gb?, gr? }
 //   b / r: blue / red champion ids by role [top, jungle, middle, bottom, utility]
 //   w: 1 when blue won
 //   x: banned champion ids, both teams (newer matches)
 //   lb / lr: early game per role, as riot/parse.js laneOf() (newer matches only)
 //   f: first blood, tower, dragon, herald, grubs: 1 blue, -1 red, 0 nobody (newer matches)
+//   gb / gr: runes, items and spells per role, as riot/parse.js gearOf() (newer matches)
 //
 // Features, seen from blue (+1 for blue, -1 for red):
 //   c:<champ>:<role>                 champion strength in a role
@@ -27,6 +28,8 @@ function toCompact(m) {
   const r = new Array(5).fill(0);
   const lb = new Array(5).fill(null);
   const lr = new Array(5).fill(null);
+  const gb = new Array(5).fill(null);
+  const gr = new Array(5).fill(null);
   let blueWon = null;
   for (const p of m.p) {
     const i = ROLE_INDEX[p.r];
@@ -35,6 +38,7 @@ function toCompact(m) {
     if (team[i]) return null; // two players in one role
     team[i] = p.c;
     (p.t === 100 ? lb : lr)[i] = p.l || null;
+    (p.t === 100 ? gb : gr)[i] = p.g || null;
     if (p.t === 100) blueWon = p.w;
   }
   if (b.includes(0) || r.includes(0) || blueWon === null) return null;
@@ -42,6 +46,7 @@ function toCompact(m) {
   if (Array.isArray(m.b)) out.x = m.b;
   if (lb.some(Boolean) || lr.some(Boolean)) Object.assign(out, { lb, lr });
   if (m.first) out.f = m.first.map((t) => (t === 100 ? 1 : t === 200 ? -1 : 0));
+  if (gb.some(Boolean) || gr.some(Boolean)) Object.assign(out, { gb, gr });
   return out;
 }
 

@@ -28,6 +28,26 @@ function laneOf(p) {
   ];
 }
 
+/**
+ * Runes, items and summoner spells of one player (GEAR in model/builds.js names the
+ * entries): primary tree and its 4 runes, secondary tree and its 2 runes, the 3 shards
+ * (offense, flex, defense), the 6 item slots at the end of the game (0 = empty; no
+ * trinket) and the 2 summoner spells.
+ */
+function gearOf(p) {
+  const [main, sub] = p.perks?.styles || [];
+  const shards = p.perks?.statPerks || {};
+  if (!main || !sub) return null;
+  const runes = (st, n) => Array.from({ length: n }, (_, i) => st.selections?.[i]?.perk || 0);
+  return [
+    main.style || 0, ...runes(main, 4),
+    sub.style || 0, ...runes(sub, 2),
+    shards.offense || 0, shards.flex || 0, shards.defense || 0,
+    p.item0 || 0, p.item1 || 0, p.item2 || 0, p.item3 || 0, p.item4 || 0, p.item5 || 0,
+    p.summoner1Id || 0, p.summoner2Id || 0,
+  ];
+}
+
 /** Team that took each first objective (OBJECTIVES order): 100, 200 or 0 */
 function firstsOf(teams) {
   return OBJECTIVES.map((o) => (teams || []).find((t) => t.objectives?.[o]?.first)?.teamId || 0);
@@ -61,7 +81,8 @@ function parseMatch(match) {
     b: (info.teams || []).flatMap((t) => (t.bans || []).map((b) => b.championId)).filter((c) => c > 0),
     p: parts.map((p) => {
       const l = laneOf(p);
-      return { c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win, ...(l && { l }) };
+      const g = gearOf(p);
+      return { c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win, ...(l && { l }), ...(g && { g }) };
     }),
   };
 }
