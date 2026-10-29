@@ -218,3 +218,18 @@ test('counterpick tendency: lambda is found when picks follow matchups, 0 when t
   const none = counterpickTendency(data, make(false));
   assert.ok(none.lambda < 2 * none.se + 0.05, `lambda ${none.lambda} ± ${none.se}`);
 });
+
+test('training set: the current patch, filled from older patches only up to enough', () => {
+  const { pickTraining } = require('../src/model');
+  const list = (patch, n) => ({ patch, matches: Array.from({ length: n }, (_, i) => `${patch}-${i}`) });
+  const sizes = (parts) => Object.fromEntries(parts.map((p) => [p.patch, p.matches.length]));
+  // Young patch: 10 of its own, 50 needed -> 40 from the newest older patch
+  assert.deepEqual(sizes(pickTraining(list('16.22', 10), [list('16.21', 30), list('16.20', 100)], { enough: 50, max: 200 })), { '16.20': 10, '16.21': 30, '16.22': 10 });
+  // Taken from the newest end of the older patch
+  const parts = pickTraining(list('16.22', 10), [list('16.21', 100)], { enough: 50, max: 200 });
+  assert.equal(parts[0].matches[0], '16.21-60');
+  // Enough of its own: older patches are dropped, all of the current patch is used
+  assert.deepEqual(sizes(pickTraining(list('16.22', 80), [list('16.21', 100)], { enough: 50, max: 200 })), { '16.22': 80 });
+  // Never more than max
+  assert.deepEqual(sizes(pickTraining(list('16.22', 300), [], { enough: 50, max: 200 })), { '16.22': 200 });
+});

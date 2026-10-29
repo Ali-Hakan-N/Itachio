@@ -298,30 +298,80 @@ const patchOrder = (a, b) => {
   return 0;
 };
 
+// How many matches the model needs: the smallest training set in which every layer in
+// PROVEN_LAYERS was proven, measured by the trainings themselves (state file); until one
+// is seen, DEFAULT_ENOUGH. Older patches only fill the current patch up to this.
+const STATE_FILE = path.join(DATA_DIR, '..', 'model-state.json');
+const PROVEN_LAYERS = ['strength', 'early game', 'synergy', 'matchup'];
+const DEFAULT_ENOUGH = 60000;
+const MIN_ENOUGH = 20000;
+
+function readState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+/** Matches needed for a proven model (see above) */
+function enoughMatches() {
+  const n = readState().provenAt;
+  return Number.isFinite(n) ? Math.min(MAX_TRAIN_MATCHES, Math.max(MIN_ENOUGH, n)) : DEFAULT_ENOUGH;
+}
+
+/** After a training: if every required layer was proven, remember the smallest such size */
+function recordProven(metrics) {
+  const proven = new Map(metrics.layers.map((l) => [l.name, l.proven ?? true]));
+  if (!PROVEN_LAYERS.every((name) => proven.get(name))) return null;
+  const state = readState();
+  if (Number.isFinite(state.provenAt) && state.provenAt <= metrics.matches) return state.provenAt;
+  try {
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ ...state, provenAt: metrics.matches }, null, 2));
+  } catch {
+    /* the state is optional */
+  }
+  return metrics.matches;
+}
+
 /**
- * Training set: the newest MAX_TRAIN_MATCHES matches, current patch first. After a
- * new patch the older patches fill the rest, so the model keeps its data and the new
- * patch replaces the old one as it comes in. Returns { matches, byPatch }.
+ * Which matches to train on. current: the current patch's matches; older: older patches'
+ * lists, newest patch first. All of the current patch (its newest max), and only while it
+ * has fewer than enough, the newest matches of the older patches fill it up to enough.
+ * Pure. Returns [{ patch, matches }] in training order (oldest first).
  */
-function loadTrainingMatches(patch) {
+function pickTraining(current, older, { enough, max }) {
+  const own = current.matches.length > max ? current.matches.slice(-max) : current.matches;
+  let room = Math.max(0, Math.min(enough, max) - own.length);
+  const parts = [{ patch: current.patch, matches: own }];
+  for (const o of older) {
+    if (room <= 0) break;
+    const take = o.matches.length > room ? o.matches.slice(-room) : o.matches;
+    if (!take.length) continue;
+    parts.unshift({ patch: o.patch, matches: take });
+    room -= take.length;
+  }
+  return parts.filter((p) => p.matches.length);
+}
+
+/**
+ * Training set: the current patch, filled from older patches only until it has enough
+ * matches for a proven model (pickTraining). Returns { matches, byPatch }.
+ */
+function loadTrainingMatches(patch, { enough = enoughMatches() } = {}) {
   const current = patch.replace(/[^0-9.]/g, '');
   const patches = fs.existsSync(DATA_DIR)
     ? fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.jsonl')).map((f) => f.slice(0, -6))
     : [];
-  const order = [current, ...patches.filter((p) => patchOrder(p, current) < 0).sort((a, b) => patchOrder(b, a))];
-  const parts = [];
-  const byPatch = {};
-  let room = MAX_TRAIN_MATCHES;
-  for (const p of order) {
-    if (room <= 0) break;
-    const stored = loadMatches(p);
-    const take = stored.length > room ? stored.slice(-room) : stored;
-    if (!take.length) continue;
-    parts.unshift(take);
-    byPatch[p] = take.length;
-    room -= take.length;
-  }
-  return { matches: parts.flat(), byPatch };
+  const older = patches.filter((p) => patchOrder(p, current) < 0).sort((a, b) => patchOrder(b, a));
+  const own = loadMatches(current);
+  // Older patches are only read when they are needed
+  const parts = pickTraining({ patch: current, matches: own }, own.length >= enough ? [] : older.map((p) => ({ patch: p, matches: loadMatches(p) })), {
+    enough,
+    max: MAX_TRAIN_MATCHES,
+  });
+  return { matches: parts.flatMap((p) => p.matches), byPatch: Object.fromEntries(parts.map((p) => [p.patch, p.matches.length])) };
 }
 
 /**
@@ -369,6 +419,8 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   if (!model) return null;
 
   const m = model.metrics;
+  const provenAt = recordProven(m);
+  if (provenAt) log(`model: every layer proven; ${provenAt} matches are enough, older patches fill up to that`);
   const data = exportModel(model, { share, games, tags, patch, matches: matches.length, banRate: banRates(matches) });
   data.counterpick = counterpickTendency(data, matches);
   if (data.counterpick) {
@@ -386,4 +438,4 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   return m;
 }
 
-module.exports = { banRates, storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
+module.exports = { banRates, pickTraining, storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
