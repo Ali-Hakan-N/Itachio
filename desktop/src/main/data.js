@@ -70,10 +70,10 @@ class DataStore {
     if (!user) return null;
     return check(await this.client.from('players').select('*').eq('user_id', user.id).maybeSingle());
   }
-  async saveProfile({ nickname, mainRole }) {
+  async saveProfile({ nickname }) {
     const user = await this.getUser();
     const me = await this.loadMe();
-    const fields = { nickname: nickname.trim(), main_role: mainRole || null };
+    const fields = { nickname: nickname.trim() };
     if (me) {
       return check(await this.client.from('players').update(fields).eq('id', me.id).select().single());
     }
@@ -106,7 +106,7 @@ class DataStore {
     if (!teamId) return { team: null, members: [], pools: [] };
     const team = check(await this.client.from('teams').select('*').eq('id', teamId).maybeSingle());
     const members = check(
-      await this.client.from('players').select('id,nickname,main_role,puuid,riot_id').eq('team_id', teamId).order('created_at'),
+      await this.client.from('players').select('id,nickname,puuid,riot_id').eq('team_id', teamId).order('created_at'),
     );
     const ids = members.map((m) => m.id);
     const pools = ids.length
@@ -239,15 +239,26 @@ class DataStore {
   async saveMatchResult(row) {
     check(await this.client.from('match_results').upsert(row, { onConflict: 'game_id,player_id', ignoreDuplicates: true }));
   }
+  // The team's finished Flex games where all five picks on our side were team members
   async listHistory(teamId, limit = 30) {
-    return check(
+    const members = new Set(
+      check(await this.client.from('players').select('id').eq('team_id', teamId)).map((p) => p.id),
+    );
+    const drafts = check(
       await this.client
         .from('drafts')
         .select('id,started_at,our_side,status,result,patch,draft_actions(side,kind,seq,champion_id,role,player_id)')
         .eq('team_id', teamId)
+        .eq('queue_id', 440)
+        .eq('status', 'finished')
         .order('started_at', { ascending: false })
-        .limit(limit),
+        .limit(limit * 4),
     );
+    const fullTeam = (d) => {
+      const ours = d.draft_actions.filter((a) => a.side === 'ally' && a.kind === 'pick' && members.has(a.player_id));
+      return new Set(ours.map((a) => a.player_id)).size === 5;
+    };
+    return drafts.filter(fullTeam).slice(0, limit);
   }
 
   // ---------- Live updates ----------

@@ -158,13 +158,9 @@ function decideScreen() {
   render();
 }
 
-// App version and the model in use, so teammates can check they score with the same one
 let appVersion = '';
 function renderVersion() {
-  const id = S?.model?.snapshotId;
-  const el = document.getElementById('ver');
-  el.textContent = [appVersion && `v${appVersion}`, id && `model ${id}`].filter(Boolean).join(' · ');
-  el.title = id ? `Scores come from model ${id}, trained on ${S.model.matches || '?'} matches` : '';
+  document.getElementById('ver').textContent = appVersion ? `v${appVersion}` : '';
 }
 
 api.onState((partial) => {
@@ -172,7 +168,6 @@ api.onState((partial) => {
   Object.assign(S, partial);
   if (screen === 'main' && 'me' in partial && !partial.me?.team_id) return decideScreen();
   renderStatus();
-  if ('model' in partial) renderVersion();
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
   if (tab === 'draft' && ('draft' in partial || 'pools' in partial || 'lcu' in partial || 'members' in partial || 'model' in partial)) renderMain();
@@ -250,10 +245,6 @@ function renderLogin(mode = 'signin') {
   };
 }
 
-function roleOptions(selected) {
-  return ROLES.map(([v, n]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${n}</option>`).join('');
-}
-
 function renderProfile() {
   const me = S?.me;
   $view.innerHTML = `
@@ -261,7 +252,6 @@ function renderProfile() {
       <h2>Player profile</h2>
       <p>Your teammates will see you by this name. Your LoL account links automatically while the client is open.</p>
       <label>Nickname <input name="nickname" required minlength="2" maxlength="32" value="${esc(me?.nickname || S?.lcu?.summoner?.riotId?.split('#')[0] || '')}"></label>
-      <label>Main role <select name="mainRole">${roleOptions(me?.main_role || 'middle')}</select></label>
       <button class="btn primary" type="submit">Save profile</button>
       <button class="link" type="button" id="out">Sign out</button>
     </form>`;
@@ -448,7 +438,7 @@ function slotScore(d, which, p, championId, sink) {
   const ev = Engine.evaluate({
     stats: S.stats, model: S.model,
     championId,
-    role: p.position || (p.isLocal ? S.me?.main_role || '' : ''),
+    role: p.position || '',
     ...(isAlly ? draftContext(d, p.cellId) : enemyContext(d, p.cellId)),
     // A hover on our side is scored like the recommendations: after the enemy's answers
     lookAhead: isAlly && !p.locked,
@@ -519,7 +509,7 @@ function renderDraft() {
   const enemyCol = sideColumn('enemy', d);
 
   const local = d.ally.find((p) => p.isLocal);
-  const role = local?.position || S.me?.main_role || '';
+  const role = local?.position || '';
   const hasStats = S.stats?.meta?.length > 0;
   const recs = local?.locked
     ? []
@@ -653,7 +643,7 @@ function sideColumn(which, d) {
     const m = isAlly ? memberByPuuid(p.puuid) : null;
     const shown = p.locked ? p.championId : p.hoverId || 0;
     // Same as the client: roles of our team; enemy roles are hidden in ranked
-    const roleLabel = p.roleHidden ? '' : ROLE_NAME[p.position || (p.isLocal ? S.me?.main_role : '')] || '';
+    const roleLabel = p.roleHidden ? '' : ROLE_NAME[p.position] || '';
     let mini = '';
     // 3 suggestions for a teammate who has not picked yet
     if (isAlly && !p.isLocal && !p.locked && !shown && m) {
@@ -764,7 +754,6 @@ function renderTeam() {
           <div class="member">
             <div class="top">
               <span class="nick">${esc(m.nickname)}${m.id === S.me.id ? ' (you)' : ''}${owner ? ' <span class="badge owner">Owner</span>' : ''}</span>
-              <span class="muted">${esc(ROLE_NAME[m.main_role] || '')}</span>
             </div>
             <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
             ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove from team</button>` : ''}
@@ -807,7 +796,7 @@ async function renderHistory() {
   const rows = await run(api.listHistory());
   if (tab !== 'history') return;
   if (!rows.length) {
-    $view.innerHTML = `<div class="empty-state"><h2>No saved drafts yet</h2><p>Drafts and match results show up here once someone on the team enters champ select.</p></div>`;
+    $view.innerHTML = '<div class="empty-state"><h2>No games yet</h2></div>';
     return;
   }
   const picks = (r, side) =>
