@@ -55,6 +55,26 @@ function loadConfig() {
   return null;
 }
 
+// Champ select started: bring the app in front of the League client. Windows only lets a
+// window take the foreground in some cases, so it is set always-on-top for a moment.
+function bringToFront() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setAlwaysOnTop(true);
+  win.focus();
+  win.moveTop();
+  setTimeout(() => !win.isDestroyed() && win.setAlwaysOnTop(false), 400);
+}
+
+// After a hover from the app: hand the focus back to the League client, to lock in there.
+// The client is asked to show itself, and the app gives up the focus (on Windows it goes
+// to the window behind, which is the client after bringToFront).
+function focusClient(lcu) {
+  lcu.request('POST', '/riotclient/ux-show').catch(() => {});
+  if (win && !win.isDestroyed()) win.blur();
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1320,
@@ -125,7 +145,13 @@ app.whenReady().then(async () => {
     });
     const lcu = new LcuConnector({ installPath: config.leagueInstallPath });
     core = new AppCore({ lcu, data, log: fileLog });
-    core.on('update', (partial) => send('state', partial));
+    let inChampSelect = false;
+    core.on('update', (partial) => {
+      send('state', partial);
+      if (!('draft' in partial)) return;
+      if (partial.draft && !inChampSelect) bringToFront();
+      inChampSelect = !!partial.draft;
+    });
     core.on('saved', (info) => send('saved', info));
     lcu.start();
   }
@@ -185,6 +211,7 @@ app.whenReady().then(async () => {
     try {
       await core.hoverChampion(Number(championId), what);
       fileLog.info('hover', what, championId, 'ok');
+      focusClient(core.lcu);
     } catch (err) {
       fileLog.error('hover', what, championId, err);
       throw err;

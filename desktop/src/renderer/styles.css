@@ -195,6 +195,9 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
   transition: transform 0.12s, border-color 0.12s, background 0.12s;
 }
 .rec:not(:disabled):hover { border-color: var(--line-2); background: var(--panel-2); transform: translateX(2px); }
+/* The row under the mouse sits above the rows after it, so its notes tooltip covers them */
+.rec { position: relative; }
+.rec:hover { z-index: 25; }
 .rec:disabled { cursor: default; }
 .rec:first-child { border-color: rgba(216, 180, 106, 0.4); background: linear-gradient(90deg, var(--gold-dim), var(--panel) 70%); }
 .rec.hovering { border-color: var(--cue); background: linear-gradient(90deg, var(--cue-dim), var(--panel) 70%); }
