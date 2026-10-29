@@ -385,3 +385,10 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 /* ---------- Little data ---------- */
 .rec.unsure .champ, .rec.unsure .score { opacity: 0.55; }
 .slot-score.unsure b { opacity: 0.5; }
+
+/* ---------- Team: pick averages, owner ---------- */
+.pick-avg { display: flex; align-items: baseline; gap: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.pick-avg b { font-size: 22px; line-height: 1; }
+.badge.owner { color: var(--gold); border-color: rgba(216, 180, 106, 0.45); margin-left: 4px; }
+.member .kick { align-self: flex-start; font-size: 12px; }
+.member .kick:hover { color: var(--red); }

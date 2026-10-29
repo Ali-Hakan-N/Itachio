@@ -160,6 +160,11 @@ app.whenReady().then(async () => {
     await core.refreshTeam();
     return core.snapshot();
   });
+  handle('team:kick', async (playerId) => {
+    await data.kickMember(playerId);
+    await core.refreshTeam();
+    return core.snapshot();
+  });
   handle('team:leave', async () => {
     await data.leaveTeam();
     await core.refreshTeam();

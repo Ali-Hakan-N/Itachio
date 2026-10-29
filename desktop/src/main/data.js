@@ -90,6 +90,10 @@ class DataStore {
   async leaveTeam() {
     check(await this.client.rpc('leave_team'));
   }
+  // Only the team owner may do this; the database checks it
+  async kickMember(playerId) {
+    check(await this.client.rpc('kick_member', { p_player: playerId }));
+  }
   async loadTeam(teamId) {
     if (!teamId) return { team: null, members: [], pools: [] };
     const team = check(await this.client.from('teams').select('*').eq('id', teamId).maybeSingle());
@@ -100,7 +104,29 @@ class DataStore {
     const pools = ids.length
       ? check(await this.client.from('player_pools').select('*').in('player_id', ids))
       : [];
-    return { team, members, pools };
+    return { team, members, pools, pickScores: await this.loadPickScores(ids) };
+  }
+
+  // Average score of each player's picks over all recorded drafts: { playerId: { avg, picks } }
+  async loadPickScores(playerIds) {
+    if (!playerIds.length) return {};
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const page = check(
+        await this.client.from('draft_actions').select('id,player_id,score').in('player_id', playerIds)
+          .not('score', 'is', null).order('id').range(from, from + 999),
+      );
+      rows.push(...page);
+      if (page.length < 1000) break;
+    }
+    const out = {};
+    for (const r of rows) {
+      const p = (out[r.player_id] ||= { sum: 0, picks: 0 });
+      p.sum += Number(r.score);
+      p.picks++;
+    }
+    for (const p of Object.values(out)) p.avg = Math.round(p.sum / p.picks);
+    return out;
   }
 
   // ---------- Game data ----------
@@ -204,14 +230,16 @@ class DataStore {
   }
 
   // ---------- Live updates ----------
-  subscribeTeam(teamId, onChange) {
+  // playerId: our own row too, so we notice being removed from the team
+  subscribeTeam(teamId, onChange, playerId) {
     this.unsubscribe();
     if (!teamId) return;
-    this.channel = this.client
+    let channel = this.client
       .channel(`team-${teamId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'player_pools' }, onChange)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `team_id=eq.${teamId}` }, onChange)
-      .subscribe();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `team_id=eq.${teamId}` }, onChange);
+    if (playerId) channel = channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: `id=eq.${playerId}` }, onChange);
+    this.channel = channel.subscribe();
   }
   unsubscribe() {
     if (this.channel) this.client.removeChannel(this.channel);

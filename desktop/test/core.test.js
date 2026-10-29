@@ -153,3 +153,23 @@ test('hover: refused once our pick is locked', async () => {
   lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
   await assert.rejects(core.hoverChampion(7), /No pick/);
 });
+
+test('pick score: each teammate pick is saved with its score at lock time', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  lcu.get = async () => null;
+  const data = fakeData();
+  data.loadModel = async () => ({
+    champ: { '103:2': [0.2, 900, 1, 0.02], '86:0': [0, 900, 1, 0.02], '254:1': [0, 900, 1, 0.02] },
+    off: [0, 0, 0, 0, 0], tags: {}, syn: [], vs: [],
+  });
+  const core = new AppCore({ lcu, data, log: { error: () => {} } });
+  await core.loadUserData();
+  await core.refreshTeam();
+  const { buildSession } = require('./mock-lcu');
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
+  await core.queue;
+  const mine = data.db.actions.get('ally:pick:3'); // Ahri, local player
+  assert.equal(typeof mine.score, 'number');
+  assert.ok(mine.score > 50);
+  assert.equal(data.db.actions.get('enemy:pick:1').score, null); // enemies are not scored
+});

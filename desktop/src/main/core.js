@@ -5,6 +5,9 @@
 const { EventEmitter } = require('node:events');
 const { normalizeSession } = require('./champselect');
 const { parseEndOfGame } = require('./endofgame');
+// The UI's scoring engine also runs here, to record each pick's score
+globalThis.Recommend = globalThis.Recommend || require('../renderer/recommend');
+const { Engine } = require('../renderer/model');
 
 const PRE_GAME_PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck']);
 
@@ -25,6 +28,7 @@ class AppCore extends EventEmitter {
       model: null, // learned win model; when missing the older scoring is used
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
+      pickScores: {}, // average score of each player's picks
       pickable: null, // champions you can pick in champ select (owned + free rotation)
     };
     this.current = null; // { rowId, gameId, status } - database row of the current draft
@@ -67,9 +71,9 @@ class AppCore extends EventEmitter {
 
   async refreshTeam() {
     const me = await this.data.loadMe();
-    const { team, members, pools } = await this.data.loadTeam(me?.team_id);
-    this.#emit({ me, team, members, pools });
-    this.data.subscribeTeam?.(team?.id, () => this.#debouncedTeamRefresh());
+    const { team, members, pools, pickScores } = await this.data.loadTeam(me?.team_id);
+    this.#emit({ me, team, members, pools, pickScores: pickScores || {} });
+    this.data.subscribeTeam?.(team?.id, () => this.#debouncedTeamRefresh(), me?.id);
   }
   #debouncedTeamRefresh() {
     clearTimeout(this._teamTimer);
@@ -227,9 +231,9 @@ class AppCore extends EventEmitter {
     for (const p of draft.enemy) cellInfo.set(p.cellId, { position: p.position, playerId: null });
 
     const rows = [];
-    for (const a of draft.completed) {
+    draft.completed.forEach((a, i) => {
       const key = `${a.side}:${a.kind}:${a.seq}`;
-      if (this.savedKeys.has(key) || !this.championIds.has(a.championId)) continue;
+      if (this.savedKeys.has(key) || !this.championIds.has(a.championId)) return;
       const info = cellInfo.get(a.actorCellId) || {};
       rows.push({
         draft_id: this.current.rowId,
@@ -239,11 +243,33 @@ class AppCore extends EventEmitter {
         champion_id: a.championId,
         role: a.kind === 'pick' ? info.position || null : null,
         player_id: a.kind === 'pick' ? info.playerId || null : null,
+        score: a.kind === 'pick' && a.side === 'ally' && info.playerId ? this.#pickScore(draft, i, cellInfo) : null,
       });
-    }
+    });
     if (!rows.length) return;
     await this.data.addDraftActions(rows);
     for (const r of rows) this.savedKeys.add(`${r.side}:${r.kind}:${r.seq}`);
+  }
+
+  // Score of a pick at the moment it was locked: against the picks locked before it
+  #pickScore(draft, index, cellInfo) {
+    const a = draft.completed[index];
+    const before = draft.completed.slice(0, index).filter((x) => x.kind === 'pick');
+    const asPick = (x) => ({ championId: x.championId, position: (cellInfo.get(x.actorCellId) || {}).position || '' });
+    try {
+      const ev = Engine.evaluate({
+        stats: this.state.stats,
+        model: this.state.model,
+        championId: a.championId,
+        role: (cellInfo.get(a.actorCellId) || {}).position || '',
+        allies: before.filter((x) => x.side === a.side).map(asPick),
+        enemies: before.filter((x) => x.side !== a.side).map(asPick),
+      });
+      return ev ? ev.score : null;
+    } catch (err) {
+      this.log.error('[pick score]', err.message);
+      return null;
+    }
   }
 
   #onEndOfGame(block) {

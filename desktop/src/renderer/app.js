@@ -167,7 +167,7 @@ api.onState((partial) => {
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
   if (tab === 'draft' && ('draft' in partial || 'pools' in partial || 'lcu' in partial || 'members' in partial)) renderMain();
-  if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial)) renderMain();
+  if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial || 'pickScores' in partial)) renderMain();
   if (tab === 'pool' && 'pools' in partial) renderPoolList();
 });
 api.onSaved((info) => {
@@ -699,6 +699,7 @@ function renderPoolList() {
 // ---------- Team ----------
 function renderTeam() {
   const t = S.team;
+  const isOwner = t?.owner_id === S.me?.id;
   $view.innerHTML = `
     <div class="team-head">
       <h2>${esc(t?.name || '')}</h2>
@@ -711,13 +712,31 @@ function renderTeam() {
     </div>
     <div class="members">
       ${S.members.map((m) => {
+        const ps = (S.pickScores || {})[m.id];
+        const owner = t?.owner_id === m.id;
         return `
           <div class="member">
-            <div class="top"><span class="nick">${esc(m.nickname)}${m.id === S.me.id ? ' (you)' : ''}</span><span class="muted">${esc(ROLE_NAME[m.main_role] || '')}</span></div>
+            <div class="top">
+              <span class="nick">${esc(m.nickname)}${m.id === S.me.id ? ' (you)' : ''}${owner ? ' <span class="badge owner">Owner</span>' : ''}</span>
+              <span class="muted">${esc(ROLE_NAME[m.main_role] || '')}</span>
+            </div>
             <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
+            <div class="pick-avg" title="Average score of this player's picks at lock time, over all recorded drafts">
+              ${ps
+                ? `<b class="sc sc-${tierOf(ps.avg)}">${ps.avg}</b><span class="muted small">avg pick score · ${ps.picks} pick${ps.picks === 1 ? '' : 's'}</span>`
+                : '<span class="muted small">No recorded picks yet</span>'}
+            </div>
+            ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove from team</button>` : ''}
           </div>`;
       }).join('')}
     </div>`;
+  $view.querySelector('.members').onclick = async (e) => {
+    const b = e.target.closest('[data-kick]');
+    if (!b || !confirm(`Remove ${b.dataset.name} from the team?`)) return;
+    S = await run(api.kickMember(b.dataset.kick));
+    toast(`${b.dataset.name} was removed from the team`);
+    renderMain();
+  };
   document.getElementById('copy').onclick = () => navigator.clipboard.writeText(t.join_code).then(() => toast('Code copied'));
   document.getElementById('out').onclick = signOut;
   document.getElementById('prof').onclick = () => {
