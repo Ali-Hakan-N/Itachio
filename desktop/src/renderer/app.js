@@ -160,7 +160,7 @@ api.onState((partial) => {
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
   if (tab === 'draft' && ('draft' in partial || 'pools' in partial || 'lcu' in partial || 'members' in partial)) renderMain();
-  if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial || 'pickScores' in partial)) renderMain();
+  if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial)) renderMain();
   if (tab === 'pool' && 'pools' in partial) renderPoolList();
 });
 api.onSaved((info) => {
@@ -422,9 +422,23 @@ function slotScore(d, which, p, championId, sink) {
     </div>`;
 }
 
+// The draft with every player's role: known roles kept, the others (the enemy's, hidden
+// in ranked) guessed from the champions shown, so slots sit in role order and the
+// scores use the likely role
+function withRoles(draft) {
+  if (!draft) return draft;
+  const side = (list) => {
+    const guess = Engine.guessRoles({ model: S.model, players: list.map((p) => ({ championId: shownChamp(p), position: p.position })) });
+    if (!guess) return list;
+    // An empty slot gets the role left over only for ordering; it shows no role
+    return list.map((p, i) => ({ ...p, position: guess.roles[i], roleGuessed: guess.guessed[i] && !!shownChamp(p), roleHidden: guess.guessed[i] && !shownChamp(p) }));
+  };
+  return { ...draft, ally: side(draft.ally), enemy: side(draft.enemy) };
+}
+
 function renderDraft() {
   clearInterval(timerHandle);
-  const d = S.draft;
+  const d = withRoles(S.draft);
   if (!d) {
     const connected = S.lcu?.connected;
     $view.innerHTML = `
@@ -445,10 +459,9 @@ function renderDraft() {
       ? d.turn.kind === 'ban' ? 'Your turn to ban' : 'Your turn to pick'
       : `${d.turn.side === 'ally' ? 'Your team is' : 'Enemy is'} ${d.turn.kind === 'ban' ? 'banning' : 'picking'}`;
 
+  // Our team is always on the left, whichever side we play
   const allyCol = sideColumn('ally', d);
   const enemyCol = sideColumn('enemy', d);
-  const blueCol = d.ourSide === 'blue' ? allyCol : enemyCol;
-  const redCol = d.ourSide === 'blue' ? enemyCol : allyCol;
 
   const local = d.ally.find((p) => p.isLocal);
   const role = local?.position || S.me?.main_role || '';
@@ -511,7 +524,7 @@ function renderDraft() {
 
   $view.innerHTML = `
     <div class="board">
-      ${blueCol}
+      ${allyCol}
       <section class="center">
         <div class="phasebox ${d.isOurTurn ? 'mine' : ''}">
           <div class="turn-row">
@@ -533,7 +546,7 @@ function renderDraft() {
                 : 'No meta data yet. Recommendations appear here after the collector runs.'}</p>`}
         </div>
       </section>
-      ${redCol}
+      ${enemyCol}
     </div>`;
 
   // Inline style attributes are blocked by the CSP, so bar widths are set here
@@ -579,11 +592,13 @@ function sideColumn(which, d) {
   const acting = new Set(d.turn && d.turn.side === which ? d.turn.cellIds : []);
   const scores = [];
 
-  const slots = players.map((p) => {
+  // In role order (top to support); players without a role yet keep their place at the end
+  const order = (p) => (p.position && ROLE_NAME[p.position] ? ROLES.findIndex(([k]) => k === p.position) : 9);
+  const slots = [...players].sort((a, b) => order(a) - order(b)).map((p) => {
     const m = isAlly ? memberByPuuid(p.puuid) : null;
     const shown = p.locked ? p.championId : p.hoverId || 0;
     // Same as the client: roles of our team; enemy roles are hidden in ranked
-    const roleLabel = ROLE_NAME[p.position || (p.isLocal ? S.me?.main_role : '')] || '';
+    const roleLabel = p.roleHidden ? '' : ROLE_NAME[p.position || (p.isLocal ? S.me?.main_role : '')] || '';
     let mini = '';
     // 3 suggestions for a teammate who has not picked yet
     if (isAlly && !p.isLocal && !p.locked && !shown && m) {
@@ -601,7 +616,7 @@ function sideColumn(which, d) {
         ${champImg(shown, 'l')}
         <div class="who">
           <div class="name">${esc(shown ? champName(shown) : '…')}</div>
-          ${roleLabel ? `<div class="role">${roleLabel}</div>` : ''}
+          ${roleLabel ? `<div class="role"${p.roleGuessed ? ' title="Estimated from the champion"' : ''}>${roleLabel}${p.roleGuessed ? '?' : ''}</div>` : ''}
         </div>
         ${shown ? slotScore(d, which, p, shown, scores) : mini}
       </div>`;
@@ -766,7 +781,6 @@ function renderTeam() {
     </div>
     <div class="members">
       ${S.members.map((m) => {
-        const ps = (S.pickScores || {})[m.id];
         const owner = t?.owner_id === m.id;
         return `
           <div class="member">
@@ -775,11 +789,6 @@ function renderTeam() {
               <span class="muted">${esc(ROLE_NAME[m.main_role] || '')}</span>
             </div>
             <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
-            <div class="pick-avg" title="Average score of this player's picks at lock time, over all recorded drafts">
-              ${ps
-                ? `<b class="sc sc-${tierOf(ps.avg)}">${ps.avg}</b><span class="muted small">avg pick score · ${ps.picks} pick${ps.picks === 1 ? '' : 's'}</span>`
-                : '<span class="muted small">No recorded picks yet</span>'}
-            </div>
             ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove from team</button>` : ''}
           </div>`;
       }).join('')}

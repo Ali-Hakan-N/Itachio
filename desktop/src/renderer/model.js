@@ -359,6 +359,49 @@
     return out.sort((a, b) => b.value - a.value).slice(0, limit);
   }
 
+  // All orders of the five roles, for guessing who plays what
+  const PERMUTATIONS = (() => {
+    const out = [];
+    const walk = (left, acc) => {
+      if (!left.length) return out.push(acc);
+      left.forEach((r, i) => walk([...left.slice(0, i), ...left.slice(i + 1)], [...acc, r]));
+    };
+    walk([0, 1, 2, 3, 4], []);
+    return out;
+  })();
+
+  /**
+   * Roles of a team's five players: [{ championId, position }] -> role names. A known
+   * position is kept; the others get the most likely assignment of the roles left, from
+   * how often each champion is played in each role (champions not picked yet fill what
+   * remains, in order). guessed[i] says the role was guessed.
+   */
+  function guessRoles({ model, players }) {
+    const ix = index(model);
+    let best = null;
+    for (const perm of PERMUTATIONS) {
+      let ok = true;
+      let score = 0;
+      players.forEach((p, i) => {
+        const r = perm[i];
+        if (p.position) {
+          if (ROLE_INDEX[p.position] !== r) ok = false;
+        } else if (p.championId) {
+          const e = ix.champ.get(`${p.championId}:${r}`);
+          score += Math.log(Math.max(e ? e.share : 0, 1e-4));
+        } else {
+          score -= r * 1e-6; // unknown players: keep their order
+        }
+      });
+      if (ok && (!best || score > best.score)) best = { perm, score };
+    }
+    if (!best) return { roles: players.map((p) => p.position || ''), guessed: players.map(() => false) };
+    return {
+      roles: best.perm.map((r, i) => players[i].position || ROLES[r]),
+      guessed: players.map((p) => !p.position),
+    };
+  }
+
   // Older engine (recommend.js) takes allies as champion ids
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
@@ -367,9 +410,10 @@
     evaluate: (args) => (has(args.model) ? evaluate(args) : root.Recommend.evaluate(legacy(args))),
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),
+    guessRoles: (args) => (has(args.model) && args.players.length === 5 ? guessRoles(args) : null),
   };
 
-  const api = { recommend, evaluate, recommendBans, Engine, ROLES };
+  const api = { recommend, evaluate, recommendBans, guessRoles, Engine, ROLES };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Engine = Engine;
 })(typeof window !== 'undefined' ? window : globalThis);

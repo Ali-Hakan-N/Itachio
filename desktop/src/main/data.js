@@ -104,7 +104,7 @@ class DataStore {
     const pools = ids.length
       ? check(await this.client.from('player_pools').select('*').in('player_id', ids))
       : [];
-    return { team, members, pools, pickScores: await this.loadPickScores(ids), playerStats: await this.loadPlayerStats(ids) };
+    return { team, members, pools, playerStats: await this.loadPlayerStats(ids) };
   }
 
   // How each player does on each champion (collector/src/players):
@@ -126,28 +126,6 @@ class DataStore {
       if (r.champion_id === 0) p.unplayed = Number(r.delta);
       else p.byKey[`${r.champion_id}:${r.role}`] = { delta: Number(r.delta), games: r.games };
     }
-    return out;
-  }
-
-  // Average score of each player's picks over all recorded drafts: { playerId: { avg, picks } }
-  async loadPickScores(playerIds) {
-    if (!playerIds.length) return {};
-    const rows = [];
-    for (let from = 0; ; from += 1000) {
-      const page = check(
-        await this.client.from('draft_actions').select('id,player_id,score').in('player_id', playerIds)
-          .not('score', 'is', null).order('id').range(from, from + 999),
-      );
-      rows.push(...page);
-      if (page.length < 1000) break;
-    }
-    const out = {};
-    for (const r of rows) {
-      const p = (out[r.player_id] ||= { sum: 0, picks: 0 });
-      p.sum += Number(r.score);
-      p.picks++;
-    }
-    for (const p of Object.values(out)) p.avg = Math.round(p.sum / p.picks);
     return out;
   }
 

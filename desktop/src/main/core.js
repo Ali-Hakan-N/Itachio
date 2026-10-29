@@ -29,7 +29,6 @@ class AppCore extends EventEmitter {
       model: null, // learned win model; when missing the older scoring is used
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
-      pickScores: {}, // average score of each player's picks
       playerStats: {}, // how each player does on each champion
       pickable: null, // champions you can pick in champ select (owned + free rotation)
     };
@@ -92,8 +91,8 @@ class AppCore extends EventEmitter {
 
   async refreshTeam() {
     const me = await this.data.loadMe();
-    const { team, members, pools, pickScores, playerStats } = await this.data.loadTeam(me?.team_id);
-    this.#emit({ me, team, members, pools, pickScores: pickScores || {}, playerStats: playerStats || {} });
+    const { team, members, pools, playerStats } = await this.data.loadTeam(me?.team_id);
+    this.#emit({ me, team, members, pools, playerStats: playerStats || {} });
     this.data.subscribeTeam?.(team?.id, () => this.#debouncedTeamRefresh(), me?.id);
   }
   #debouncedTeamRefresh() {

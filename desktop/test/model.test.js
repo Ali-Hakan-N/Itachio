@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 global.Recommend = require('../src/renderer/recommend');
-const { recommend, evaluate, recommendBans, Engine } = require('../src/renderer/model');
+const { recommend, evaluate, recommendBans, guessRoles, Engine } = require('../src/renderer/model');
 
 // Roles: 0 top, 1 jungle, 2 middle, 3 bottom, 4 utility
 // 1 strong top, 2 average top, 3 mid that is rarely played top, 4 bot, 5 support, 6 enemy mid
@@ -201,4 +201,17 @@ test('personal layer: the player\'s own results on a champion move its score', (
   const top = (p) => recommend({ model, role: 'top', personal: p }).map((r) => r.championId);
   assert.equal(top(null)[0], 1);
   assert.equal(top({ byKey: { '2:top': { delta: 0.5, games: 80 } }, unplayed: 0 })[0], 2);
+});
+
+test('roles: known roles kept, the others guessed from where champions are played', () => {
+  const m = { ...model, champ: { ...model.champ, '3:2': [0.1, 900, 0.9], '3:0': [0, 20, 0.02], '4:3': [0, 900, 1], '5:4': [0, 900, 1] } };
+  // A first pick mid (3) and a support (5), the rest not picked yet
+  const g = guessRoles({ model: m, players: [{ championId: 3 }, { championId: 5 }, {}, {}, {}].map((p) => ({ position: '', championId: 0, ...p })) });
+  assert.equal(g.roles[0], 'middle');
+  assert.equal(g.roles[1], 'utility');
+  assert.deepEqual(g.guessed, [true, true, true, true, true]);
+  // A known role is never moved
+  const k = guessRoles({ model: m, players: [{ championId: 3, position: 'top' }, ...[0, 0, 0, 0].map(() => ({ championId: 0, position: '' }))] });
+  assert.equal(k.roles[0], 'top');
+  assert.equal(new Set(k.roles).size, 5);
 });

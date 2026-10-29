@@ -1,7 +1,7 @@
 {
   "name": "flex-drafter",
   "productName": "FlexDrafter",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "League of Legends draft assistant for teams",
   "main": "src/main/main.js",
   "private": true,
