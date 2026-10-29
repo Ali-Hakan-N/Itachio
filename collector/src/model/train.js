@@ -21,6 +21,9 @@ const DEFAULT_GRID = {
 const STEPS = { coarse: 150, fine: 300, final: 500 };
 const FINE = [1 / Math.sqrt(3), 1, Math.sqrt(3)];
 const FIXED_LAMBDA = { o: 1e-4, ts: 1e-3, tv: 1e-3 };
+// Weights that may only be zero or negative: playing a champion in a role it is rarely
+// played in can't be an advantage. The data sets how big the penalty is, not its sign.
+const NON_POSITIVE = new Set(['o']);
 
 /** Builds a sparse design matrix (CSR) for the matches */
 function design(matches, ctx) {
@@ -61,6 +64,7 @@ const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 /** Full-batch Adam on rows; returns { w, bias } */
 function fit(X, rows, lam, { iters = 150, lr = 0.05 } = {}) {
   const F = X.keys.length;
+  const capped = Uint8Array.from(X.keys, (k) => (NON_POSITIVE.has(groupOf(k)) ? 1 : 0));
   const w = new Float64Array(F);
   const grad = new Float64Array(F);
   const m = new Float64Array(F);
@@ -89,6 +93,7 @@ function fit(X, rows, lam, { iters = 150, lr = 0.05 } = {}) {
       m[i] = b1 * m[i] + (1 - b1) * g;
       v[i] = b2 * v[i] + (1 - b2) * g * g;
       w[i] -= (lr * (m[i] / c1)) / (Math.sqrt(v[i] / c2) + 1e-8);
+      if (capped[i] && w[i] > 0) w[i] = 0;
     }
     gb /= n;
     mb = b1 * mb + (1 - b1) * gb;

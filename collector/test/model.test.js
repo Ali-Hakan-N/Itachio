@@ -69,6 +69,7 @@ test('training finds the planted strength, synergy and matchup', () => {
   assert.ok(w.get('s:2:2:3:1') > 0.2, `synergy ${w.get('s:2:2:3:1')}`);
   assert.ok(w.get('v:4:3:5:3') > 0.3, `matchup ${w.get('v:4:3:5:3')}`);
   assert.ok(model.metrics.logloss < model.metrics.baseLogloss);
+  assert.ok(model.keys.every((k, i) => !k.startsWith('o:') || model.w[i] <= 0), 'off-role weights must not be positive');
 
   const data = exportModel(model, { share, games: roleShares(matches).games, tags: new Map(), patch: 'T', matches: matches.length });
   assert.ok(data.champ['1:0'][0] > 0.3);

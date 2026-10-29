@@ -19,6 +19,11 @@ const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
 const POINTS_PER_LOGIT = 75; // fallback when there is too little data to measure the spread
 const SCALE_MIN_GAMES = 100;
+// Typical spread of champion strength in high elo is a few win-rate points, about
+// 0.08 in logit. With little data the model shrinks strengths far below that; the
+// scale is then not stretched past this, so scores stay near 50 instead of turning
+// noise into big numbers. They spread out as data comes in.
+const MIN_SPREAD = 0.08;
 const PRUNE = 0.002; // pair weights smaller than this are left out of the upload
 const MIN_MATCHES = 2000;
 const MAX_TRAIN_MATCHES = 150000; // newest matches only, keeps training memory around 500 MB
@@ -90,7 +95,7 @@ function exportModel(model, { share, games, tags, patch, matches }) {
   }
   const mean = bases.length ? bases.reduce((a, b) => a + b, 0) / bases.length : 0;
   const sd = bases.length > 1 ? Math.sqrt(bases.reduce((a, b) => a + (b - mean) ** 2, 0) / bases.length) : 0;
-  const pointsPerLogit = sd > 0 ? Math.min(Math.max(SCORE_SD / sd, 40), 600) : POINTS_PER_LOGIT;
+  const pointsPerLogit = SCORE_SD / Math.max(sd, MIN_SPREAD);
 
   const tagOf = {};
   for (const key of Object.keys(champ)) {

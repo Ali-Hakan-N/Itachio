@@ -341,7 +341,7 @@ function enemyContext(d, exceptCell) {
 const tierOf = (s) => (s >= 75 ? 'S' : s >= 63 ? 'A' : s >= 52 ? 'B' : s >= 40 ? 'C' : 'D');
 
 function recRow(r, i, { canHover, hoverId, rank }) {
-  const tier = tierOf(r.base);
+  const tier = tierOf(r.score);
   const hovering = r.championId === hoverId;
   return `
     <button type="button" class="rec ${hovering ? 'hovering' : ''}" data-hover="${r.championId}"

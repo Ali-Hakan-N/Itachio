@@ -2,6 +2,8 @@
 //   npm run collect             -> writes
 //   npm run collect:dry         -> checks only, writes nothing
 //   node src/run.js --source X  -> use source X instead of COLLECTOR_SOURCE from .env
+//   --log <file>                -> also append every line to that file (used by the
+//                                  scheduled task, which runs without a window)
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -12,11 +14,25 @@ const { writeRows, loadChampions, startRun, finishRun } = require('./writer');
 // Fewer meta rows than this means the data is incomplete: keep the current scores
 const MIN_META_ROWS = 50;
 
+let logFile = null;
+function writeLine(line) {
+  console.log(line);
+  if (!logFile) return;
+  try {
+    fs.appendFileSync(logFile, `${line}
+`);
+  } catch {
+    /* a log that can't be written must not stop the collector */
+  }
+}
+const log = (...m) => writeLine([new Date().toISOString(), ...m].join(' '));
+
 function parseArgs(argv) {
   const args = { dryRun: false, source: null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dry-run') args.dryRun = true;
     else if (argv[i] === '--source') args.source = argv[++i];
+    else if (argv[i] === '--log') args.log = argv[++i];
   }
   return args;
 }
@@ -37,8 +53,11 @@ async function main() {
     /* not allowed on this system: run at normal priority */
   }
   const args = parseArgs(process.argv.slice(2));
+  if (args.log) {
+    logFile = path.resolve(args.log);
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  }
   const env = process.env;
-  const log = (...m) => console.log(new Date().toISOString(), ...m);
 
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env');
@@ -88,6 +107,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(new Date().toISOString(), 'ERROR:', err.message || err);
+  log('ERROR:', err.message || err);
   process.exit(1);
 });

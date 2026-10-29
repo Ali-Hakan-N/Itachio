@@ -26,11 +26,16 @@ const { crawl, PLATFORMS } = require('../riot/crawl');
 const { score } = require('../riot/score');
 const store = require('../riot/store');
 const model = require('../model');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const DRY_RUN_MAX_PER_REGION = 5;
 const TRAIN_EVERY_MS = 60 * 60_000;
 const TRAIN_CHECK_MS = 5 * 60_000;
 const FINAL_TRAIN_WAIT_MS = 3 * 60 * 60_000;
+// scripts/schedule-windows.ps1 -Stop creates this file: stop cleanly, like Ctrl+C
+const STOP_FILE = path.join(__dirname, '..', '..', 'data', 'stop');
+const STOP_CHECK_MS = 30_000;
 
 module.exports = {
   name: 'riot',
@@ -51,6 +56,13 @@ module.exports = {
       log('stopping: finishing the current requests and saving (Ctrl+C again to quit now)');
       process.once('SIGINT', () => process.exit(130));
     });
+    fs.rmSync(STOP_FILE, { force: true }); // an old request must not stop a new run
+    const stopWatch = setInterval(() => {
+      if (stop.reason || !fs.existsSync(STOP_FILE)) return;
+      fs.rmSync(STOP_FILE, { force: true });
+      stop.reason = 'requested';
+      log('stop requested: finishing the current requests and saving');
+    }, STOP_CHECK_MS);
 
     // Fresh scores during a long run, at most one refresh at a time
     let lastRescore = Date.now();
@@ -107,6 +119,7 @@ module.exports = {
       log,
     });
     clearInterval(trainTimer);
+    clearInterval(stopWatch);
     await rescoring;
     await training;
     log(`riot: ${api.requests} requests${stop.reason ? ` · stopped (${stop.reason})` : ''}`);
