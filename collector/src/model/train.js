@@ -5,6 +5,8 @@
 //                  objectives), learned by early.js from far less noisy signals, as three
 //                  features (strength, synergy, matchups); the win model learns how much
 //                  of each turns into wins
+//   composition    team styles learned from the matches (comp.js), fitted on top of the
+//                  rest, so plans like front-to-back or engage can count as a whole
 //   synergy        a weight for every same-team pair (champion:role × champion:role)
 //                  and for every class pair (Mage + Tank ...)
 //   matchup        a weight for every enemy pair, and for class against class
@@ -34,6 +36,7 @@
 
 const { features, groupOf } = require('./features');
 const { earlyModel } = require('./early');
+const { compLayer } = require('./comp');
 
 const GROUP_CODE = { c: 0, o: 1, s: 2, ts: 3, v: 4, tv: 5, e: 6 };
 const CODE_GROUP = Object.fromEntries(Object.entries(GROUP_CODE).map(([g, c]) => [c, g]));
@@ -523,10 +526,23 @@ function train(matches, ctx, options = {}) {
     zCurrent = zCand;
   }
 
-  const cv = summary(D, rows, zCurrent);
   const cal = platt(D, rows, zCurrent);
   const before = reliability(D, rows, zCurrent);
-  const after = reliability(D, rows, Float64Array.from(zCurrent, (z) => cal.a * z + cal.b));
+  const zCal = Float64Array.from(zCurrent, (z) => cal.a * z + cal.b);
+
+  // Composition on top of the calibrated model, measured like the other layers
+  let composition = null;
+  let zFinal = zCal;
+  if (o.comp !== false) {
+    composition = compLayer(matches, D.y, zCal, D.fold, o.folds, log);
+    const c = compare(D, rows, zCal, composition.z);
+    const proven = c.improvement > PROVEN_SE * c.se;
+    layers.push({ name: 'composition', ...summary(D, rows, composition.z), ...c, accepted: true, proven });
+    log(`model: composition   gain ${(c.improvement * 1000).toFixed(2)} ± ${(c.se * 1000).toFixed(2)} ×1e-3 → ${proven ? 'proven' : 'not proven yet'}`);
+    zFinal = composition.z;
+  }
+  const cv = summary(D, rows, zFinal);
+  const after = reliability(D, rows, zFinal);
 
   const params = fit(D, rows, current, { iters: o.finalIters });
   const se = standardErrors(D, rows, params, current);
@@ -573,6 +589,7 @@ function train(matches, ctx, options = {}) {
     groups: [...current.groups],
     fm,
     early: earlyOut,
+    composition,
   };
 }
 

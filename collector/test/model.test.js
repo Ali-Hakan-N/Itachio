@@ -233,3 +233,41 @@ test('training set: the current patch, filled from older patches only up to enou
   // Never more than max
   assert.deepEqual(sizes(pickTraining(list('16.22', 300), [], { enough: 50, max: 200 })), { '16.22': 200 });
 });
+
+test('composition: finds a team-level style, and never makes the model worse', () => {
+  let s = 9;
+  const rand = () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  };
+  const pools = [[21, 22, 23, 24], [31, 32, 33, 34], [41, 42, 43, 44], [51, 52, 53, 54], [61, 62, 63, 64]];
+  const tanks = new Set([21, 31, 61]);
+  const matches = [];
+  for (let i = 0; i < 8000; i++) {
+    const pick = (p) => p[Math.floor(rand() * p.length)];
+    const b = pools.map(pick);
+    const r = pools.map((p) => p.filter((c) => !b.includes(c))[Math.floor(rand() * (p.length - 1))]);
+    const has = (t) => (t.some((c) => tanks.has(c)) ? 1 : 0);
+    const z = 0.8 * (has(b) - has(r));
+    matches.push({ id: `T_${i}`, q: 440, w: rand() < 1 / (1 + Math.exp(-z)) ? 1 : 0, b, r });
+  }
+  // On its own (nothing else in the model) the tanks come out as one style
+  const { compLayer, exportComp } = require('../src/model/comp');
+  const y = Float64Array.from(matches, (m) => m.w);
+  const fold = Uint8Array.from(matches, (_, i) => i % 3);
+  const alone = compLayer(matches, y, new Float64Array(matches.length), fold, 3);
+  assert.ok(alone.iters > 0);
+  const { comp } = exportComp(alone);
+  const found = Array.from({ length: comp.k }, (_, k) => {
+    const ranked = Object.entries(comp.U).sort((x, z) => (z[1][k] - x[1][k]) * Math.sign(comp.a[k] || 1));
+    return new Set(ranked.slice(0, 3).map(([c]) => Number(c)));
+  }).some((top) => [...tanks].every((t) => top.has(t)));
+  assert.ok(found, 'tanks found as a style');
+  // On top of the full model, which already explains it with strength and pairs, it does no harm
+  const { share } = roleShares(matches);
+  const model = train(matches, { share, tagOf: () => 'None' }, FAST);
+  const layer = model.metrics.layers.find((l) => l.name === 'composition');
+  assert.ok(layer.improvement > -2 * layer.se - 1e-6, `composition ${layer.improvement} ± ${layer.se}`);
+});

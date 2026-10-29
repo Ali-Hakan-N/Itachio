@@ -24,6 +24,17 @@
 // unplayed }. delta is in log-odds and adds to the model's logit; champions the player
 // has not played get unplayed. Only for players with an analysis.
 //
+// Composition (comp): every champion has learned style numbers u (collector comp.js); a
+// team's style is their sum T, and a team gains Σ_k a_k tanh(T_k + c_k) plus Tᵀ M T_enemy
+// (M antisymmetric). A candidate is worth what it adds to that for its team.
+//
+// The rest of the draft: while picks are still open, a candidate is also scored against
+// what is likely to come. Every open slot (ours and theirs) gets a distribution over
+// champions from the same choice model as the enemy's answers (popularity × exp(λ ×
+// matchups against the other team)); the candidate gains its expected synergy with our
+// future picks, and the composition is taken with the expected final styles of both
+// teams.
+//
 // Relative to a typical pick: every term that depends on the board (synergy with the
 // allies, matchups against the enemies, the enemy's answers) is measured against the
 // popularity-weighted average of the same terms over the champions usually played in
@@ -126,6 +137,22 @@
     const sd = bases.length > 1 ? Math.sqrt(bases.reduce((a, b) => a + (b - ix.center) ** 2, 0) / bases.length) : 0;
     ix.sd = sd > 1e-6 ? sd : 0.08;
     ix.lambda = Math.max(0, model.counterpick?.lambda || 0);
+    if (model.comp) {
+      const k = model.comp.k;
+      const M = Array.from({ length: k }, () => new Float64Array(k));
+      let n = 0;
+      for (let i = 0; i < k; i++) {
+        for (let j = i + 1; j < k; j++) {
+          M[i][j] = model.comp.m[n];
+          M[j][i] = -model.comp.m[n];
+          n++;
+        }
+      }
+      ix.comp = {
+        k, M, a: model.comp.a, c: model.comp.c,
+        U: new Map(Object.entries(model.comp.U).map(([id, u]) => [Number(id), Float64Array.from(u)])),
+      };
+    }
     // Ban inputs: how likely a team is to pick each champion:role, and the role's average pick
     ix.matches = model.matches || 0;
     ix.banRate = new Map(Object.entries(model.banRate || {}).map(([id, r]) => [Number(id), r]));
@@ -171,7 +198,39 @@
     return (explicit ? explicit.w : 0) + latent + (ix.tv.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0);
   }
 
-  function scoreOne(ix, championId, r, allies, enemies) {
+  // How well a (role ra) and b (role rb) play on the same team, in log-odds
+  function synergy(ix, a, ra, b, rb) {
+    const explicit = ix.syn.get(`${a}:${ra}:${b}:${rb}`);
+    const latent = ix.fm ? dot(ix.fm.S.get(`${a}:${ra}`), ix.fm.S.get(`${b}:${rb}`)) : 0;
+    return (explicit ? explicit.w : 0) + latent + (ix.ts.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0);
+  }
+
+  // Style of a team: the sum of its champions' style numbers, plus an expected future part
+  function styleOf(ix, ids, extra = null) {
+    const T = new Float64Array(ix.comp.k);
+    for (const id of ids) {
+      const u = ix.comp.U.get(id);
+      if (u) for (let k = 0; k < T.length; k++) T[k] += u[k];
+    }
+    if (extra) for (let k = 0; k < T.length; k++) T[k] += extra[k];
+    return T;
+  }
+
+  // What the champion adds to its team's composition, given the two teams' styles without it
+  function compValue(ix, championId, A, E) {
+    const u = ix.comp.U.get(championId);
+    if (!u) return 0;
+    const { a, c, M } = ix.comp;
+    let v = 0;
+    for (let k = 0; k < u.length; k++) {
+      v += a[k] * (Math.tanh(A[k] + u[k] + c[k]) - Math.tanh(A[k] + c[k]));
+      for (let j = 0; j < u.length; j++) v += u[k] * M[k][j] * E[j];
+    }
+    return v;
+  }
+
+  // future: { allyStyle, enemyStyle } expected styles of the picks still to come (or null)
+  function scoreOne(ix, championId, r, allies, enemies, future = null) {
     const self = `${championId}:${r}`;
     const e = ix.champ.get(self);
     const share = e ? e.share : 0;
@@ -187,8 +246,9 @@
       const ra = roleIndex(ix, p.championId, p.position);
       const explicit = ra === null ? null : ix.syn.get(`${championId}:${r}:${p.championId}:${ra}`);
       if (explicit) variance += explicit.se * explicit.se;
-      const latent = ix.fm && ra !== null ? dot(ix.fm.S.get(self), ix.fm.S.get(`${p.championId}:${ra}`)) : 0;
-      const v = (explicit ? explicit.w : 0) + latent + (ix.ts.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
+      const v = ra === null
+        ? ix.ts.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0
+        : synergy(ix, championId, r, p.championId, ra);
       syn += v;
       if (v) allyHits.push({ championId: p.championId, value: v });
     }
@@ -206,7 +266,16 @@
       if (v) enemyHits.push({ championId: p.championId, value: v, lane: re === r });
     }
 
-    const logit = base + syn + mu;
+    const comp = ix.comp
+      ? compValue(
+          ix,
+          championId,
+          styleOf(ix, allies.map((p) => asPick(p).championId).filter((id) => id !== championId), future?.allyStyle),
+          styleOf(ix, enemies.map((p) => asPick(p).championId), future?.enemyStyle),
+        )
+      : 0;
+
+    const logit = base + syn + mu + comp;
     const score = toScore(ix, logit);
     const baseScore = toScore(ix, base);
     return {
@@ -214,7 +283,8 @@
       role: ROLES[r],
       base: Math.round(baseScore),
       synergy: Math.round(toScore(ix, base + syn) - baseScore),
-      matchup: Math.round(score - toScore(ix, base + syn)),
+      matchup: Math.round(toScore(ix, base + syn + mu) - toScore(ix, base + syn)),
+      composition: Math.round(score - toScore(ix, base + syn + mu)),
       score: Math.round(score),
       logit,
       baseLogit: base,
@@ -222,35 +292,82 @@
       games: e ? e.games : 0,
       uncertainty: Math.round((50 * SPREAD * Math.sqrt(variance)) / ix.sd),
       unsure: !e || e.games < UNSURE_GAMES,
-      allies: allyHits.sort((a, b) => b.value - a.value),
-      enemies: enemyHits.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
+      allies: allyHits.sort((x, y) => y.value - x.value),
+      enemies: enemyHits.sort((x, y) => Math.abs(y.value) - Math.abs(x.value)),
     };
   }
 
   /**
-   * The enemy's possible answers, per role they still have open: champions with enough
-   * games there and their choice weight before seeing the candidate
-   * (log popularity + λ × matchups against our team). Built once per board.
+   * Champions likely to be picked in the open roles of one team: per role, champions with
+   * enough games there, with choice weight log popularity + λ × matchups against the
+   * other team's picks. skip: a role not to fill (the candidate's own).
    */
-  function answers(ix, allies, enemies, unavailable) {
+  function openPicks(ix, team, other, unavailable, skip = null) {
     if (!ix.matches) return [];
-    const onBoard = new Set([...allies, ...enemies].map((p) => asPick(p).championId));
-    const taken = new Set(enemies.map((p) => roleIndex(ix, asPick(p).championId, asPick(p).position)));
-    const ours = allies.map(asPick).map((p) => [p.championId, roleIndex(ix, p.championId, p.position)]).filter(([, r]) => r !== null);
+    const onBoard = new Set([...team, ...other].map((p) => asPick(p).championId));
+    const taken = new Set(team.map((p) => roleIndex(ix, asPick(p).championId, asPick(p).position)));
+    const theirs = other.map(asPick).map((p) => [p.championId, roleIndex(ix, p.championId, p.position)]).filter(([, r]) => r !== null);
     const out = [];
     for (let q = 0; q < 5; q++) {
-      if (taken.has(q)) continue;
+      if (taken.has(q) || q === skip) continue;
       const list = [];
       for (const [key, e] of ix.champ) {
         const [y, rq] = key.split(':').map(Number);
         if (rq !== q || e.games < ANSWER_MIN_GAMES || unavailable.has(y) || onBoard.has(y)) continue;
         let w = Math.log(Math.max(ix.pickChance.get(key) || 0, 1e-6));
-        for (const [c, rc] of ours) w += ix.lambda * matchup(ix, y, q, c, rc);
+        for (const [c, rc] of theirs) w += ix.lambda * matchup(ix, y, q, c, rc);
         list.push({ y, w });
       }
       if (list.length) out.push({ q, list });
     }
     return out;
+  }
+
+  // The enemy's possible answers to us (see openPicks)
+  const answers = (ix, allies, enemies, unavailable) => openPicks(ix, enemies, allies, unavailable);
+
+  // Choice weights -> probabilities, per role
+  function probabilities(open) {
+    return open.map(({ q, list }) => {
+      const max = Math.max(...list.map((a) => a.w));
+      const p = list.map((a) => Math.exp(a.w - max));
+      const sum = p.reduce((x, y) => x + y, 0);
+      return { q, list: list.map((a, i) => ({ y: a.y, p: p[i] / sum })) };
+    });
+  }
+
+  // Expected style of the picks still to come
+  function expectedStyle(ix, open) {
+    const T = new Float64Array(ix.comp.k);
+    for (const { list } of open) {
+      for (const { y, p } of list) {
+        const u = ix.comp.U.get(y);
+        if (u) for (let k = 0; k < T.length; k++) T[k] += p * u[k];
+      }
+    }
+    return T;
+  }
+
+  /**
+   * The rest of the draft for a candidate in role r, built once per board: the enemy's
+   * answers, our own picks to come (with probabilities) and the expected styles.
+   */
+  function restOfDraft(ix, r, allies, enemies, unavailable) {
+    const ids = (list) => list.map((p) => `${asPick(p).championId}:${asPick(p).position || ''}`).join(',');
+    const key = `${r}|${ids(allies)}|${ids(enemies)}|${[...unavailable].sort().join(',')}`;
+    ix.rest ||= new Map();
+    if (ix.rest.has(key)) return ix.rest.get(key);
+    if (ix.rest.size > 100) ix.rest.clear();
+    const out = buildRest(ix, r, allies, enemies, unavailable);
+    ix.rest.set(key, out);
+    return out;
+  }
+
+  function buildRest(ix, r, allies, enemies, unavailable) {
+    const enemyOpen = answers(ix, allies, enemies, unavailable);
+    const allyOpen = probabilities(openPicks(ix, allies, enemies, unavailable, r));
+    const future = ix.comp ? { allyStyle: expectedStyle(ix, allyOpen), enemyStyle: expectedStyle(ix, probabilities(enemyOpen)) } : null;
+    return { enemyOpen, allyOpen, future };
   }
 
   /** Expected log-odds the candidate loses once the enemy answers it in every open role */
@@ -282,6 +399,24 @@
     return total;
   }
 
+  // Expected synergy of the candidate with the picks our team still has to make
+  function futureSynergy(ix, championId, r, allyOpen) {
+    let total = 0;
+    for (const { q, list } of allyOpen) for (const { y, p } of list) if (y !== championId) total += p * synergy(ix, championId, r, y, q);
+    return total;
+  }
+
+  /**
+   * Everything the board does to a candidate, in log-odds: the row (with the composition,
+   * and the expected final styles when looking ahead), its expected synergy with our
+   * future picks and its exposure to the enemy's answers.
+   */
+  function assess(ix, championId, r, allies, enemies, rest) {
+    const row = scoreOne(ix, championId, r, allies, enemies, rest ? rest.future : null);
+    if (!rest) return { row, ahead: 0, exposure: 0 };
+    return { row, ahead: futureSynergy(ix, championId, r, rest.allyOpen), exposure: exposure(ix, championId, r, rest.enemyOpen) };
+  }
+
   // The player's own layer on top of the model; personal is what it adds in points
   function personalize(ix, row, personal) {
     if (!personal) return row;
@@ -295,48 +430,49 @@
 
   /**
    * What the board does to a typical pick in role r: popularity-weighted averages, over the
-   * champions usually played there, of the board terms (pairs) and of the enemy's answers
-   * (exposure). Cached per board.
+   * champions usually played there, of the board terms, the rest of the draft and the
+   * enemy's answers. Cached per board.
    */
-  function typical(ix, r, allies, enemies, open, unavailable) {
+  function typical(ix, r, allies, enemies, rest, unavailable) {
     const ids = (list) => list.map((p) => `${asPick(p).championId}:${asPick(p).position || ''}`).join(',');
-    const key = `${r}|${ids(allies)}|${ids(enemies)}|${open.length}|${[...unavailable].sort().join(',')}`;
+    const key = `${r}|${ids(allies)}|${ids(enemies)}|${rest ? 1 : 0}|${[...unavailable].sort().join(',')}`;
     ix.typical ||= new Map();
     if (ix.typical.has(key)) return ix.typical.get(key);
     const onBoard = new Set([...allies, ...enemies].map((p) => asPick(p).championId));
     let sum = 0;
-    let pairs = 0;
+    let board = 0;
+    let ahead = 0;
     let exp = 0;
     for (const [k, e] of ix.champ) {
       const [y, ry] = k.split(':').map(Number);
       if (ry !== r || e.games < ANSWER_MIN_GAMES || unavailable.has(y) || onBoard.has(y)) continue;
       const p = ix.pickChance.get(k) || 0;
       if (!p) continue;
-      const row = scoreOne(ix, y, r, allies, enemies);
+      const a = assess(ix, y, r, allies, enemies, rest);
       sum += p;
-      pairs += p * (row.logit - row.baseLogit);
-      if (open.length) exp += p * exposure(ix, y, r, open);
+      board += p * (a.row.logit - a.row.baseLogit);
+      ahead += p * a.ahead;
+      exp += p * a.exposure;
     }
-    const out = sum ? { pairs: pairs / sum, exposure: exp / sum } : { pairs: 0, exposure: 0 };
+    const out = sum ? { board: board / sum, ahead: ahead / sum, exposure: exp / sum } : { board: 0, ahead: 0, exposure: 0 };
     if (ix.typical.size > 300) ix.typical.clear();
     ix.typical.set(key, out);
     return out;
   }
 
-  // Board terms measured against a typical pick (see above)
-  function centered(ix, row, typ) {
-    if (!typ.pairs) return row;
-    const logit = row.logit - typ.pairs;
-    return { ...row, logit, score: Math.round(toScore(ix, logit)) };
-  }
-
-  // Score with the enemy's answers taken into account, compared with a typical pick's;
-  // counterRisk is what that costs in points (negative: it gains)
-  function lookAhead(ix, row, r, open, typ) {
-    if (!open.length) return { ...row, counterRisk: 0 };
-    const logit = row.logit - (exposure(ix, row.championId, r, open) - typ.exposure);
-    const score = Math.round(toScore(ix, logit));
-    return { ...row, logit, score, counterRisk: row.score - score };
+  /**
+   * The final row of a candidate: board terms against a typical pick's, then (looking
+   * ahead) the rest of the draft and the enemy's answers against a typical pick's.
+   * counterRisk is what the enemy's answers cost in points (negative: it gains).
+   */
+  function finalRow(ix, a, typ, rest) {
+    const logit = a.row.logit - typ.board;
+    const row = { ...a.row, logit, score: Math.round(toScore(ix, logit)) };
+    if (!rest) return row;
+    const withFuture = logit + (a.ahead - typ.ahead);
+    const final = withFuture - (a.exposure - typ.exposure);
+    const score = Math.round(toScore(ix, final));
+    return { ...row, logit: final, score, counterRisk: Math.round(toScore(ix, withFuture)) - score };
   }
 
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
@@ -344,30 +480,35 @@
     const ix = index(model);
     const allowed = pickable ? new Set(pickable) : null;
     const inPool = new Set(pool);
-    const open = answers(ix, allies, enemies, unavailable);
+    const rests = new Map();
+    const restFor = (r) => {
+      if (!rests.has(r)) rests.set(r, restOfDraft(ix, r, allies, enemies, unavailable));
+      return rests.get(r);
+    };
     const out = [];
     for (const [championId, best] of ix.bestRole) {
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
-      const typ = typical(ix, r, allies, enemies, open, unavailable);
-      const row = lookAhead(ix, centered(ix, scoreOne(ix, championId, r, allies, enemies), typ), r, open, typ);
-      out.push({ ...personalize(ix, row, personal), inPool: inPool.has(championId) });
+      const rest = ix.matches ? restFor(r) : null;
+      const typ = typical(ix, r, allies, enemies, rest, unavailable);
+      const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);
+      out.push({ ...personalize(ix, { counterRisk: 0, ...row }, personal), inPool: inPool.has(championId) });
     }
     return out.sort((x, y) => y.logit - x.logit || y.games - x.games).slice(0, limit);
   }
 
   /**
    * Same arguments and result as Recommend.evaluate, plus model. With lookAhead the score
-   * takes the enemy's answers into account like recommend() (for a pick not locked yet).
+   * takes the rest of the draft into account like recommend() (for a pick not locked yet).
    */
   function evaluate({ model, championId, role = '', allies = [], enemies = [], lookAhead: ahead = false, unavailable = new Set(), personal = null }) {
     const ix = index(model);
     if (!ix.bestRole.has(championId)) return null;
     const r = role ? ROLE_INDEX[role] : ix.bestRole.get(championId).r;
-    const open = ahead ? answers(ix, allies, enemies, unavailable) : [];
-    const typ = typical(ix, r, allies, enemies, open, unavailable);
-    const row = centered(ix, scoreOne(ix, championId, r, allies, enemies), typ);
-    return personalize(ix, ahead ? lookAhead(ix, row, r, open, typ) : row, personal);
+    const rest = ahead && ix.matches ? restOfDraft(ix, r, allies, enemies, unavailable) : null;
+    const typ = typical(ix, r, allies, enemies, rest, unavailable);
+    const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);
+    return personalize(ix, ahead ? { counterRisk: 0, ...row } : row, personal);
   }
 
   /**

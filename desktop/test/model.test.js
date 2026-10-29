@@ -226,7 +226,32 @@ test('relative to a typical pick: board terms that lift every champion do not li
   const withSupport = recommend({ model: m, role: 'top', allies: [{ championId: 5, position: 'utility' }] });
   for (const id of [1, 2]) assert.equal(withSupport.find((x) => x.championId === id).score, empty.find((x) => x.championId === id).score);
   // A synergy only one of them has still moves it up
-  const one = { ...m, syn: [[2, 0, 5, 4, 0.2]] };
+  // Another popular support makes 5 an open question until it is picked
+  const one = { ...m, champ: { ...m.champ, '7:4': [0, 2000, 1] }, syn: [[2, 0, 5, 4, 0.2]] };
   const two = recommend({ model: one, role: 'top', allies: [{ championId: 5, position: 'utility' }] }).find((x) => x.championId === 2).score;
   assert.ok(two > recommend({ model: one, role: 'top' }).find((x) => x.championId === 2).score);
+});
+
+test('rest of the draft: synergy with the support we are likely to pick counts before it is picked', () => {
+  // Supports: 5 is picked far more often than 7. Top 1 goes with 5, top 2 with 7, equally well.
+  const m = {
+    ...model, matches: 1000,
+    champ: { ...model.champ, '1:0': [0.05, 900, 0.95], '2:0': [0.05, 900, 0.95], '5:4': [0, 1500, 1], '7:4': [0, 100, 1] },
+    syn: [[1, 0, 5, 4, 0.2], [2, 0, 7, 4, 0.2]],
+  };
+  const rec = recommend({ model: m, role: 'top' });
+  assert.ok(rec.find((x) => x.championId === 1).score > rec.find((x) => x.championId === 2).score);
+  // Once the support is locked, only the real one counts
+  const after = recommend({ model: m, role: 'top', allies: [{ championId: 7, position: 'utility' }] });
+  assert.ok(after.find((x) => x.championId === 2).score > after.find((x) => x.championId === 1).score);
+});
+
+test('composition: a champion that gives the team the style it lacks scores higher', () => {
+  // One style: having some of it is worth a lot, more of it little (tanh). 1 and 2 are equal tops; 1 has the style.
+  const comp = { k: 1, a: [0.3], c: [0], m: [], U: { 1: [1.5], 2: [0], 4: [1.5], 5: [0] } };
+  const m = { ...model, comp, champ: { ...model.champ, '1:0': [0.05, 900, 0.95], '2:0': [0.05, 900, 0.95] } };
+  const top = (allies) => Object.fromEntries(recommend({ model: m, role: 'top', allies }).map((x) => [x.championId, x.score]));
+  const none = top([{ championId: 5, position: 'utility' }]); // the team has none of it yet
+  const has = top([{ championId: 4, position: 'bottom' }]); // the bot laner already brings it
+  assert.ok(none[1] - none[2] > has[1] - has[2], `${none[1] - none[2]} > ${has[1] - has[2]}`);
 });

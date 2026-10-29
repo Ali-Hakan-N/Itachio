@@ -15,6 +15,7 @@ const { ROLES, SHARE_FLOOR, toCompact, roleShares } = require('./features');
 const { Worker } = require('node:worker_threads');
 const idle = require('./idle');
 const { counterpickTendency } = require('./choice');
+const { exportComp } = require('./comp');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
@@ -81,6 +82,7 @@ function loadMatches(patch) {
  *          champion strength through the early game is already included in champ and off
  *   banRate: { "<champ>": share of matches it was banned in } (when enough matches have bans)
  *   counterpick: { lambda, se, picks } how much players pick against their opponents (choice.js)
+ *   comp:  { k, U: { "<champ>": [k style numbers] }, a, c, m } team composition (comp.js)
  * Layers the training left out are absent (no pair weights, no fm).
  */
 /** Share of matches each champion was banned in, from matches that record bans */
@@ -183,6 +185,7 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
     vsE,
     early,
     banRate,
+    comp: model.composition ? exportComp(model.composition).comp : null,
     ts,
     tv,
     fm,
@@ -242,6 +245,13 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
     pointsPerLogit: data.pointsPerLogit,
     weights: { synergy: data.syn.length, matchup: data.vs.length, latent: data.fm ? Object.keys(data.fm.S).length : 0 },
     topByRole: top,
+    // The champions highest and lowest on every learned style
+    styles: data.comp
+      ? Array.from({ length: data.comp.k }, (_, k) => {
+          const ranked = Object.entries(data.comp.U).sort((x, y) => y[1][k] - x[1][k]).map(([c]) => champions.get(Number(c)) || c);
+          return { weight: data.comp.a[k], high: ranked.slice(0, 8), low: ranked.slice(-8) };
+        })
+      : null,
     early: data.early && {
       ...data.early,
       synergy: pairs(data.synE, ' + '),
