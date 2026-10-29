@@ -40,7 +40,9 @@
 // beyond the role's usual (games-weighted) standard error. Rare picks (off-role, niche)
 // rest on few games, mostly from players who specialize in them, so their estimates are
 // both noisy and flattering; this lowers them in proportion, and less and less as their
-// games add up. Champions never seen in a role are not recommended.
+// games add up. Champions never seen in a role, or picked there by less than
+// MIN_PICK_RATE of teams (off-meta), are not recommended; they can still be hovered and
+// scored.
 //
 // The look-ahead terms (the rest of the draft, the enemy's answers) add up many pair
 // weights; for a champion with few games in the role each of them is noisy. They count
@@ -88,6 +90,7 @@
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
   const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
+  const MIN_PICK_RATE = 0.005; // share of teams picking it in the role, to be recommended
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
   const ANSWER_MIN_GAMES = 20; // enemy answers considered when looking ahead
@@ -518,7 +521,8 @@
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
       const entry = ix.champ.get(`${championId}:${r}`);
-      if (!entry) continue; // never seen in this role (see above)
+      // Never seen in this role, or off-meta there: not recommended (see above)
+      if (!entry || (ix.matches && entry.games / (2 * ix.matches) < MIN_PICK_RATE)) continue;
       const rest = ix.matches ? restFor(r) : null;
       const typ = typical(ix, r, allies, enemies, rest, unavailable);
       const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);

@@ -262,10 +262,15 @@ test('uncertain strength counts less: a rare pick scores below an equally strong
     ...model, matches: 10000,
     champ: { ...model.champ, '1:0': [0.15, 900, 0.95, 0.02], '2:0': [0, 900, 0.95, 0.02], '8:0': [0.15, 30, 0.9, 0.15] },
   };
-  const rec = recommend({ model: m, role: 'top', limit: 20 });
-  const score = (id) => rec.find((x) => x.championId === id).score;
+  const score = (id, mm = m) => evaluate({ model: mm, championId: id, role: 'top' }).score;
   assert.ok(score(8) < score(1), `${score(8)} < ${score(1)}`);
-  // No filter: it is still listed, just lower; and the penalty fades as the error shrinks
+  // The penalty fades as the error shrinks
   const surer = { ...m, champ: { ...m.champ, '8:0': [0.15, 300, 0.9, 0.05] } };
-  assert.ok(recommend({ model: surer, role: 'top', limit: 20 }).find((x) => x.championId === 8).score > score(8));
+  assert.ok(score(8, surer) > score(8));
+});
+
+test('off-meta picks (picked by under 0.5% of teams in the role) are not recommended, but still scored', () => {
+  const m = { ...model, matches: 10000, champ: { ...model.champ, '8:0': [0.5, 60, 0.9, 0.02] } };
+  assert.ok(!recommend({ model: m, role: 'top', limit: 20 }).some((x) => x.championId === 8));
+  assert.ok(evaluate({ model: m, championId: 8, role: 'top' }).score > 0);
 });
