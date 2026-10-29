@@ -72,18 +72,22 @@ class AppCore extends EventEmitter {
   }
 
   // The collector uploads a new model after each training. Take it when it appears, but
-  // never during champ select: scores stay the same for the whole draft.
+  // never during champ select: scores stay the same for the whole draft. When champ
+  // select starts the newest model is taken right away (atDraftStart), so everyone in the
+  // lobby, who all enter at the same moment, scores the draft with the same model.
   #watchModel() {
     clearInterval(this._modelTimer);
     this._modelTimer = setInterval(() => this.refreshModel().catch((err) => this.log.error('[model]', err.message)), MODEL_CHECK_MS);
     this._modelTimer.unref?.();
   }
-  async refreshModel() {
-    if (this.state.draft || !this.data.latestModelId) return false;
+  async refreshModel({ atDraftStart = null } = {}) {
+    // Between drafts, or at the very start of the draft with this game id
+    const allowed = () => (atDraftStart === null ? !this.state.draft : this.state.draft?.gameId === atDraftStart);
+    if (!allowed() || !this.data.latestModelId) return false;
     const id = await this.data.latestModelId();
     if (id === null || id === this.state.model?.snapshotId) return false;
     const model = await this.data.loadModel();
-    if (!model || this.state.draft) return false;
+    if (!model || !allowed()) return false;
     this.#emit({ model });
     this.log.info?.('model', `updated to snapshot ${model.snapshotId}`);
     return true;
@@ -202,6 +206,7 @@ class AppCore extends EventEmitter {
     this.#emit(isNew ? { draft, pickable: null } : { draft });
     if (isNew) {
       this.#loadPickable(draft.gameId);
+      this.refreshModel({ atDraftStart: draft.gameId }).catch((err) => this.log.error('[model]', err.message));
       const mine = (raw.actions || []).flat().filter((a) => a.actorCellId === draft.localCellId);
       this.log.info?.('champ select', JSON.stringify({
         gameId: draft.gameId, localCellId: draft.localCellId, myPickActionId: draft.myPickActionId,

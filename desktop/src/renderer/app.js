@@ -114,7 +114,8 @@ api.onUpdate((u) => {
 
 async function boot() {
   const init = await run(api.init());
-  if (init.version) document.getElementById('ver').textContent = `v${init.version}`;
+  appVersion = init.version || '';
+  renderVersion();
   api.getUpdate().then((res) => {
     if (res.ok && res.data) {
       updateState = res.data;
@@ -152,14 +153,24 @@ function decideScreen() {
   render();
 }
 
+// App version and the model in use, so teammates can check they score with the same one
+let appVersion = '';
+function renderVersion() {
+  const id = S?.model?.snapshotId;
+  const el = document.getElementById('ver');
+  el.textContent = [appVersion && `v${appVersion}`, id && `model ${id}`].filter(Boolean).join(' · ');
+  el.title = id ? `Scores come from model ${id}, trained on ${S.model.matches || '?'} matches` : '';
+}
+
 api.onState((partial) => {
   if (!S) S = {};
   Object.assign(S, partial);
   if (screen === 'main' && 'me' in partial && !partial.me?.team_id) return decideScreen();
   renderStatus();
+  if ('model' in partial) renderVersion();
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
-  if (tab === 'draft' && ('draft' in partial || 'pools' in partial || 'lcu' in partial || 'members' in partial)) renderMain();
+  if (tab === 'draft' && ('draft' in partial || 'pools' in partial || 'lcu' in partial || 'members' in partial || 'model' in partial)) renderMain();
   if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial)) renderMain();
   if (tab === 'pool' && 'pools' in partial) renderPoolList();
 });

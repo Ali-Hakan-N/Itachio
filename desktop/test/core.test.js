@@ -210,3 +210,25 @@ test('model: a newer model is taken between drafts, never during one', async () 
   assert.equal(await core.refreshModel(), true);
   assert.equal(core.state.model.snapshotId, 2);
 });
+
+test('model: the newest model is taken when champ select starts, then kept for the draft', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  lcu.get = async () => null;
+  const data = fakeData();
+  let latest = 1;
+  data.loadModel = async () => ({ snapshotId: latest, champ: {} });
+  data.latestModelId = async () => latest;
+  const core = new AppCore({ lcu, data, log: { error: () => {}, info: () => {} } });
+  await core.loadUserData();
+  core.clearUserData();
+  latest = 2; // uploaded just before the draft
+  const { buildSession } = require('./mock-lcu');
+  const updated = new Promise((r) => core.on('update', (p) => p.model && r()));
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(1), eventType: 'Update' });
+  await updated;
+  assert.equal(core.state.model.snapshotId, 2);
+  latest = 3; // uploaded during the draft: not taken
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(2), eventType: 'Update' });
+  assert.equal(await core.refreshModel(), false);
+  assert.equal(core.state.model.snapshotId, 2);
+});
