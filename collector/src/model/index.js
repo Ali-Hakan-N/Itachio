@@ -78,7 +78,8 @@ function loadMatches(patch) {
  *          evidence from a pair layer that was not proven as a whole (empty once it is)
  *   synE/vsE: [[a, ra, b, rb, weight]] pairs through the early game layer (model/early.js),
  *          when it was kept: added to syn/vs (same sign rules)
- *   early: { matches, kept, accuracy of the early state alone, kappa } or null
+ *   early: { matches, kept, accuracy of the early state alone, kappa } or null. When kept,
+ *          champion strength through the early game is already included in champ and off
  *   banRate: { "<champ>": share of matches it was banned in } (when enough matches have bans)
  * Layers the training left out are absent (no pair weights, no fm).
  */
@@ -140,9 +141,16 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
         matches: model.early.matches,
         kept: model.early.kept,
         accuracy: round(model.early.surrogate.accuracy, 4),
-        kappa: model.early.kappa ? { s: round(model.early.kappa.s, 4), v: round(model.early.kappa.v, 4) } : null,
+        kappa: model.early.kappa ? Object.fromEntries(Object.entries(model.early.kappa).map(([p, k]) => [p, round(k, 4)])) : null,
       }
     : null;
+  // Strength through the early game goes into the champion's own strength and the
+  // off-role term (which stays non-positive), so everything reading champ is consistent
+  for (const [key, w] of model.early?.pairs.c || []) {
+    const p = key.split(':');
+    if (p[0] === 'c' && champ[`${p[1]}:${p[2]}`]) champ[`${p[1]}:${p[2]}`][0] = round(champ[`${p[1]}:${p[2]}`][0] + w, 5);
+    else if (p[0] === 'o') off[Number(p[1])] = round(Math.min(0, off[Number(p[1])] + w), 5);
+  }
 
   // Scale: spread of champion strength (with the off-role term) among well-played picks
   const bases = [];

@@ -19,13 +19,17 @@
 //      (champion strength, off-role, same-team pairs, enemy pairs in any roles). Each
 //      lane's advantage is mostly decided in that lane, so each regression sees little
 //      noise from the rest of the map. The penalty of each is chosen on held-out matches.
-//   4. Draft features for the win model: the pair part of the predicted early advantage,
-//      synergy (same-team pairs) and matchups (enemy pairs) separately. Matches are
-//      cross-fitted: a match's features come from models that never saw it.
+//   4. Draft features for the win model: the predicted early advantage split into
+//      champion strength (with off-role), synergy (same-team pairs) and matchups (enemy
+//      pairs). Matches are cross-fitted: a match's features come from models that never
+//      saw it.
 //
-// The win model then learns how much of this early advantage turns into wins (one
-// weight each for synergy and matchups) and keeps the layer only if cross-validated win
-// predictions improve. The final result is always "does the team win".
+// The win model then learns how much of each part turns into wins (one weight each)
+// and keeps the layer only if cross-validated win predictions improve. The final result
+// is always "does the team win". The strength part matters most for champions with
+// few games: their win-only strength is shrunk to average, the early game says more.
+// The win model's own strength weights stay free, so late-game value (a champion that
+// loses lane but wins games) is still learned from results.
 
 // Entries of riot/parse.js laneOf()
 const LANE_FIELDS = ['laneCs10', 'jungleCs10', 'plates', 'earlyLead', 'laneLead', 'earlyTakedowns', 'soloKills'];
@@ -186,41 +190,36 @@ function ridge(D, rows, on, target, lambda, w0) {
   return { w, mean };
 }
 
-/** Predicted pair part of the early advantage of row r: [synergy, matchups] */
-function pairParts(D, r, ws, wv, isS, isV) {
-  let s = 0;
-  let v = 0;
+// Parts of the predicted early advantage, by the kind of draft column
+const PARTS = ['c', 's', 'v']; // strength (with off-role), synergy, matchups
+
+/** Predicted early advantage of row r split into PARTS; part[col] is the part's index or -1 */
+function parts(D, r, w, part) {
+  const out = [0, 0, 0];
   for (let j = D.rowPtr[r]; j < D.rowPtr[r + 1]; j++) {
     const c = D.cols[j];
-    if (isS[c]) s += D.vals[j] * ws[c];
-    else if (isV[c]) v += D.vals[j] * wv[c];
+    if (part[c] >= 0) out[part[c]] += D.vals[j] * w[c];
   }
-  return [s, v];
+  return out;
 }
 
 /**
  * Fits the surrogate and the per-component draft regressions on fitRows.
- * lambdas: one per component (chosen by tune()). Returns summed pair weights.
+ * lambdas: one per component (chosen by tune()). Returns the weights summed over components.
  */
-function fitEarly(D, S, rows, on, lambdas, warm) {
+function fitEarly(D, S, rows, on, lambdas) {
   const sur = fitSurrogate(S, D.y, rows);
   const A = Array.from({ length: COMPONENTS }, () => new Float64Array(D.y.length));
   for (const r of rows) {
     const a = components(sur.beta, S[r]);
     for (let k = 0; k < COMPONENTS; k++) A[k][r] = a[k];
   }
-  const ws = new Float64Array(D.keys.length);
-  const wv = new Float64Array(D.keys.length);
-  const fits = [];
+  const w = new Float64Array(D.keys.length);
   for (let k = 0; k < COMPONENTS; k++) {
-    const f = ridge(D, rows, on, A[k], lambdas[k], warm?.[k]);
-    fits.push(f.w);
-    for (let i = 0; i < D.keys.length; i++) {
-      ws[i] += f.w[i];
-      wv[i] += f.w[i];
-    }
+    const f = ridge(D, rows, on, A[k], lambdas[k]);
+    for (let i = 0; i < D.keys.length; i++) w[i] += f.w[i];
   }
-  return { sur, ws, wv, fits };
+  return { sur, w };
 }
 
 /** Penalty per component, chosen by squared error on held-out matches */
@@ -278,8 +277,8 @@ function surrogateQuality(D, S, rows, folds) {
  * @param matches compact matches, same order as D's rows
  * @param codes   group name -> code in D.groups (train.js GROUP_CODE)
  * @returns null when fewer than minMatches have early data, otherwise
- *   { matches, surrogate, lambdas, features: { s: Float64Array, v: Float64Array } per row,
- *     weights: { s, v } per column (early log-odds per pair, from all early matches) }
+ *   { matches, surrogate, lambdas, features: { c, s, v } (Float64Array per row),
+ *     weights: { c, s, v } per column (early log-odds, from all early matches) }
  */
 function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
   const S = matches.map(earlyState);
@@ -290,13 +289,13 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
     return null;
   }
   const on = new Uint8Array(D.keys.length);
-  const isS = new Uint8Array(D.keys.length);
-  const isV = new Uint8Array(D.keys.length);
+  const part = new Int8Array(D.keys.length).fill(-1);
   for (let i = 0; i < D.keys.length; i++) {
     const g = D.groups[i];
     if (DRAFT_GROUPS.some((name) => codes[name] === g)) on[i] = 1;
-    if (g === codes.s) isS[i] = 1;
-    if (g === codes.v) isV[i] = 1;
+    if (g === codes.c || g === codes.o) part[i] = 0;
+    else if (g === codes.s) part[i] = 1;
+    else if (g === codes.v) part[i] = 2;
   }
 
   const surrogate = surrogateQuality(D, S, rows, folds);
@@ -305,29 +304,28 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
   const lambdas = tune(D, S, rows.filter((r) => D.fold[r] !== 0), rows.filter((r) => D.fold[r] === 0), on, log);
 
   // Cross-fitting: early matches get features from models that did not see them
-  const fs = new Float64Array(D.y.length);
-  const fv = new Float64Array(D.y.length);
+  const feat = PARTS.map(() => new Float64Array(D.y.length));
+  const put = (r, w) => parts(D, r, w, part).forEach((v, p) => (feat[p][r] = v));
   for (let f = 0; f < folds; f++) {
     const train = rows.filter((r) => D.fold[r] !== f);
     const test = rows.filter((r) => D.fold[r] === f);
     if (!test.length) continue;
     const fit = fitEarly(D, S, train, on, lambdas);
-    for (const r of test) [fs[r], fv[r]] = pairParts(D, r, fit.ws, fit.wv, isS, isV);
+    for (const r of test) put(r, fit.w);
   }
   // Everything else (matches without early data) from the model on all early matches
   const full = fitEarly(D, S, rows, on, lambdas);
   const hasEarly = new Uint8Array(D.y.length);
   for (const r of rows) hasEarly[r] = 1;
-  for (let r = 0; r < D.y.length; r++) if (!hasEarly[r]) [fs[r], fv[r]] = pairParts(D, r, full.ws, full.wv, isS, isV);
+  for (let r = 0; r < D.y.length; r++) if (!hasEarly[r]) put(r, full.w);
 
-  const ws = Float64Array.from(full.ws, (v, i) => (isS[i] ? v : 0));
-  const wv = Float64Array.from(full.wv, (v, i) => (isV[i] ? v : 0));
+  const only = (p) => Float64Array.from(full.w, (v, i) => (part[i] === p ? v : 0));
   return {
     matches: rows.length,
     surrogate: { ...surrogate, beta: Array.from(full.sur.beta) },
     lambdas,
-    features: { s: fs, v: fv },
-    weights: { s: ws, v: wv },
+    features: { c: feat[0], s: feat[1], v: feat[2] },
+    weights: { c: only(0), s: only(1), v: only(2) },
   };
 }
 

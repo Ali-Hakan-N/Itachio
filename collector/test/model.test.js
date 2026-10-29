@@ -194,7 +194,7 @@ test('early game layer: pairs that matter through the lanes are learned and kept
   // The planted pairs are the strongest ones
   const top = [...data.vsE].sort((x, y) => Math.abs(y[4]) - Math.abs(x[4])).slice(0, 2).map((x) => x.slice(0, 4).join(':'));
   assert.deepEqual(top.sort(), ['2:2:3:1', '4:3:5:3']);
-  assert.ok(data.early.kept && data.early.kappa.v > 0);
+  assert.ok(data.early.kept && data.early.kappa.v > 0 && 'c' in data.early.kappa);
 });
 
 test('early game layer is skipped without enough early data', () => {

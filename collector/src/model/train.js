@@ -1,9 +1,10 @@
 // Win model for "does blue win", trained on single matches and built up in layers:
 //
 //   strength       champion strength per role + learned off-role term
-//   early game     what the draft's pairs do to the first minutes (lanes and first
-//                  objectives), learned by early.js from far less noisy signals, as two
-//                  features; the win model learns how much of it turns into wins
+//   early game     what the draft does to the first minutes (lanes and first
+//                  objectives), learned by early.js from far less noisy signals, as three
+//                  features (strength, synergy, matchups); the win model learns how much
+//                  of each turns into wins
 //   synergy        a weight for every same-team pair (champion:role × champion:role)
 //                  and for every class pair (Mage + Tank ...)
 //   matchup        a weight for every enemy pair, and for class against class
@@ -43,11 +44,12 @@ const LAYERS = [
   { name: 'matchup', groups: ['v', 'tv'], tune: 'v', grid: [10, 30, 100, 300, 1000, 3000], adaptive: true },
   { name: 'latent pairs', fm: true, grid: [3, 30, 300] },
 ];
-// Two weights (synergy and matchup part of the predicted early advantage); used when
-// enough matches have early data
+// Three weights (strength, synergy and matchup part of the predicted early advantage);
+// used when enough matches have early data
 const EARLY_LAYER = { name: 'early game', groups: ['e'], tune: 'e', grid: [0.3, 3, 30] };
 const EARLY_MIN_MATCHES = 3000;
-const EARLY_KEYS = ['e:s', 'e:v'];
+const EARLY_PARTS = ['c', 's', 'v'];
+const EARLY_KEYS = EARLY_PARTS.map((p) => `e:${p}`);
 const FIXED_TAU = { o: 1, ts: 10, tv: 10 };
 const ADAPTIVE_RANGE = [0.02, 10]; // how far adaptive shrinkage may move a weight's penalty
 const ADAPTIVE_ROUNDS = 3; // reweighting passes, close to a sparse (L1-like) prior
@@ -475,7 +477,7 @@ function train(matches, ctx, options = {}) {
   const early = o.early === false
     ? null
     : earlyModel(D, matches, { folds: o.folds, minMatches: o.earlyMinMatches ?? EARLY_MIN_MATCHES, codes: GROUP_CODE, log });
-  if (early) appendColumns(D, EARLY_KEYS, [early.features.s, early.features.v], 'e');
+  if (early) appendColumns(D, EARLY_KEYS, EARLY_PARTS.map((p) => early.features[p]), 'e');
   const plan = early ? [LAYERS[0], EARLY_LAYER, ...LAYERS.slice(1)] : LAYERS;
   o.rows = rows;
   // Settings are compared on two validation splits, averaged, so the choice depends less on luck
@@ -591,20 +593,23 @@ function train(matches, ctx, options = {}) {
 }
 
 /**
- * Early game layer in win terms. When it was kept, every pair's early weight times the
- * win model's weight for that part: what the pair is worth in log-odds of winning
- * through the early game. Returns null without early data.
+ * Early game layer in win terms. When it was kept, every column's early weight times the
+ * win model's weight for that part: what a champion (c, o) or a pair (s, v) is worth in
+ * log-odds of winning through the early game. Returns null without early data.
  */
 function earlyResult(D, early, cfg, params, se) {
   if (!early) return null;
-  const out = { matches: early.matches, surrogate: early.surrogate, lambdas: early.lambdas, kept: cfg.groups.has('e'), pairs: { s: [], v: [] } };
+  const out = { matches: early.matches, surrogate: early.surrogate, lambdas: early.lambdas, kept: cfg.groups.has('e'), pairs: { c: [], s: [], v: [] } };
   if (!out.kept) return out;
-  const [is, iv] = EARLY_KEYS.map((k) => D.keys.indexOf(k));
-  out.kappa = { s: params.w[is], v: params.w[iv], seS: se[is], seV: se[iv] };
-  for (const [g, kappa] of [['s', out.kappa.s], ['v', out.kappa.v]]) {
-    const w = early.weights[g];
-    for (let i = 0; i < w.length; i++) if (w[i]) out.pairs[g].push([D.keys[i], kappa * w[i]]);
-  }
+  out.kappa = {};
+  out.kappaSe = {};
+  EARLY_PARTS.forEach((p, n) => {
+    const col = D.keys.indexOf(EARLY_KEYS[n]);
+    out.kappa[p] = params.w[col];
+    out.kappaSe[p] = se[col];
+    const w = early.weights[p];
+    for (let i = 0; i < w.length; i++) if (w[i]) out.pairs[p].push([D.keys[i], out.kappa[p] * w[i]]);
+  });
   return out;
 }
 

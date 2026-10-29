@@ -1,11 +1,11 @@
 // Automatic updates from GitHub Releases (electron-updater).
-// On launch (and every few hours) it checks for a newer version and downloads it
+// On launch (and every 15 minutes) it checks for a newer version and downloads it
 // quietly in the background. When the download is done the UI shows an Update button;
 // the app restarts only when the player clicks it, or installs when the app is closed.
 
 const { app } = require('electron');
 
-const CHECK_EVERY_MS = 4 * 60 * 60 * 1000;
+const CHECK_EVERY_MS = 15 * 60 * 1000; // a new release shows up within 15 minutes
 
 function setupUpdater({ log, send }) {
   let current = { state: 'idle', version: null, percent: 0 };
