@@ -74,8 +74,6 @@ function loadMatches(patch) {
  *   ts/tv: { "<classA>:<classB>": weight }   classes sorted; tv is classA against classB
  *   fm:    { k, S, P, Q: { "<champ>:<role>": vector } } latent pairs, when that layer was kept:
  *          synergy <S_a, S_b>, a against b <P_a, Q_b> - <P_b, Q_a>
- *   synT/vsT: [[a, ra, b, rb, weight, se, games]] temporary pairs: single pairs with clear
- *          evidence from a pair layer that was not proven as a whole (empty once it is)
  *   synE/vsE: [[a, ra, b, rb, weight]] pairs through the early game layer (model/early.js),
  *          when it was kept: added to syn/vs (same sign rules)
  *   early: { matches, kept, accuracy of the early state alone, kappa } or null. When kept,
@@ -123,13 +121,6 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
       for (const name of ['S', 'P', 'Q']) fm[name][key] = Array.from(model.fm[name].subarray(e * k, e * k + k), (v) => round(v, 4));
     });
   }
-  const temporary = (list) =>
-    (list || []).map(([key, w, s, n]) => {
-      const p = key.split(':').slice(1).map(Number);
-      return [...p, round(w, 5), round(s, 5), n];
-    });
-  const synT = temporary(model.provisional?.s);
-  const vsT = temporary(model.provisional?.v);
   const throughEarly = (list) =>
     (list || [])
       .filter(([, w]) => Math.abs(w) >= PRUNE)
@@ -183,8 +174,6 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
     champ,
     syn,
     vs,
-    synT,
-    vsT,
     synE,
     vsE,
     early,
@@ -223,7 +212,7 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
       .sort((a, b) => b.score - a.score)
       .slice(0, 5);
   });
-  // Strongest temporary pairs, readable: "Ahri middle + Vi jungle", "Lissandra middle vs Zed middle"
+  // Strongest early game pairs, readable: "Ahri middle + Vi jungle", "Lissandra middle vs Zed middle"
   // (a positive matchup weight favors the first champion)
   const pairs = (list, sep) =>
     [...(list || [])]
@@ -248,7 +237,6 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
     pointsPerLogit: data.pointsPerLogit,
     weights: { synergy: data.syn.length, matchup: data.vs.length, latent: data.fm ? Object.keys(data.fm.S).length : 0 },
     topByRole: top,
-    temporary: { synergy: pairs(data.synT, ' + '), matchup: pairs(data.vsT, ' vs ') },
     early: data.early && {
       ...data.early,
       synergy: pairs(data.synE, ' + '),
@@ -260,7 +248,7 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
   } catch {
     /* the report is optional */
   }
-  log(`model: ${m.matches} matches, ${seconds}s · kept: ${m.layers.filter((l) => l.accepted).map((l) => l.name).join(', ')}`);
+  log(`model: ${m.matches} matches, ${seconds}s · proven: ${m.layers.filter((l) => l.proven ?? true).map((l) => l.name).join(', ')}`);
   for (const role of ROLES) log(`model: top ${role.padEnd(7)} ${top[role].map((t) => `${t.champion} ${t.score}`).join(', ') || '(not enough games yet)'}`);
 }
 
@@ -384,7 +372,7 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const ids = check(await client.from('model_snapshots').select('id').order('id', { ascending: false }));
   const old = ids.slice(KEEP_SNAPSHOTS).map((r) => r.id);
   if (old.length) check(await client.from('model_snapshots').delete().in('id', old));
-  log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights, temporary ${data.synT.length} + ${data.vsT.length}, early game ${data.synE.length} + ${data.vsE.length})`);
+  log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights, early game ${data.synE.length} + ${data.vsE.length})`);
   return m;
 }
 

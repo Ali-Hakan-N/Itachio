@@ -16,9 +16,7 @@
 // is tuned on held-out matches, so with little data its weights stay small and they grow
 // as matches come in. Each layer's 5-fold cross-validated gain over the model without it
 // is still measured and logged (paired over matches); "proven" means more than
-// PROVEN_SE standard errors. With options.acceptSe a layer is kept only above that many
-// standard errors instead; single pairs of a layer left out that way pass their own test
-// and are exported separately as temporary pairs (provisionalPairs).
+// PROVEN_SE standard errors.
 //
 // Regularization is set in pseudo-games (tau): a weight needs about tau matches of
 // evidence before it moves freely, so it shrinks less as data grows (the penalty per
@@ -31,8 +29,8 @@
 // fitted on all matches, and each explicit weight gets an approximate standard error
 // (Laplace).
 //
-// train() returns { keys, w, bias, lambdas, metrics } like before, plus se, groups, fm,
-// provisional and early.
+// train() returns { keys, w, bias, lambdas, metrics } like before, plus se, groups, fm
+// and early.
 
 const { features, groupOf } = require('./features');
 const { earlyModel } = require('./early');
@@ -60,17 +58,6 @@ const ADAPTIVE_ROUNDS = 3; // reweighting passes, close to a sparse (L1-like) pr
 const NON_POSITIVE = new Set(['o']);
 const DEFAULTS = { folds: 5, latentDim: 6, tuneIters: 200, finalIters: 500, maxTuneRows: 60000, lr: 0.05 };
 const PROVEN_SE = 2;
-// Temporary pairs: while a pair layer is not proven as a whole, single pairs are still
-// tested one by one against the chosen model's cross-validated predictions (score test:
-// does this pair win more than the model expects?). Thousands of pairs are tested, so
-// selection controls the false discovery rate (Benjamini-Hochberg at PAIR_FDR): of the
-// pairs kept, at most about that share are chance. Their weight is the one-step
-// estimate shrunk by PAIR_PRIOR (in units of p(1-p), about 4 games each). They are
-// exported separately and no longer produced once the layer is proven.
-const PAIR_FDR = 0.1;
-const PAIR_MIN_GAMES = 30;
-const PAIR_PRIOR = 25;
-const PAIR_GROUPS = { synergy: 's', matchup: 'v' };
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const clampP = (p) => Math.min(Math.max(p, 1e-9), 1 - 1e-9);
@@ -525,19 +512,15 @@ function train(matches, ctx, options = {}) {
   layers.push({ name: 'strength', ...summary(D, rows, zCurrent), ...vsBase, accepted: true });
   log(`model: strength      gain ${(vsBase.improvement * 1000).toFixed(2)} ± ${(vsBase.se * 1000).toFixed(2)} ×1e-3 over always-50%`);
 
-  const rejected = [];
   for (const layer of plan.slice(1)) {
     const candidate = tuneLayer(current, layer);
     const zCand = outOfFold(D, candidate, o);
     const c = compare(D, rows, zCurrent, zCand);
     const proven = c.improvement > PROVEN_SE * c.se;
-    const accepted = o.acceptSe === undefined || c.improvement > o.acceptSe * c.se;
-    layers.push({ name: layer.name, ...summary(D, rows, zCand), ...c, accepted, proven });
-    log(`model: ${layer.name.padEnd(13)} gain ${(c.improvement * 1000).toFixed(2)} ± ${(c.se * 1000).toFixed(2)} ×1e-3 → ${!accepted ? 'left out' : proven ? 'kept (proven)' : 'kept (not proven yet)'}`);
-    if (accepted) {
-      current = candidate;
-      zCurrent = zCand;
-    } else if (PAIR_GROUPS[layer.name]) rejected.push({ layer, candidate });
+    layers.push({ name: layer.name, ...summary(D, rows, zCand), ...c, accepted: true, proven });
+    log(`model: ${layer.name.padEnd(13)} gain ${(c.improvement * 1000).toFixed(2)} ± ${(c.se * 1000).toFixed(2)} ×1e-3 → ${proven ? 'proven' : 'not proven yet'}`);
+    current = candidate;
+    zCurrent = zCand;
   }
 
   const cv = summary(D, rows, zCurrent);
@@ -559,7 +542,6 @@ function train(matches, ctx, options = {}) {
   }
 
   const earlyOut = earlyResult(D, early, current, params, se, log);
-  const provisional = provisionalPairs(D, rows, Float64Array.from(zCurrent, (z) => cal.a * z + cal.b), rejected, log);
 
   const n = rows.length;
   const accuracyCI = 1.96 * Math.sqrt((cv.accuracy * (1 - cv.accuracy)) / n);
@@ -590,7 +572,6 @@ function train(matches, ctx, options = {}) {
     se,
     groups: [...current.groups],
     fm,
-    provisional,
     early: earlyOut,
   };
 }
@@ -615,58 +596,6 @@ function earlyResult(D, early, cfg, params, se, log) {
   });
   const k = (p) => `${out.kappa[p].toFixed(3)} ± ${out.kappaSe[p].toFixed(3)}`;
   log(`model: early game    turns into wins: strength ${k('c')}, synergy ${k('s')}, matchups ${k('v')}`);
-  return out;
-}
-
-// Complementary error function (Numerical Recipes, error below 1.2e-7), x >= 0.
-// The two-sided normal p-value of z is erfc(z / sqrt 2).
-function erfc(x) {
-  const t = 1 / (1 + 0.5 * x);
-  return t * Math.exp(-x * x - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 +
-    t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
-}
-
-/**
- * Score test of every pair of the unproven pair layers against the model's
- * cross-validated logits z, with Benjamini-Hochberg selection.
- * Returns { s: [[key, w, se, games]], v: [...] }, empty lists for proven layers.
- */
-function provisionalPairs(D, rows, z, rejected, log) {
-  const out = { s: [], v: [] };
-  if (!rejected.length) return out;
-  const m = D.keys.length;
-  const score = new Float64Array(m);
-  const info = new Float64Array(m);
-  const games = new Uint32Array(m);
-  for (const r of rows) {
-    const p = sigmoid(z[r]);
-    const resid = D.y[r] - p;
-    const v = p * (1 - p);
-    for (let j = D.rowPtr[r]; j < D.rowPtr[r + 1]; j++) {
-      const c = D.cols[j];
-      score[c] += D.vals[j] * resid;
-      info[c] += D.vals[j] * D.vals[j] * v;
-      games[c]++;
-    }
-  }
-  for (const { layer } of rejected) {
-    const g = PAIR_GROUPS[layer.name];
-    const code = GROUP_CODE[g];
-    const tested = [];
-    for (let i = 0; i < m; i++) {
-      if (D.groups[i] !== code || games[i] < PAIR_MIN_GAMES || !info[i]) continue;
-      tested.push({ i, p: erfc(Math.abs(score[i]) / Math.sqrt(info[i]) / Math.SQRT2) });
-    }
-    tested.sort((a, b) => a.p - b.p);
-    let keep = 0;
-    tested.forEach((t, rank) => {
-      if (t.p <= (PAIR_FDR * (rank + 1)) / tested.length) keep = rank + 1;
-    });
-    for (const { i } of tested.slice(0, keep)) {
-      out[g].push([D.keys[i], score[i] / (info[i] + PAIR_PRIOR), 1 / Math.sqrt(info[i] + PAIR_PRIOR), games[i]]);
-    }
-    log(`model: ${layer.name.padEnd(13)} temporary: ${keep} of ${tested.length} pairs with ${PAIR_MIN_GAMES}+ games pass (false discovery rate ${PAIR_FDR * 100}%)`);
-  }
   return out;
 }
 

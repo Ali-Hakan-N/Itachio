@@ -34,7 +34,7 @@ Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), b
 
 **No recommendations show up.** Champion stats are refreshed once a day. If it's a brand new patch, give it a day.
 
-**How do I update?** New versions download in the background. When one is ready, a blinking **Update** button shows at the top right; click it to restart into the new version. Closing the app installs it too.
+**How do I update?** Updates are automatic. When you open the app it installs a new version by itself and restarts. If one comes out while the app is open, a blinking **Update** button shows at the top right; click it to restart into the new version, or just close the app and it installs then.
 
 **Is this allowed?** Flex Drafter only reads champ select and sets a hover when you click. It never locks in or plays for you.
 

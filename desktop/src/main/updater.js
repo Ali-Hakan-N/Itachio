@@ -1,7 +1,9 @@
 // Automatic updates from GitHub Releases (electron-updater).
 // On launch (and every 15 minutes) it checks for a newer version and downloads it
-// quietly in the background. When the download is done the UI shows an Update button;
-// the app restarts only when the player clicks it, or installs when the app is closed.
+// quietly in the background. An update found at launch installs right away: the app
+// was just opened, so restarting into the new version costs nothing. One found while
+// the app is in use shows an Update button instead; the app restarts only when the
+// player clicks it, or installs when the app is closed.
 
 const { app } = require('electron');
 
@@ -28,29 +30,41 @@ function setupUpdater({ log, send }) {
     debug: () => {},
   };
 
+  let atLaunch = true; // the first check, right after the app opened
   autoUpdater.on('checking-for-update', () => set({ state: 'checking' }));
-  autoUpdater.on('update-not-available', () => set({ state: 'idle' }));
+  autoUpdater.on('update-not-available', () => {
+    atLaunch = false;
+    set({ state: 'idle' });
+  });
   autoUpdater.on('update-available', (info) => set({ state: 'downloading', version: info.version, percent: 0 }));
   autoUpdater.on('download-progress', (p) => set({ state: 'downloading', percent: Math.round(p.percent) }));
   autoUpdater.on('error', (err) => {
     log.error('updater', err);
+    atLaunch = false;
     // A failed check or download must not get in the way of using the app
     set({ state: current.state === 'ready' ? 'ready' : 'idle' });
   });
-  autoUpdater.on('update-downloaded', (info) => set({ state: 'ready', version: info.version, percent: 100 }));
+  const install = () => {
+    set({ state: 'installing' });
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 1500);
+  };
+  autoUpdater.on('update-downloaded', (info) => {
+    set({ state: 'ready', version: info.version, percent: 100 });
+    if (atLaunch) install();
+  });
 
   const check = () => autoUpdater.checkForUpdates().catch((err) => log.error('updater', err));
   check();
   setInterval(() => {
-    if (current.state === 'idle') check();
+    if (current.state !== 'idle') return;
+    atLaunch = false;
+    check();
   }, CHECK_EVERY_MS);
 
   return {
     state: () => current,
     install: () => {
-      if (current.state !== 'ready') return;
-      set({ state: 'installing' });
-      setTimeout(() => autoUpdater.quitAndInstall(true, true), 300);
+      if (current.state === 'ready') install();
     },
   };
 }

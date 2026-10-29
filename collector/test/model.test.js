@@ -67,13 +67,13 @@ function synthetic(n, { pairs = true, seed = 7 } = {}) {
 }
 const FAST = { folds: 3, tuneIters: 120, finalIters: 250 };
 
-test('training keeps proven layers and finds the planted strength, synergy and matchup', () => {
+test('training proves the planted strength, synergy and matchup', () => {
   const matches = synthetic(6000);
   const { share, games } = roleShares(matches);
   const model = train(matches, { share, tagOf: () => 'None' }, FAST);
-  const kept = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l.accepted]));
-  assert.ok(kept.synergy, 'synergy layer kept');
-  assert.ok(kept.matchup, 'matchup layer kept');
+  const proven = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l.proven]));
+  assert.ok(proven.synergy, 'synergy layer proven');
+  assert.ok(proven.matchup, 'matchup layer proven');
   const w = new Map(model.keys.map((k, i) => [k, model.w[i]]));
   // Strength is only identified relative to the other champions of the role
   const strength = w.get('c:1:0') - (w.get('c:21:0') + w.get('c:22:0') + w.get('c:23:0')) / 3;
@@ -88,9 +88,6 @@ test('training keeps proven layers and finds the planted strength, synergy and m
   const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
   assert.ok(data.champ['1:0'][0] > 0.3 && data.champ['1:0'][3] > 0);
   assert.ok(data.vs.some(([a, ra, b, rb, wt]) => a === 4 && ra === 3 && b === 5 && rb === 3 && wt > 0.3));
-  // Proven layers produce no temporary pairs
-  assert.equal(data.synT.length, 0);
-  assert.equal(data.vsT.length, 0);
 });
 
 test('every layer is kept by default; noise pairs stay small', () => {
@@ -104,37 +101,6 @@ test('every layer is kept by default; noise pairs stay small', () => {
   const pairW = model.keys.map((k, i) => [k, model.w[i]]).filter(([k]) => k.startsWith('s:') || k.startsWith('v:'));
   const big = pairW.filter(([, w]) => Math.abs(w) > 0.15).length;
   assert.ok(big <= 0.02 * pairW.length, `${big} of ${pairW.length} noise pairs above 0.15`);
-});
-
-test('with acceptSe, pair layers of pure noise are left out', () => {
-  const matches = synthetic(6000, { pairs: false, seed: 11 });
-  const { share, games } = roleShares(matches);
-  const model = train(matches, { share, tagOf: () => 'None' }, { ...FAST, acceptSe: 2 });
-  const kept = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l.accepted]));
-  assert.equal(kept.synergy, false);
-  assert.equal(kept.matchup, false);
-  const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
-  assert.equal(data.syn.length, 0);
-  assert.equal(data.vs.length, 0);
-  // Temporary pairs: with only noise the false discovery control lets (almost) nothing through
-  assert.ok(data.synT.length + data.vsT.length <= 2, `temporary ${data.synT.length} + ${data.vsT.length}`);
-});
-
-test('temporary pairs: real pairs of a layer that is not proven still come through', () => {
-  const matches = synthetic(6000);
-  const { share, games } = roleShares(matches);
-  // Reject every pair layer on purpose
-  const model = train(matches, { share, tagOf: () => 'None' }, { ...FAST, acceptSe: 1e9 });
-  assert.ok(model.metrics.layers.slice(1).every((l) => !l.accepted));
-  const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
-  const find = (list, a, ra, b, rb) => list.find((x) => x[0] === a && x[1] === ra && x[2] === b && x[3] === rb);
-  const syn = find(data.synT, 2, 2, 3, 1);
-  const vs = find(data.vsT, 4, 3, 5, 3);
-  assert.ok(syn && syn[4] > 0.1, `synergy ${syn}`);
-  assert.ok(vs && vs[4] > 0.1, `matchup ${vs}`);
-  for (const [, , , , w, se, n] of [...data.synT, ...data.vsT]) assert.ok(se > 0 && n >= 30 && Number.isFinite(w));
-  // Few false pairs next to the planted ones
-  assert.ok(data.synT.length + data.vsT.length <= 6, `temporary ${data.synT.length} + ${data.vsT.length}`);
 });
 
 test('worker: trains in a background thread, and stops when asked', async () => {
@@ -195,8 +161,8 @@ test('early game layer: pairs that matter through the lanes are learned and kept
   const matches = syntheticEarly(5000);
   const { share, games } = roleShares(matches);
   const model = train(matches, { share, tagOf: () => 'None' }, { ...FAST, earlyMinMatches: 1000 });
-  const kept = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l.accepted]));
-  assert.ok(kept['early game'], 'early game layer kept');
+  const proven = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l.proven]));
+  assert.ok(proven['early game'], 'early game layer proven');
   assert.ok(model.early.surrogate.accuracy > 0.6, `surrogate ${model.early.surrogate.accuracy}`);
   const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
   const find = (list, a, ra, b, rb) => list.find((x) => x[0] === a && x[1] === ra && x[2] === b && x[3] === rb);

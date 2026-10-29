@@ -104,29 +104,22 @@ test('latent pairs add synergy and antisymmetric matchups', () => {
   assert.ok(c.score < d.score);
 });
 
-test('temporary pairs count with a capped effect', () => {
-  const plain = evaluate({ model, championId: 2, role: 'top', enemies: [{ championId: 6, position: 'middle' }] }).score;
-  const small = { ...model, vsT: [[2, 0, 6, 2, 0.01, 0.004, 400]] };
-  const huge = { ...model, vsT: [[2, 0, 6, 2, 5, 1, 400]], synT: [[2, 0, 4, 3, -5, 1, 400]] };
-  const withSmall = evaluate({ model: small, championId: 2, role: 'top', enemies: [{ championId: 6, position: 'middle' }] }).score;
-  assert.ok(withSmall > plain, `${withSmall} > ${plain}`);
-  // Seen from the other side the matchup flips
-  const other = evaluate({ model: small, championId: 6, role: 'middle', enemies: [{ championId: 2, position: 'top' }] }).score;
-  assert.ok(other < evaluate({ model, championId: 6, role: 'middle', enemies: [{ championId: 2, position: 'top' }] }).score);
-  // A huge temporary weight still moves the score by only a few points
-  const capped = evaluate({ model: huge, championId: 2, role: 'top', enemies: [{ championId: 6, position: 'middle' }] }).score;
-  assert.ok(capped - plain > 0 && capped - plain <= 10, `capped gain ${capped - plain}`);
-  const allyCapped = evaluate({ model: huge, championId: 2, role: 'top', allies: [{ championId: 4, position: 'bottom' }] }).score;
-  const allyPlain = evaluate({ model, championId: 2, role: 'top', allies: [{ championId: 4, position: 'bottom' }] }).score;
-  assert.ok(allyPlain - allyCapped > 0 && allyPlain - allyCapped <= 10, `capped loss ${allyPlain - allyCapped}`);
-  // Phased in by evidence: a pair at 1.5 standard errors has no effect, more evidence more effect
-  const at = (z) => evaluate({ model: { ...model, vsT: [[2, 0, 6, 2, 0.03, 0.03 / z, 400]] }, championId: 2, role: 'top', enemies: [{ championId: 6, position: 'middle' }] }).score;
-  assert.equal(at(1.5), plain);
-  assert.ok(at(2) > plain && at(2) < at(3) && at(3) === at(6), `${at(2)} ${at(3)} ${at(6)}`);
+test('early game pairs add to the learned pairs, in any roles', () => {
+  const ctx = { championId: 1, role: 'top', enemies: [{ championId: 6, position: 'middle' }] };
+  const plain = evaluate({ model, ...ctx }).score;
+  // 1 top is weak against 6 mid (-0.08); the early game says a bit less so (+0.03)
+  const both = evaluate({ model: { ...model, vsE: [[1, 0, 6, 2, 0.03]] }, ...ctx }).score;
+  assert.ok(both > plain);
+  // Seen from the other side it flips
+  const other = { championId: 6, role: 'middle', enemies: [{ championId: 1, position: 'top' }] };
+  assert.ok(evaluate({ model: { ...model, vsE: [[1, 0, 6, 2, 0.03]] }, ...other }).score < evaluate({ model, ...other }).score);
   // Not only lane opponents: a top laner against the enemy jungler counts too
-  const jungle = { ...model, champ: { ...model.champ, '7:1': [0, 900, 1] }, vsT: [[2, 0, 7, 1, 0.03, 0.005, 400]] };
+  const jungle = { ...model, champ: { ...model.champ, '7:1': [0, 900, 1] } };
   const vsJungle = (m) => evaluate({ model: m, championId: 2, role: 'top', enemies: [{ championId: 7, position: 'jungle' }] }).score;
-  assert.ok(vsJungle(jungle) > vsJungle({ ...jungle, vsT: [] }));
+  assert.ok(vsJungle({ ...jungle, vsE: [[2, 0, 7, 1, 0.05]] }) > vsJungle(jungle));
+  // Synergy too
+  const syn = (m) => evaluate({ model: m, championId: 2, role: 'top', allies: [{ championId: 5, position: 'utility' }] }).score;
+  assert.ok(syn({ ...model, synE: [[2, 0, 5, 4, 0.05]] }) > syn(model));
 });
 
 test('picks with few games in the role are marked unsure', () => {
