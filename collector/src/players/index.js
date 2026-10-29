@@ -2,9 +2,12 @@
 // Riot account is linked by the app), keeps them on this computer, and writes how each
 // player does on each champion (analyze.js) to player_champion_stats.
 //
-// Matches go to data/players/<hash of puuid>.jsonl, so each match is downloaded once;
-// later runs only fetch what is new. Up to MAX_GAMES of each player's newest games from
-// the last LOOKBACK_DAYS are used.
+// The account id the app reads from the League client is not the one the Riot API
+// uses, so the player is looked up by Riot ID (name#tag, also linked by the app). Their
+// server is the region whose match list has their games. Matches go to
+// data/players/<hash of the account>.jsonl, so each match is downloaded once; later runs
+// only fetch what is new. Up to MAX_GAMES of each player's newest games from the last
+// LOOKBACK_DAYS are used.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -21,6 +24,7 @@ const MAX_GAMES = 300;
 const LOOKBACK_DAYS = 365;
 const PAGE = 100;
 const ROLE = { TOP: 'top', JUNGLE: 'jungle', MIDDLE: 'middle', BOTTOM: 'bottom', UTILITY: 'utility' };
+const REGIONS = [...new Set(Object.values(PLATFORMS))];
 
 const fileFor = (puuid) => path.join(DIR, `${crypto.createHash('sha1').update(puuid).digest('hex').slice(0, 16)}.jsonl`);
 
@@ -53,15 +57,29 @@ function playerGame(raw, puuid) {
   return { id, start: parsed.start, q: parsed.queue, m, side: me.teamId === 100 ? 'b' : 'r', role };
 }
 
-/** Fetches new matches of one player into the cache; returns their games, newest MAX_GAMES */
-async function syncPlayer(api, puuid, log) {
-  const cache = loadCache(puuid);
-  const shard = await api.get('europe', `/riot/account/v1/active-shards/by-game/lol/by-puuid/${puuid}`);
-  const region = PLATFORMS[shard?.activeShard];
-  if (!region) {
-    log(`players: no server for an account (${shard?.activeShard || 'unknown'}), skipped`);
-    return [...cache.values()].filter((g) => !g.skip);
+/** The Riot API account (puuid) of a Riot ID "name#tag", and the region with their matches */
+async function resolveAccount(api, riotId) {
+  const [name, tag] = String(riotId || '').split('#');
+  if (!name || !tag) return null;
+  const account = await api.get('europe', `/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
+  if (!account?.puuid) return null;
+  for (const region of REGIONS) {
+    const ids = await api.get(region, `/lol/match/v5/matches/by-puuid/${account.puuid}/ids`, { count: 1 });
+    if (ids?.length) return { puuid: account.puuid, region };
   }
+  return { puuid: account.puuid, region: null };
+}
+
+/** Fetches new matches of one player into the cache; returns their games, newest MAX_GAMES */
+async function syncPlayer(api, riotId, log) {
+  const account = await resolveAccount(api, riotId);
+  if (!account) {
+    log('players: a Riot ID was not found, skipped');
+    return [];
+  }
+  const { puuid, region } = account;
+  const cache = loadCache(puuid);
+  if (!region) return [...cache.values()].filter((g) => !g.skip);
   const since = Math.floor((Date.now() - LOOKBACK_DAYS * 86_400_000) / 1000);
   const ids = [];
   for (const queue of QUEUES) {
@@ -96,13 +114,13 @@ function check({ data, error }) {
 async function updatePlayers({ client, api, log, data = null }) {
   const model = data || check(await client.from('model_snapshots').select('data').order('id', { ascending: false }).limit(1).maybeSingle())?.data;
   if (!model) return log('players: no model yet, skipped');
-  const players = check(await client.from('players').select('id,puuid').not('puuid', 'is', null).not('team_id', 'is', null));
+  const players = check(await client.from('players').select('id,riot_id').not('riot_id', 'is', null).not('team_id', 'is', null));
   if (!players.length) return log('players: no linked accounts');
 
   const byPlayer = new Map();
   for (const p of players) {
     try {
-      const games = await syncPlayer(api, p.puuid, log);
+      const games = await syncPlayer(api, p.riot_id, log);
       if (games.length) byPlayer.set(p.id, games);
     } catch (err) {
       if (err instanceof RiotKeyError) throw err;
