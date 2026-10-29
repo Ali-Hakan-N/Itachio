@@ -36,6 +36,26 @@ const FINAL_TRAIN_WAIT_MS = 3 * 60 * 60_000;
 // scripts/schedule-windows.ps1 -Stop creates this file: stop cleanly, like Ctrl+C
 const STOP_FILE = path.join(__dirname, '..', '..', 'data', 'stop');
 const STOP_CHECK_MS = 30_000;
+const DB_TRIES = 5;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Database calls can time out under load: retry with growing pauses instead of
+// stopping a region. Returns fallback() if every try fails.
+async function withRetry(what, fn, log, fallback) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= DB_TRIES) {
+        log(`${what} failed ${DB_TRIES} times (${err.message}); skipped`);
+        return fallback();
+      }
+      log(`${what} failed (${err.message}), retrying in ${10 * attempt}s`);
+      await sleep(10_000 * attempt);
+    }
+  }
+}
 
 module.exports = {
   name: 'riot',
@@ -107,12 +127,14 @@ module.exports = {
       since: Date.now() - lookbackDays * 86_400_000,
       maxPerRegion: dryRun ? DRY_RUN_MAX_PER_REGION : Number(env.RIOT_MAX_PER_REGION) || 0,
       diamondPages: dryRun ? 1 : Number(env.RIOT_DIAMOND_PAGES) || 5,
-      filterUnseen: (ids) => store.filterUnseen(client, ids),
+      // If the check fails, all ids go on: saving skips matches already counted
+      filterUnseen: (ids) => withRetry('checking matches', () => store.filterUnseen(client, ids), log, () => ids),
       ingest: dryRun
         ? async (m) => m.length
         : async (m) => {
-            const added = await store.ingest(client, m);
+            // Local copy first, so the model never loses matches to a database hiccup
             model.storeMatches(patch, m);
+            const added = await withRetry('saving matches', () => store.ingest(client, m), log, () => 0);
             maybeRescore();
             return added;
           },
