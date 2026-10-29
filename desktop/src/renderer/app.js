@@ -331,6 +331,8 @@ function enemyContext(d, exceptCell) {
 }
 
 // 50 is an average champion; 67 is one standard deviation above it, 80 two
+// Recommendations look ahead (model.js); a pick losing (or gaining) this many points to the enemy's answers is flagged
+const COUNTER_RISK_BADGE = 3;
 const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
 
 function recRow(r, i, { canHover, hoverId, rank }) {
@@ -346,6 +348,8 @@ function recRow(r, i, { canHover, hoverId, rank }) {
           <span class="tier t-${tier}">${tier}</span>
           ${r.offRole ? '<span class="badge warn">Off-role</span>' : ''}
           ${r.unsure && !r.offRole ? `<span class="badge" title="Rough estimate: ±${r.uncertainty} points">Low data</span>` : ''}
+          ${r.counterRisk >= COUNTER_RISK_BADGE ? `<span class="badge warn" title="Expected loss once the enemy answers this pick in the roles they have open">Counter risk −${r.counterRisk}</span>` : ''}
+          ${r.counterRisk <= -COUNTER_RISK_BADGE ? `<span class="badge good" title="Expected gain: what the enemy usually picks in their open roles does badly against it">Safe blind +${-r.counterRisk}</span>` : ''}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
       </span>
@@ -386,6 +390,9 @@ function slotScore(d, which, p, championId, sink) {
     championId,
     role: p.position || (p.isLocal ? S.me?.main_role || '' : ''),
     ...(isAlly ? draftContext(d, p.cellId) : enemyContext(d, p.cellId)),
+    // A hover on our side is scored like the recommendations: after the enemy's answers
+    lookAhead: isAlly && !p.locked,
+    unavailable: unavailable(d),
   });
   if (!ev) return '';
   sink.push(ev.score);
@@ -485,7 +492,10 @@ function renderDraft() {
   // The champion you are hovering, if it is not already in the list
   let hoverRow = '';
   if (local && !local.locked && local.hoverId && !recs.some((r) => r.championId === local.hoverId)) {
-    const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: local.hoverId, role, ...draftContext(d, local.cellId) });
+    const ev = Engine.evaluate({
+      stats: S.stats, model: S.model, championId: local.hoverId, role, ...draftContext(d, local.cellId),
+      lookAhead: true, unavailable: blocked,
+    });
     if (ev) {
       const row = { ...ev, inPool: myPool().some((p) => p.champion_id === local.hoverId) };
       hoverRow = `<h3 class="sub gap">Your hover</h3><div class="recs pinned">${recRow(row, 0, { canHover: false, hoverId: local.hoverId, rank: '•' })}</div>`;

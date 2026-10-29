@@ -331,6 +331,7 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .rec:not(:disabled) { cursor: pointer; }
 .rec.sending { opacity: 0.7; }
 .badge.warn, .slot-score small.warn { color: var(--warn); border-color: rgba(243, 182, 63, 0.45); }
+.badge.good { color: var(--cue); border-color: rgba(47, 211, 192, 0.45); }
 
 /* ---------- Colored scores ---------- */
 .sc { font-family: var(--display); font-weight: 700; }

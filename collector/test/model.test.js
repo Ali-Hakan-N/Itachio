@@ -195,3 +195,26 @@ test('bans are kept in compact matches and turned into ban rates', () => {
   assert.equal(rates[8], 0.6667);
   assert.equal(banRates(many.slice(0, 100)), null); // too few matches with bans
 });
+
+test('counterpick tendency: lambda is found when picks follow matchups, 0 when they do not', () => {
+  const { counterpickTendency } = require('../src/model/choice');
+  // Roles hold champions r*10+1..r*10+4. In top, 2 beats red's jungle 13 strongly.
+  const champ = {};
+  for (let r = 0; r < 5; r++) for (let k = 1; k <= 4; k++) champ[`${r * 10 + k}:${r}`] = [0, 500, 1];
+  const data = { matches: 1000, champ, vs: [[2, 0, 13, 1, 1]], tags: {} };
+  let s = 3;
+  const rand = () => ((s = (s * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const make = (counterpicks) =>
+    Array.from({ length: 3000 }, () => {
+      const pick = (r) => r * 10 + 1 + Math.floor(rand() * 4);
+      const b = [0, 1, 2, 3, 4].map(pick);
+      const r = [0, 1, 2, 3, 4].map(pick);
+      // When red's jungler is 13, blue top picks 2 most of the time
+      if (counterpicks && r[1] === 13 && rand() < 0.7) b[0] = 2;
+      return { b, r };
+    });
+  const tend = counterpickTendency(data, make(true));
+  assert.ok(tend.lambda > 0.5, `lambda ${tend.lambda}`);
+  const none = counterpickTendency(data, make(false));
+  assert.ok(none.lambda < 2 * none.se + 0.05, `lambda ${none.lambda} ± ${none.se}`);
+});

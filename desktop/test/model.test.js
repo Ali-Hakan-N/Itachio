@@ -158,3 +158,33 @@ test('bans: strong, often picked champions first; counters to our picks rise; op
   assert.ok(!recommendBans({ model: m, unavailable: new Set([10]) }).some((b) => b.championId === 10));
   assert.deepEqual(Engine.recommendBans({ model: null }), []);
 });
+
+test('look ahead: easy-to-counter picks score lower while the enemy can still answer', () => {
+  // 30 and 31: equally strong tops. 40 is an enemy top that beats 30 hard; 41 is neutral.
+  const m = {
+    ...model,
+    matches: 1000,
+    champ: {
+      ...model.champ,
+      '30:0': [0.1, 500, 1],
+      '31:0': [0.1, 500, 1],
+      '40:0': [0, 200, 1],
+      '41:0': [0, 600, 1],
+    },
+    vs: [[30, 0, 40, 0, -0.3]],
+  };
+  const rec = recommend({ model: m, role: 'top' });
+  const a = rec.find((x) => x.championId === 30);
+  const b = rec.find((x) => x.championId === 31);
+  assert.ok(b.score > a.score && a.counterRisk > 0, `${a.score} ${b.score} risk ${a.counterRisk}`);
+  // Once the enemy top is locked there is nothing left to answer with
+  const locked = recommend({ model: m, role: 'top', enemies: [{ championId: 41, position: 'top' }] });
+  assert.equal(locked.find((x) => x.championId === 30).counterRisk, 0);
+  // Players who counterpick more (higher lambda) make the counter more likely
+  const risk = (lambda) => recommend({ model: { ...m, counterpick: { lambda } }, role: 'top' }).find((x) => x.championId === 30).counterRisk;
+  assert.ok(risk(20) > risk(0));
+  // evaluate gives the same with lookAhead, the plain score without
+  const ev = evaluate({ model: m, championId: 30, role: 'top', lookAhead: true });
+  assert.equal(ev.score, a.score);
+  assert.equal(evaluate({ model: m, championId: 30, role: 'top' }).counterRisk, undefined);
+});

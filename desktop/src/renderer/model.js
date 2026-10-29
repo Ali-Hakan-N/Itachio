@@ -19,6 +19,16 @@
 // Order and strategy are the model's; only the presentation is stretched. The scale
 // is fixed per model, not per draft. Picks with few games in the data are marked unsure.
 //
+// Looking ahead: a pick is scored by what it is worth once the enemy has answered it.
+// For every role the enemy still has open, their pick there follows a choice model
+// learned from real matches (collector, counterpickTendency):
+//   P(enemy picks Y in role q) ∝ popularity(Y, q) × exp(λ × Y's matchups against our team)
+// λ says how much players pick against the champions they face (0: popularity only).
+// A candidate's score is then
+//   logit now − Σ open roles q  Σ_Y P(Y | q, with the candidate) × matchup(Y against candidate)
+// so champions that are easy to counter, or weak against what is usually picked, score
+// lower while picks are still open. When every enemy has locked in, nothing changes.
+//
 // Bans: banning a champion is worth what it would cost us if the enemy picked it,
 // times how likely they are to pick it:
 //   value = Σ over roles still open on the enemy team of
@@ -44,6 +54,7 @@
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
+  const ANSWER_MIN_GAMES = 20; // enemy answers considered when looking ahead
 
   const cache = new WeakMap();
   function index(model) {
@@ -102,6 +113,7 @@
     ix.center = bases.length ? bases.reduce((a, b) => a + b, 0) / bases.length : 0;
     const sd = bases.length > 1 ? Math.sqrt(bases.reduce((a, b) => a + (b - ix.center) ** 2, 0) / bases.length) : 0;
     ix.sd = sd > 1e-6 ? sd : 0.08;
+    ix.lambda = Math.max(0, model.counterpick?.lambda || 0);
     // Ban inputs: how likely a team is to pick each champion:role, and the role's average pick
     ix.matches = model.matches || 0;
     ix.banRate = new Map(Object.entries(model.banRate || {}).map(([id, r]) => [Number(id), r]));
@@ -137,6 +149,16 @@
     return s;
   };
 
+  // How much a (in role ra) wins against b (in role rb), in log-odds: learned pair,
+  // latent pair and class pair terms. Antisymmetric: matchup(b, a) = -matchup(a, b).
+  function matchup(ix, a, ra, b, rb) {
+    const explicit = ix.vs.get(`${a}:${ra}:${b}:${rb}`);
+    const latent = ix.fm
+      ? dot(ix.fm.P.get(`${a}:${ra}`), ix.fm.Q.get(`${b}:${rb}`)) - dot(ix.fm.P.get(`${b}:${rb}`), ix.fm.Q.get(`${a}:${ra}`))
+      : 0;
+    return (explicit ? explicit.w : 0) + latent + (ix.tv.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0);
+  }
+
   function scoreOne(ix, championId, r, allies, enemies) {
     const self = `${championId}:${r}`;
     const e = ix.champ.get(self);
@@ -163,13 +185,11 @@
     const enemyHits = [];
     for (const p of enemies.map(asPick)) {
       const re = roleIndex(ix, p.championId, p.position);
-      const other = `${p.championId}:${re}`;
-      const explicit = re === null ? null : ix.vs.get(`${championId}:${r}:${other}`);
+      const explicit = re === null ? null : ix.vs.get(`${championId}:${r}:${p.championId}:${re}`);
       if (explicit) variance += explicit.se * explicit.se;
-      const latent = ix.fm && re !== null
-        ? dot(ix.fm.P.get(self), ix.fm.Q.get(other)) - dot(ix.fm.P.get(other), ix.fm.Q.get(self))
-        : 0;
-      const v = (explicit ? explicit.w : 0) + latent + (ix.tv.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
+      const v = re === null
+        ? ix.tv.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0
+        : matchup(ix, championId, r, p.championId, re);
       mu += v;
       if (v) enemyHits.push({ championId: p.championId, value: v, lane: re === r });
     }
@@ -194,26 +214,94 @@
     };
   }
 
-  /** Same arguments and result as Recommend.recommend, plus model */
+  /**
+   * The enemy's possible answers, per role they still have open: champions with enough
+   * games there and their choice weight before seeing the candidate
+   * (log popularity + λ × matchups against our team). Built once per board.
+   */
+  function answers(ix, allies, enemies, unavailable) {
+    if (!ix.matches) return [];
+    const onBoard = new Set([...allies, ...enemies].map((p) => asPick(p).championId));
+    const taken = new Set(enemies.map((p) => roleIndex(ix, asPick(p).championId, asPick(p).position)));
+    const ours = allies.map(asPick).map((p) => [p.championId, roleIndex(ix, p.championId, p.position)]).filter(([, r]) => r !== null);
+    const out = [];
+    for (let q = 0; q < 5; q++) {
+      if (taken.has(q)) continue;
+      const list = [];
+      for (const [key, e] of ix.champ) {
+        const [y, rq] = key.split(':').map(Number);
+        if (rq !== q || e.games < ANSWER_MIN_GAMES || unavailable.has(y) || onBoard.has(y)) continue;
+        let w = Math.log(Math.max(ix.pickChance.get(key) || 0, 1e-6));
+        for (const [c, rc] of ours) w += ix.lambda * matchup(ix, y, q, c, rc);
+        list.push({ y, w });
+      }
+      if (list.length) out.push({ q, list });
+    }
+    return out;
+  }
+
+  /** Expected log-odds the candidate loses once the enemy answers it in every open role */
+  function exposure(ix, championId, r, open) {
+    let total = 0;
+    for (const { q, list } of open) {
+      let max = -Infinity;
+      const m = new Float64Array(list.length);
+      const w = new Float64Array(list.length);
+      list.forEach((ans, i) => {
+        if (ans.y === championId) {
+          w[i] = -Infinity;
+          return;
+        }
+        m[i] = matchup(ix, ans.y, q, championId, r);
+        w[i] = ans.w + ix.lambda * m[i];
+        if (w[i] > max) max = w[i];
+      });
+      let sum = 0;
+      let acc = 0;
+      for (let i = 0; i < list.length; i++) {
+        if (w[i] === -Infinity) continue;
+        const p = Math.exp(w[i] - max);
+        sum += p;
+        acc += p * m[i];
+      }
+      if (sum) total += acc / sum;
+    }
+    return total;
+  }
+
+  // Score with the enemy's answers taken into account; counterRisk is what they cost in points
+  function lookAhead(ix, row, r, open) {
+    if (!open.length) return { ...row, counterRisk: 0 };
+    const logit = row.logit - exposure(ix, row.championId, r, open);
+    const score = Math.round(toScore(ix, logit));
+    return { ...row, logit, score, counterRisk: row.score - score };
+  }
+
+  /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
   function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10 }) {
     const ix = index(model);
     const allowed = pickable ? new Set(pickable) : null;
     const inPool = new Set(pool);
+    const open = answers(ix, allies, enemies, unavailable);
     const out = [];
     for (const [championId, best] of ix.bestRole) {
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
-      out.push({ ...scoreOne(ix, championId, r, allies, enemies), inPool: inPool.has(championId) });
+      out.push({ ...lookAhead(ix, scoreOne(ix, championId, r, allies, enemies), r, open), inPool: inPool.has(championId) });
     }
-    return out.sort((a, b) => b.score - a.score || b.games - a.games).slice(0, limit);
+    return out.sort((x, y) => y.logit - x.logit || y.games - x.games).slice(0, limit);
   }
 
-  /** Same arguments and result as Recommend.evaluate, plus model */
-  function evaluate({ model, championId, role = '', allies = [], enemies = [] }) {
+  /**
+   * Same arguments and result as Recommend.evaluate, plus model. With lookAhead the score
+   * takes the enemy's answers into account like recommend() (for a pick not locked yet).
+   */
+  function evaluate({ model, championId, role = '', allies = [], enemies = [], lookAhead: ahead = false, unavailable = new Set() }) {
     const ix = index(model);
     if (!ix.bestRole.has(championId)) return null;
     const r = role ? ROLE_INDEX[role] : ix.bestRole.get(championId).r;
-    return scoreOne(ix, championId, r, allies, enemies);
+    const row = scoreOne(ix, championId, r, allies, enemies);
+    return ahead ? lookAhead(ix, row, r, answers(ix, allies, enemies, unavailable)) : row;
   }
 
   /**

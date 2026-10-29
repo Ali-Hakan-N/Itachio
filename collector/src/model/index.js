@@ -14,6 +14,7 @@ const path = require('node:path');
 const { ROLES, SHARE_FLOOR, toCompact, roleShares } = require('./features');
 const { Worker } = require('node:worker_threads');
 const idle = require('./idle');
+const { counterpickTendency } = require('./choice');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
@@ -79,6 +80,7 @@ function loadMatches(patch) {
  *   early: { matches, kept, accuracy of the early state alone, kappa } or null. When kept,
  *          champion strength through the early game is already included in champ and off
  *   banRate: { "<champ>": share of matches it was banned in } (when enough matches have bans)
+ *   counterpick: { lambda, se, picks } how much players pick against their opponents (choice.js)
  * Layers the training left out are absent (no pair weights, no fm).
  */
 /** Share of matches each champion was banned in, from matches that record bans */
@@ -365,6 +367,11 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
 
   const m = model.metrics;
   const data = exportModel(model, { share, games, tags, patch, matches: matches.length, banRate: banRates(matches) });
+  data.counterpick = counterpickTendency(data, matches);
+  if (data.counterpick) {
+    const c = data.counterpick;
+    log(`model: counterpicks  λ = ${c.lambda.toFixed(2)} ± ${(c.se ?? 0).toFixed(2)} over ${c.picks} picks (0 = picks follow popularity only)`);
+  }
   writeReport({ data, metrics: m, champions: await loadNames(client), seconds: Math.round((Date.now() - t0) / 1000), log });
   check(
     await client.from('model_snapshots').insert({ source: 'riot-model', patch, matches: matches.length, metrics: m, data }).select('id'),
