@@ -255,3 +255,16 @@ test('composition: a champion that gives the team the style it lacks scores high
   const has = top([{ championId: 4, position: 'bottom' }]); // the bot laner already brings it
   assert.ok(none[1] - none[2] > has[1] - has[2], `${none[1] - none[2]} > ${has[1] - has[2]}`);
 });
+
+test('rare picks are not recommended: off-role or picked by too few teams', () => {
+  const m = {
+    ...model, matches: 10000,
+    champ: { ...model.champ, '8:0': [0.5, 30, 0.9], '9:0': [0.5, 400, 0.02] },
+  };
+  const ids = recommend({ model: m, role: 'top', limit: 20 }).map((x) => x.championId);
+  assert.ok(!ids.includes(8), 'picked by 0.15% of teams');
+  assert.ok(!ids.includes(9), 'off-role');
+  assert.ok(ids.includes(1));
+  // Still scored when hovered
+  assert.ok(evaluate({ model: m, championId: 8, role: 'top' }).score > 0);
+});

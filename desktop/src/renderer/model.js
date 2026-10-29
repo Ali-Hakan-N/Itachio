@@ -35,6 +35,17 @@
 // future picks, and the composition is taken with the expected final styles of both
 // teams.
 //
+// Rare picks are not recommended: a champion played in a role in less than
+// OFF_ROLE_SHARE of its games (off-role), or picked there by less than MIN_PICK_RATE of
+// teams, is left out of the list (it can still be hovered and scored). Its few games come
+// mostly from players who specialize in it, so its results say little about what it
+// does for anyone else, and its estimates rest on little data.
+//
+// The look-ahead terms (the rest of the draft, the enemy's answers) add up many pair
+// weights; for a champion with few games in the role each of them is noisy. They count
+// in proportion to the evidence: games / (games + the strength layer's prior in
+// pseudo-games, tuned on held-out matches).
+//
 // Relative to a typical pick: every term that depends on the board (synergy with the
 // allies, matchups against the enemies, the enemy's answers) is measured against the
 // popularity-weighted average of the same terms over the champions usually played in
@@ -75,6 +86,7 @@
   const SPREAD = 0.35; // how far one standard deviation of strength moves the score
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
+  const MIN_PICK_RATE = 0.0025; // share of teams picking it in the role, to be recommended
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
   const ANSWER_MIN_GAMES = 20; // enemy answers considered when looking ahead
@@ -137,6 +149,7 @@
     const sd = bases.length > 1 ? Math.sqrt(bases.reduce((a, b) => a + (b - ix.center) ** 2, 0) / bases.length) : 0;
     ix.sd = sd > 1e-6 ? sd : 0.08;
     ix.lambda = Math.max(0, model.counterpick?.lambda || 0);
+    ix.priorGames = Math.max(1, model.lambdas?.tau?.c || 100);
     if (model.comp) {
       const k = model.comp.k;
       const M = Array.from({ length: k }, () => new Float64Array(k));
@@ -469,8 +482,10 @@
     const logit = a.row.logit - typ.board;
     const row = { ...a.row, logit, score: Math.round(toScore(ix, logit)) };
     if (!rest) return row;
-    const withFuture = logit + (a.ahead - typ.ahead);
-    const final = withFuture - (a.exposure - typ.exposure);
+    // Look-ahead terms count by the evidence behind this champion in this role
+    const rel = a.row.games / (a.row.games + ix.priorGames);
+    const withFuture = logit + rel * (a.ahead - typ.ahead);
+    const final = withFuture - rel * (a.exposure - typ.exposure);
     const score = Math.round(toScore(ix, final));
     return { ...row, logit: final, score, counterRisk: Math.round(toScore(ix, withFuture)) - score };
   }
@@ -489,6 +504,9 @@
     for (const [championId, best] of ix.bestRole) {
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
+      const entry = ix.champ.get(`${championId}:${r}`);
+      // Off-role or rarely picked: not recommended (see above)
+      if (!entry || entry.share < OFF_ROLE_SHARE || (ix.matches && entry.games / (2 * ix.matches) < MIN_PICK_RATE)) continue;
       const rest = ix.matches ? restFor(r) : null;
       const typ = typical(ix, r, allies, enemies, rest, unavailable);
       const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);
