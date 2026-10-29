@@ -339,22 +339,51 @@ const PERSONAL_BADGE = 2;
 const personalOf = (playerId) => (playerId && S.playerStats?.[playerId]) || null;
 const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
 
+// Notes on a recommendation, shown together in one icon's tooltip: [{ kind, title, text }]
+function recNotes(r) {
+  const notes = [];
+  if (r.offRole) notes.push({ kind: 'warn', title: 'Off-role', text: 'Rarely played in this role.' });
+  if (r.unsure && !r.offRole) notes.push({ kind: '', title: 'Low data', text: `Few games behind it: rough estimate, ±${r.uncertainty} points.` });
+  if (Math.abs(r.personal || 0) >= PERSONAL_BADGE) {
+    notes.push({
+      kind: r.personal > 0 ? 'good' : 'warn',
+      title: `You ${r.personal > 0 ? '+' : '−'}${Math.abs(r.personal)}`,
+      text: r.personalGames
+        ? `From your ${r.personalGames} games on it, compared with how you usually play.`
+        : 'You have not played it: champions you rarely play go worse for you.',
+    });
+  }
+  if (r.counterRisk >= COUNTER_RISK_BADGE) {
+    notes.push({ kind: 'warn', title: `Counter risk −${r.counterRisk}`, text: 'Easy to answer: expected loss once the enemy picks in the roles they have open.' });
+  }
+  if (r.counterRisk <= -COUNTER_RISK_BADGE) {
+    notes.push({ kind: 'good', title: `Safe blind +${-r.counterRisk}`, text: 'What the enemy usually picks in their open roles does badly against it.' });
+  }
+  return notes;
+}
+
+function notesIcon(notes) {
+  if (!notes.length) return '';
+  const kind = notes.some((n) => n.kind === 'warn') ? 'warn' : notes.every((n) => n.kind === 'good') ? 'good' : '';
+  return `
+    <span class="note-icon ${kind}" aria-label="${esc(notes.map((n) => n.title).join(', '))}">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 5.25a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0V7.5A.75.75 0 0 0 8 6.75Zm0-2.5a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8Z"/></svg>
+      <span class="tip">${notes.map((n) => `<span class="tip-row ${n.kind}"><b>${esc(n.title)}</b>${esc(n.text)}</span>`).join('')}</span>
+    </span>`;
+}
+
 function recRow(r, i, { canHover, hoverId, rank }) {
   const tier = tierOf(r.score);
   const hovering = r.championId === hoverId;
   return `
     <button type="button" class="rec ${hovering ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}"
-      ${canHover ? 'title="Hover in the client"' : 'disabled'}>
+      ${canHover ? '' : 'disabled'}>
       <span class="rank">${rank ?? i + 1}</span>
       ${champImg(r.championId)}
       <span class="info">
         <span class="name">${esc(champName(r.championId))}
           <span class="tier t-${tier}">${tier}</span>
-          ${r.offRole ? '<span class="badge warn">Off-role</span>' : ''}
-          ${r.unsure && !r.offRole ? `<span class="badge" title="Rough estimate: ±${r.uncertainty} points">Low data</span>` : ''}
-          ${Math.abs(r.personal || 0) >= PERSONAL_BADGE ? `<span class="badge ${r.personal > 0 ? 'good' : 'warn'}" title="${r.personalGames ? `From your ${r.personalGames} games on it` : 'You have not played it: champions you rarely play go worse for you'}">You ${r.personal > 0 ? '+' : '−'}${Math.abs(r.personal)}</span>` : ''}
-          ${r.counterRisk >= COUNTER_RISK_BADGE ? `<span class="badge warn" title="Expected loss once the enemy answers this pick in the roles they have open">Counter risk −${r.counterRisk}</span>` : ''}
-          ${r.counterRisk <= -COUNTER_RISK_BADGE ? `<span class="badge good" title="Expected gain: what the enemy usually picks in their open roles does badly against it">Safe blind +${-r.counterRisk}</span>` : ''}
+          ${notesIcon(recNotes(r))}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
       </span>

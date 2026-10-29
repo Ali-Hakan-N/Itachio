@@ -333,6 +333,22 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .badge.warn, .slot-score small.warn { color: var(--warn); border-color: rgba(243, 182, 63, 0.45); }
 .badge.good { color: var(--cue); border-color: rgba(47, 211, 192, 0.45); }
 
+/* One icon per recommendation for its notes (off-role, low data, you, counter risk, safe blind) */
+.note-icon { position: relative; display: inline-flex; color: var(--faint); cursor: help; }
+.note-icon svg { width: 15px; height: 15px; fill: currentColor; }
+.note-icon.warn { color: var(--warn); }
+.note-icon.good { color: var(--cue); }
+.note-icon .tip {
+  position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%); z-index: 30;
+  display: none; flex-direction: column; gap: 8px; width: 250px; padding: 10px 12px;
+  background: var(--panel-3); border: 1px solid var(--line-2); border-radius: var(--radius-m); box-shadow: var(--shadow);
+  font-size: 12px; font-weight: 400; color: var(--muted); line-height: 1.4; text-align: left; white-space: normal;
+}
+.note-icon:hover .tip { display: flex; }
+.tip-row b { display: block; color: var(--ink); font-weight: 600; margin-bottom: 1px; }
+.tip-row.warn b { color: var(--warn); }
+.tip-row.good b { color: var(--cue); }
+
 /* ---------- Colored scores ---------- */
 .sc { font-family: var(--display); font-weight: 700; }
 .sc-S { background: linear-gradient(180deg, #ffe2a1, var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 0 18px rgba(216, 180, 106, 0.35); }
