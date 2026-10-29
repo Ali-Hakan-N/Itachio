@@ -1,5 +1,5 @@
 {
-  "name": "flex-drafter-collector",
+  "name": "itachio-collector",
   "version": "0.1.0",
   "description": "Local job that collects meta, synergy and matchup data into Supabase",
   "private": true,

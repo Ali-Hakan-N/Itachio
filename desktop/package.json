@@ -1,7 +1,7 @@
 {
-  "name": "flex-drafter",
-  "productName": "FlexDrafter",
-  "version": "0.1.23",
+  "name": "itachio",
+  "productName": "Itachio",
+  "version": "0.1.24",
   "description": "Itachio: League of Legends draft assistant for teams",
   "main": "src/main/main.js",
   "private": true,
@@ -30,7 +30,7 @@
         "repo": "lol-draft-picker"
       }
     ],
-    "productName": "FlexDrafter",
+    "productName": "Itachio",
     "files": [
       "src/**/*",
       "config.json",

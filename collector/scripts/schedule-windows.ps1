@@ -21,7 +21,14 @@ param(
   [switch]$Stop
 )
 
-$TaskName = 'Flex Drafter Collector'
+$TaskName = 'Itachio Collector'
+# The task's name before the app was renamed: used until this script registers the new one
+$OldTaskName = 'Flex Drafter Collector'
+if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) -and
+    (Get-ScheduledTask -TaskName $OldTaskName -ErrorAction SilentlyContinue) -and
+    ($Remove -or $Status -or $Start -or $Stop)) {
+  $TaskName = $OldTaskName
+}
 $Dir = Split-Path -Parent $PSScriptRoot
 $StopFile = Join-Path $Dir 'data\stop'
 
@@ -70,5 +77,9 @@ $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit
   -MultipleInstances IgnoreNew -RunOnlyIfNetworkAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
   -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 10)
 
+# Registering under the new name replaces the task with the old one
+if (Get-ScheduledTask -TaskName $OldTaskName -ErrorAction SilentlyContinue) {
+  Unregister-ScheduledTask -TaskName $OldTaskName -Confirm:$false
+}
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Force | Out-Null
 Write-Host "Registered '$TaskName' daily at $At, without a window. Log: $Dir\logs\collect.log"

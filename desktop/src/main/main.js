@@ -8,13 +8,29 @@ const { DataStore } = require('./data');
 const { AppCore } = require('./core');
 const { setupUpdater } = require('./updater');
 
+// The app was called Flex Drafter: its data folder was %APPDATA%\FlexDrafter. On the first
+// start as Itachio the saved sign-in and the log move over, so nobody has to sign in again.
+(function moveOldData() {
+  const now = app.getPath('userData');
+  const old = path.join(app.getPath('appData'), 'FlexDrafter');
+  try {
+    if (!fs.existsSync(old) || fs.existsSync(path.join(now, 'session.json'))) return;
+    fs.mkdirSync(now, { recursive: true });
+    for (const [from, to] of [['session.json', 'session.json'], ['flex-drafter.log', 'itachio.log']]) {
+      if (fs.existsSync(path.join(old, from))) fs.copyFileSync(path.join(old, from), path.join(now, to));
+    }
+  } catch {
+    /* worst case the player signs in once more */
+  }
+})();
+
 let win = null;
 let core = null;
 let data = null;
 let configError = null;
 
 // Errors go to the console and to a log file in the app's data folder
-const logFile = () => path.join(app.getPath('userData'), 'flex-drafter.log');
+const logFile = () => path.join(app.getPath('userData'), 'itachio.log');
 const writeLog = (level, args) => {
   const line = `${new Date().toISOString()} ${level} ${args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ')}
 `;
