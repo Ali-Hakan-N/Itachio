@@ -26,11 +26,18 @@ const model = {
   tags: { 1: 'Fighter', 2: 'Fighter', 3: 'Mage', 4: 'Marksman', 5: 'Tank', 6: 'Mage' },
 };
 
-test('stronger champion scores higher; average champion is 50', () => {
+test('stronger champion scores higher, on a scale stretched to the model spread', () => {
   const r = recommend({ model, role: 'top' });
   assert.equal(r[0].championId, 1);
-  assert.ok(r[0].score > 60);
-  assert.equal(r.find((x) => x.championId === 2).score, 50);
+  assert.ok(r[0].score > 65, `top score ${r[0].score}`);
+  assert.ok(r.find((x) => x.championId === 2).score < r[0].score);
+});
+
+test('tiny learned effects still spread over the scale', () => {
+  const shrink = (m, f) => ({ ...m, off: m.off.map((x) => x * f), champ: Object.fromEntries(Object.entries(m.champ).map(([k, v]) => [k, [v[0] * f, ...v.slice(1)]])) });
+  const a = recommend({ model, role: 'top' }).map((x) => x.score);
+  const b = recommend({ model: shrink(model, 0.1), role: 'top' }).map((x) => x.score);
+  assert.deepEqual(a, b);
 });
 
 test('off-role comes from the data: a mid played top a few times scores low', () => {
@@ -97,14 +104,8 @@ test('latent pairs add synergy and antisymmetric matchups', () => {
   assert.ok(c.score < d.score);
 });
 
-test('picks resting on little data are marked unsure', () => {
+test('picks with few games in the role are marked unsure', () => {
   const m = { ...model, champ: { ...model.champ, '2:0': [0.0, 25, 0.95, 0.2] } };
   assert.equal(evaluate({ model: m, championId: 2, role: 'top' }).unsure, true);
-  const sure = { ...model, champ: { ...model.champ, '2:0': [0.0, 900, 0.95, 0.01] } };
-  assert.equal(evaluate({ model: sure, championId: 2, role: 'top' }).unsure, false);
-});
-
-test('an over-stretched scale is capped', () => {
-  const wild = { ...model, pointsPerLogit: 600 };
-  assert.ok(evaluate({ model: wild, championId: 1, role: 'top' }).score === evaluate({ model: { ...model, pointsPerLogit: 187.5 }, championId: 1, role: 'top' }).score);
+  assert.equal(evaluate({ model, championId: 2, role: 'top' }).unsure, false);
 });

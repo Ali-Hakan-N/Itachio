@@ -337,8 +337,8 @@ function enemyContext(d, exceptCell) {
   };
 }
 
-// Fixed scale: 50 is an average champion, about 15 points per standard deviation
-const tierOf = (s) => (s >= 75 ? 'S' : s >= 63 ? 'A' : s >= 52 ? 'B' : s >= 40 ? 'C' : 'D');
+// 50 is an average champion; 67 is one standard deviation above it, 80 two
+const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
 
 function recRow(r, i, { canHover, hoverId, rank }) {
   const tier = tierOf(r.score);

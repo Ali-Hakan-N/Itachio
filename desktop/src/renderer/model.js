@@ -5,13 +5,14 @@
 //                   + class-pair terms (so unseen pairs still have a small effect)
 //                   + latent pair terms, when the training kept that layer
 // Only layers the training proved (cross-validated) are in the model.
-// Each score also carries an uncertainty in points from the weights' standard errors;
-// picks resting on little data are marked unsure.
-//   score = 50 + 50 × tanh(pointsPerLogit × (logit - center) / 50)
 //
-// The scale is fixed per model, not per draft: 50 is an average champion, and
-// tanh keeps scores off 0 and 100. Every weight comes from the data; a champion
-// rarely played in a role scores low because the model learned the off-role term.
+// Display scale: logits are measured against the model's own spread of champion
+// strength (well-played champion:role pairs), so scores use the whole 0-100 range
+// however small the learned effects are:
+//   z     = (logit - mean strength) / standard deviation of strength
+//   score = 50 + 50 × tanh(SPREAD × z)       z = 1 → 67, z = 2 → 80, z = 3 → 89
+// Order and strategy are the model's; only the presentation is stretched. The scale
+// is fixed per model, not per draft. Picks with few games in the data are marked unsure.
 //
 // Engine picks this model when the app has one and falls back to the older
 // recommend.js otherwise. Exposed as window.Engine in the browser and as
@@ -21,8 +22,9 @@
   const ROLES = ['top', 'jungle', 'middle', 'bottom', 'utility'];
   const ROLE_INDEX = Object.fromEntries(ROLES.map((r, i) => [r, i]));
   const OFF_ROLE_SHARE = 0.05; // below this share a pick is marked off-role
-  const UNSURE_POINTS = 8; // uncertainty above this marks a pick as resting on little data
-  const MAX_POINTS_PER_LOGIT = 187.5; // 15 points per 0.08 logit; guards against an over-stretched scale
+  const SPREAD = 0.35; // how far one standard deviation of strength moves the score
+  const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
+  const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
 
   const cache = new WeakMap();
   function index(model) {
@@ -64,10 +66,16 @@
       tags: new Map(Object.entries(model.tags || {}).map(([id, t]) => [Number(id), t])),
       off: model.off || [0, 0, 0, 0, 0],
       floor: model.shareFloor || 0.002,
-      K: Math.min(model.pointsPerLogit || 75, MAX_POINTS_PER_LOGIT),
       fm: model.fm ? { S: vectors(model.fm.S), P: vectors(model.fm.P), Q: vectors(model.fm.Q) } : null,
-      center: model.center || 0,
     };
+    // Scale from the spread of strength among well-played champion:role pairs
+    const strengthOf = (key, e) => e.w + ix.off[Number(key.split(':')[1])] * -Math.log(Math.max(e.share, ix.floor));
+    let pool = [...champ].filter(([, e]) => e.games >= SCALE_MIN_GAMES);
+    if (pool.length < 10) pool = [...champ];
+    const bases = pool.map(([key, e]) => strengthOf(key, e));
+    ix.center = bases.length ? bases.reduce((a, b) => a + b, 0) / bases.length : 0;
+    const sd = bases.length > 1 ? Math.sqrt(bases.reduce((a, b) => a + (b - ix.center) ** 2, 0) / bases.length) : 0;
+    ix.sd = sd > 1e-6 ? sd : 0.08;
     cache.set(model, ix);
     return ix;
   }
@@ -75,7 +83,7 @@
   const has = (model) => !!model && !!model.champ && Object.keys(model.champ).length > 0;
   const roleIndex = (ix, championId, position) =>
     position && ROLE_INDEX[position] !== undefined ? ROLE_INDEX[position] : ix.bestRole.get(championId)?.r ?? null;
-  const toScore = (ix, x) => 50 + 50 * Math.tanh((ix.K * x) / 50);
+  const toScore = (ix, x) => 50 + 50 * Math.tanh((SPREAD * x) / ix.sd);
 
   // A player on the board: { championId, position? } or a bare champion id
   const asPick = (p) => (typeof p === 'number' ? { championId: p, position: '' } : p);
@@ -135,8 +143,8 @@
       score: Math.round(score),
       offRole: share < OFF_ROLE_SHARE,
       games: e ? e.games : 0,
-      uncertainty: Math.round(ix.K * Math.sqrt(variance)),
-      unsure: ix.K * Math.sqrt(variance) > UNSURE_POINTS,
+      uncertainty: Math.round((50 * SPREAD * Math.sqrt(variance)) / ix.sd),
+      unsure: !e || e.games < UNSURE_GAMES,
       allies: allyHits.sort((a, b) => b.value - a.value),
       enemies: enemyHits.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
     };
