@@ -555,7 +555,7 @@ function train(matches, ctx, options = {}) {
     fm = { k: current.fm.k, entities: D.entities, ...params.L };
   }
 
-  const earlyOut = earlyResult(D, early, current, params, se);
+  const earlyOut = earlyResult(D, early, current, params, se, log);
   const provisional = provisionalPairs(D, rows, Float64Array.from(zCurrent, (z) => cal.a * z + cal.b), rejected, log);
 
   const n = rows.length;
@@ -597,7 +597,7 @@ function train(matches, ctx, options = {}) {
  * win model's weight for that part: what a champion (c, o) or a pair (s, v) is worth in
  * log-odds of winning through the early game. Returns null without early data.
  */
-function earlyResult(D, early, cfg, params, se) {
+function earlyResult(D, early, cfg, params, se, log) {
   if (!early) return null;
   const out = { matches: early.matches, surrogate: early.surrogate, lambdas: early.lambdas, kept: cfg.groups.has('e'), pairs: { c: [], s: [], v: [] } };
   if (!out.kept) return out;
@@ -610,6 +610,8 @@ function earlyResult(D, early, cfg, params, se) {
     const w = early.weights[p];
     for (let i = 0; i < w.length; i++) if (w[i]) out.pairs[p].push([D.keys[i], out.kappa[p] * w[i]]);
   });
+  const k = (p) => `${out.kappa[p].toFixed(3)} ± ${out.kappaSe[p].toFixed(3)}`;
+  log(`model: early game    turns into wins: strength ${k('c')}, synergy ${k('s')}, matchups ${k('v')}`);
   return out;
 }
 

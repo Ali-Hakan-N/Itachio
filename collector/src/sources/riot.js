@@ -15,7 +15,7 @@
 //   RIOT_PLATFORMS         comma-separated servers (default: all)
 //   RIOT_TIME_BUDGET_MIN   minutes spent collecting matches (default 1380 = 23 hours)
 //   RIOT_RESCORE_MIN       refresh scores every N minutes during the run (default 60)
-//   RIOT_LOOKBACK_DAYS     how many days back to look (default 7)
+//   RIOT_LOOKBACK_DAYS     how many days back to look (default 28; only the current patch counts)
 //   RIOT_DIAMOND_PAGES     Diamond ladder pages per division and server (default 5)
 //   RIOT_MAX_PER_REGION    max new matches per region, 0 = no limit (default 0)
 //   RIOT_RATE_LIMITS       starting rate limit "requests:seconds,..." (default development
@@ -82,7 +82,7 @@ module.exports = {
       : Object.keys(PLATFORMS);
     const minutes = dryRun ? 3 : Number(env.RIOT_TIME_BUDGET_MIN) || 1380;
     const rescoreMs = (Number(env.RIOT_RESCORE_MIN) || 60) * 60_000;
-    const lookbackDays = Number(env.RIOT_LOOKBACK_DAYS) || 7;
+    const lookbackDays = Number(env.RIOT_LOOKBACK_DAYS) || 28;
 
     // Ctrl+C: stop collecting, then score and save what we have
     const stop = { reason: null };

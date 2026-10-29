@@ -9,9 +9,13 @@
 //
 // How (all of it learned from the matches):
 //   1. Early state S of a match, seen from blue: per role, blue's player minus red's
-//      player in the same role (CS by 10 minutes, turret plates, gold+xp lead early in
-//      and at the end of the laning phase, takedowns in the first minutes), plus the
-//      first objectives (blood, tower, dragon, herald, grubs).
+//      player in the same role (CS by 10 minutes, gold+xp lead early in and at the end
+//      of the laning phase), plus the first objectives (blood, tower, dragon, herald,
+//      grubs). Only numbers that are fixed early in the game: Riot's turret plates and
+//      early takedowns turned out to count over the whole game (single players with
+//      16-18 plates; plates alone "predicted" 92% of results), so they would smuggle
+//      the result in. With the clean set the early state predicts about 72% of results,
+//      in line with what is known for 10-15 minute game states.
 //   2. Surrogate: logistic regression of the result on S. It says how much each part
 //      of the early game is worth in win probability (log-odds), so the five lanes and
 //      the objectives are put on one scale: A_k = beta_k · S_k for each component k.
@@ -34,7 +38,7 @@
 // Entries of riot/parse.js laneOf()
 const LANE_FIELDS = ['laneCs10', 'jungleCs10', 'plates', 'earlyLead', 'laneLead', 'earlyTakedowns', 'soloKills'];
 const LANE_LEN = LANE_FIELDS.length;
-const ROLE_DIM = 5; // CS by 10 minutes, plates, early lead, laning lead, early takedowns
+const ROLE_DIM = 3; // CS by 10 minutes, early lead, laning lead
 const TEAM_DIM = 5; // first blood, tower, dragon, herald, grubs
 const COMPONENTS = 6; // five roles and the objectives
 const DIM = ROLE_DIM * 5 + TEAM_DIM;
@@ -57,10 +61,8 @@ function earlyState(m) {
     const v = (a, i) => a[i] ?? 0;
     const o = r * ROLE_DIM;
     s[o] = (v(b, 0) + v(b, 1) - v(x, 0) - v(x, 1)) / 10; // CS by 10 minutes, in tens
-    s[o + 1] = v(b, 2) - v(x, 2);
-    s[o + 2] = v(b, 3) - v(x, 3);
-    s[o + 3] = v(b, 4) - v(x, 4);
-    s[o + 4] = v(b, 5) - v(x, 5);
+    s[o + 1] = v(b, 3) - v(x, 3); // gold+xp lead early in the laning phase
+    s[o + 2] = v(b, 4) - v(x, 4); // and at its end
   }
   for (let i = 0; i < TEAM_DIM; i++) s[ROLE_DIM * 5 + i] = m.f[i] || 0;
   return s;

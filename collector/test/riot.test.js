@@ -154,7 +154,9 @@ test('rate limiter never exceeds the window', async () => {
 
 // ---------------- crawl ----------------
 test('crawl: Flex first; duplicates and other-patch matches do not count', async () => {
+  const fetched = [];
   const matches = {
+    EUW1_4: fakeMatch('EUW1_4', { queue: 440 }),
     EUW1_1: fakeMatch('EUW1_1', { queue: 440 }),
     EUW1_2: fakeMatch('EUW1_2', { queue: 440 }),
     EUW1_3: fakeMatch('EUW1_3', { queue: 440, version: '16.20.1' }),
@@ -169,8 +171,11 @@ test('crawl: Flex first; duplicates and other-patch matches do not count', async
       }
       if (path.endsWith('/ids')) {
         order.push(q.queue);
-        return q.queue === 440 ? ['EUW1_1', 'EUW1_2', 'EUW1_3', 'EUW1_1'] : ['EUW1_9', 'EUW1_2'];
+        assert.equal(q.count, 100);
+        // Newest first: after the older-patch EUW1_3 everything is older, so EUW1_4 is never fetched
+        return q.queue === 440 ? ['EUW1_1', 'EUW1_2', 'EUW1_3', 'EUW1_4'] : ['EUW1_9', 'EUW1_2'];
       }
+      fetched.push(path.split('/').pop());
       return matches[path.split('/').pop()];
     },
   };
@@ -186,6 +191,7 @@ test('crawl: Flex first; duplicates and other-patch matches do not count', async
   assert.equal(stats.europe.byQueue.Flex, 2);
   assert.equal(stats.europe.byQueue['Solo/Duo'], 1);
   assert.equal(stats.europe.otherPatch, 1);
+  assert.ok(!fetched.includes('EUW1_4'));
 });
 
 test('negative synergy: a pair doing worse together than expected', () => {

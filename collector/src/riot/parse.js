@@ -11,7 +11,8 @@ const OBJECTIVES = ['champion', 'tower', 'dragon', 'riftHerald', 'horde']; // fi
  * Early game of one player, from match-v5 "challenges" (no extra request). LANE_FIELDS
  * in model/early.js names the entries: lane minions and jungle monsters by 10 minutes,
  * turret plates, gold+xp lead over the lane opponent early in and at the end of the
- * laning phase (1/0), takedowns in the first minutes, solo kills.
+ * laning phase (1/0), takedowns in the first minutes, solo kills. Plates, takedowns and
+ * solo kills count over the whole game, so the early game model leaves them out.
  */
 function laneOf(p) {
   const c = p.challenges;

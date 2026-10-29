@@ -2,9 +2,20 @@
 // Regions (americas, europe, asia, sea) run in parallel; Riot's limits are per region.
 // Inside a region Flex comes first: Flex matches of Diamond+ players on the Flex
 // ladder, until no new matches are left or time runs out. The rest goes to Solo/Duo.
+// The whole current patch is collected: up to IDS_PER_PLAYER of each player's newest
+// matches, newest first, stopping at the first match of an older patch (everything
+// after it is older too), so no requests go to matches that would not count.
 
 const { parseMatch } = require('./parse');
 const { RiotKeyError } = require('./client');
+
+const IDS_PER_PLAYER = 100; // the most match-v5 returns per request
+
+// "16.9" < "16.21"
+const olderPatch = (a, b) => {
+  const [x, y] = [a, b].map((p) => p.split('.').map(Number));
+  return x[0] < y[0] || (x[0] === y[0] && x[1] < y[1]);
+};
 
 // Server -> match-v5 region
 const PLATFORMS = {
@@ -118,7 +129,7 @@ async function crawlRegion(o) {
           if (!timeLeft() || full()) break;
           const puuid = pool.players.pop();
           const ids = await api.get(region, `/lol/match/v5/matches/by-puuid/${puuid}/ids`, {
-            queue: queue.id, startTime: Math.floor(o.since / 1000), count: 20,
+            queue: queue.id, startTime: Math.floor(o.since / 1000), count: IDS_PER_PLAYER,
           });
           const fresh = [];
           for (const id of ids || []) {
@@ -130,8 +141,10 @@ async function crawlRegion(o) {
             if (!timeLeft() || full()) break;
             const parsed = parseMatch(await api.get(region, `/lol/match/v5/matches/${id}`));
             if (!parsed) stats.skipped++;
-            else if (parsed.patch !== o.patch) stats.otherPatch++;
-            else buffer.push(parsed);
+            else if (parsed.patch !== o.patch) {
+              stats.otherPatch++;
+              if (olderPatch(parsed.patch, o.patch)) break; // the rest of this player's list is older
+            } else buffer.push(parsed);
             if (buffer.length >= FLUSH_EVERY) await flush();
           }
         }
