@@ -18,6 +18,10 @@ const { toCompact, ROLE_INDEX } = require('../model/features');
 const { analyzePlayers } = require('./analyze');
 const { RiotKeyError } = require('../riot/client');
 
+// Paused for now: no player matches are fetched and no stats are written. Set to true to
+// turn the analysis back on (the app reads player_champion_stats again with PLAYER_STATS).
+const ENABLED = false;
+
 const DIR = path.join(__dirname, '..', '..', 'data', 'players');
 const QUEUES = [440, 420]; // Flex, Solo/Duo
 const MAX_GAMES = 300;
@@ -112,6 +116,7 @@ function check({ data, error }) {
  * data: the exported model to compare against (newest snapshot when not given).
  */
 async function updatePlayers({ client, api, log, data = null }) {
+  if (!ENABLED) return log('players: analysis is paused');
   const model = data || check(await client.from('model_snapshots').select('data').order('id', { ascending: false }).limit(1).maybeSingle())?.data;
   if (!model) return log('players: no model yet, skipped');
   const players = check(await client.from('players').select('id,riot_id').not('riot_id', 'is', null).not('team_id', 'is', null));

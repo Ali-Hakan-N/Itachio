@@ -145,12 +145,18 @@ app.whenReady().then(async () => {
     });
     const lcu = new LcuConnector({ installPath: config.leagueInstallPath });
     core = new AppCore({ lcu, data, log: fileLog });
+    // The app comes to the front when champ select starts and whenever our ban or pick
+    // turn starts; a hover from the app hands the focus back to the client (focusClient)
     let inChampSelect = false;
+    let ourTurn = null;
     core.on('update', (partial) => {
       send('state', partial);
       if (!('draft' in partial)) return;
-      if (partial.draft && !inChampSelect) bringToFront();
-      inChampSelect = !!partial.draft;
+      const d = partial.draft;
+      const turn = d && d.isOurTurn && d.turn ? `${d.turn.kind}:${d.turn.kind === 'ban' ? d.myBanActionId : d.myPickActionId}` : null;
+      if ((d && !inChampSelect) || (turn && turn !== ourTurn)) bringToFront();
+      inChampSelect = !!d;
+      ourTurn = turn;
     });
     core.on('saved', (info) => send('saved', info));
     lcu.start();

@@ -177,9 +177,12 @@ test('look ahead: easy-to-counter picks score lower while the enemy can still an
   const a = rec.find((x) => x.championId === 30);
   const b = rec.find((x) => x.championId === 31);
   assert.ok(b.score > a.score && a.counterRisk > 0, `${a.score} ${b.score} risk ${a.counterRisk}`);
-  // Once the enemy top is locked there is nothing left to answer with
+  // Once the enemy top is locked, 40 can no longer answer it
   const locked = recommend({ model: m, role: 'top', enemies: [{ championId: 41, position: 'top' }] });
-  assert.equal(locked.find((x) => x.championId === 30).counterRisk, 0);
+  assert.ok(locked.find((x) => x.championId === 30).counterRisk < a.counterRisk);
+  // With every enemy role locked nothing is left to answer with
+  const all = ['top', 'jungle', 'middle', 'bottom', 'utility'].map((position, i) => ({ championId: [41, 3, 6, 4, 5][i], position }));
+  assert.equal(recommend({ model: m, role: 'top', enemies: all }).find((x) => x.championId === 30).counterRisk, 0);
   // Players who counterpick more (higher lambda) make the counter more likely
   const risk = (lambda) => recommend({ model: { ...m, counterpick: { lambda } }, role: 'top' }).find((x) => x.championId === 30).counterRisk;
   assert.ok(risk(20) > risk(0));
@@ -214,4 +217,16 @@ test('roles: known roles kept, the others guessed from where champions are playe
   const k = guessRoles({ model: m, players: [{ championId: 3, position: 'top' }, ...[0, 0, 0, 0].map(() => ({ championId: 0, position: '' }))] });
   assert.equal(k.roles[0], 'top');
   assert.equal(new Set(k.roles).size, 5);
+});
+
+test('relative to a typical pick: board terms that lift every champion do not lift the scores', () => {
+  // Every top gets the same synergy with the support: scores stay where they were
+  const m = { ...model, matches: 1000, syn: [1, 2, 3].map((c) => [c, 0, 5, 4, 0.2]) };
+  const empty = recommend({ model: m, role: 'top' });
+  const withSupport = recommend({ model: m, role: 'top', allies: [{ championId: 5, position: 'utility' }] });
+  for (const id of [1, 2]) assert.equal(withSupport.find((x) => x.championId === id).score, empty.find((x) => x.championId === id).score);
+  // A synergy only one of them has still moves it up
+  const one = { ...m, syn: [[2, 0, 5, 4, 0.2]] };
+  const two = recommend({ model: one, role: 'top', allies: [{ championId: 5, position: 'utility' }] }).find((x) => x.championId === 2).score;
+  assert.ok(two > recommend({ model: one, role: 'top' }).find((x) => x.championId === 2).score);
 });

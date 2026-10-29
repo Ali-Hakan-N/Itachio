@@ -30,6 +30,10 @@ function fileStorage(file) {
   };
 }
 
+// The personal layer (collector/src/players) is paused: player stats are not loaded, so
+// scores do not include them. Set to true to turn it back on.
+const PLAYER_STATS = false;
+
 function check({ data, error }) {
   if (error) throw new Error(error.message || String(error));
   return data;
@@ -104,7 +108,7 @@ class DataStore {
     const pools = ids.length
       ? check(await this.client.from('player_pools').select('*').in('player_id', ids))
       : [];
-    return { team, members, pools, playerStats: await this.loadPlayerStats(ids) };
+    return { team, members, pools, playerStats: PLAYER_STATS ? await this.loadPlayerStats(ids) : {} };
   }
 
   // How each player does on each champion (collector/src/players):
