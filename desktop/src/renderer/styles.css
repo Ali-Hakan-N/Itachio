@@ -452,3 +452,30 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .seg { display: flex; gap: 4px; padding: 3px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; margin-left: 14px; }
 .seg button { background: none; border: 0; padding: 5px 12px; border-radius: 999px; color: var(--muted); font-weight: 500; }
 .seg button.active { color: var(--bg); background: var(--ink); font-weight: 600; }
+
+/* ---------- Build ---------- */
+.build { margin-top: 14px; }
+.build-row { display: flex; flex-direction: column; gap: 6px; }
+.build-part { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); }
+.build-part img { width: 30px; height: 30px; border-radius: 6px; }
+.build-part.runes img { border-radius: 50%; background: var(--bg-2); }
+.build-part > span { display: flex; flex-direction: column; font-weight: 600; font-size: 13px; }
+.build-part small { color: var(--muted); font-weight: 400; font-size: 11px; }
+.build-part .btn { margin-left: auto; padding: 5px 10px; font-size: 12px; }
+.build-part .ok { color: var(--cue); font-size: 12px; font-weight: 600; }
+.build-part .fail { color: var(--red); font-size: 12px; font-weight: 600; }
+.build-part .ok, .build-part .fail { margin-left: auto; }
+.build-part .ok + .btn, .build-part .fail + .btn { margin-left: 8px; }
+
+/* ---------- Pick order ---------- */
+.pick-order { margin: 10px 0; }
+.pick-order ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; counter-reset: po; }
+.pick-order li { counter-increment: po; display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); }
+.pick-order li::before { content: counter(po); width: 14px; color: var(--faint); font-weight: 700; font-size: 12px; }
+.pick-order li > span { display: flex; flex-direction: column; font-size: 13px; }
+.pick-order li small { color: var(--muted); font-size: 11px; }
+.pick-order .risk { margin-left: auto; font-size: 13px; }
+.pick-order .risk b.up { color: var(--cue); }
+.pick-order .risk b.down { color: var(--red); }
+.pick-order .trade { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.pick-order .trade b { color: var(--ink); }

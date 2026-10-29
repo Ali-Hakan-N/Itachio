@@ -170,7 +170,7 @@ api.onState((partial) => {
   renderStatus();
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
-  if (tab === 'draft' && ('draft' in partial || 'pools' in partial || 'lcu' in partial || 'members' in partial || 'model' in partial)) renderMain();
+  if (tab === 'draft' && ['draft', 'pools', 'lcu', 'members', 'model', 'currentBuild', 'applied', 'gameData'].some((k) => k in partial)) renderMain();
   if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial)) renderMain();
   if (tab === 'champions' && ('playerStats' in partial || 'members' in partial || 'model' in partial)) renderMain();
 });
@@ -451,6 +451,71 @@ function banAllies(d, blocked) {
   return out;
 }
 
+// Who should pick first: teammates still to pick, ordered by how easily the enemy can
+// answer their likely champion (their hover, else what they play most in that role this
+// patch). Low counter risk picks early, high risk last; trades where the lobby order differs.
+function usualChampion(p, blocked) {
+  const id = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
+  const byKey = (S.playerStats?.[id] || {}).history?.byKey || {};
+  const best = Object.entries(byKey)
+    .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }))
+    .filter((x) => x.role === p.position && !blocked.has(x.championId))
+    .sort((a, b) => b.games - a.games)[0];
+  return best ? best.championId : 0;
+}
+
+function pickOrderHtml(d, blocked) {
+  const byCell = new Map(d.ally.map((p) => [p.cellId, p]));
+  const remaining = (d.allyPickOrder || []).map((c) => byCell.get(c)).filter((p) => p && !p.locked && p.position);
+  if (remaining.length < 2) return '';
+  const nameOf = (p) => (p.isLocal ? S.me?.nickname : memberByPuuid(p.puuid)?.nickname) || ROLE_NAME[p.position];
+  const rated = remaining.map((p) => {
+    const championId = p.hoverId || usualChampion(p, blocked);
+    const ev = championId
+      ? Engine.evaluate({ stats: S.stats, model: S.model, championId, role: p.position, ...draftContext(d, p.cellId), lookAhead: true, unavailable: blocked })
+      : null;
+    return { p, championId, risk: ev?.counterRisk ?? 0 };
+  });
+  const suggested = [...rated].sort((a, b) => a.risk - b.risk);
+  const trades = [];
+  rated.forEach((r, i) => {
+    const s2 = suggested[i];
+    if (s2.p !== r.p && !trades.some((t) => t.includes(r.p) || t.includes(s2.p))) trades.push([r.p, s2.p]);
+  });
+  const riskText = (n) => (n > 0 ? `<b class="down">−${n}</b>` : n < 0 ? `<b class="up">+${-n}</b>` : '<b>0</b>');
+  return `
+    <div class="pick-order">
+      <h3 class="sub">Pick Order</h3>
+      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk of the likely champion: points it loses once the enemy answers it">${riskText(r.risk)}</span></li>`).join('')}</ol>
+      ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
+    </div>`;
+}
+
+// Runes, items and spells for our pick; sent to the client once every champion is locked
+const BUCKET_TEXT = { any: 'General', ap: 'vs Magic Damage', ad: 'vs Physical Damage', mixed: 'vs Mixed Damage' };
+function buildHtml() {
+  const pick = S.currentBuild;
+  if (!pick) return '<div class="build"><h3 class="sub">Build</h3><p class="note">Waiting for all picks.</p></div>';
+  const { build } = pick;
+  const perks = S.gameData?.perks || {};
+  const spells = S.gameData?.summoner || {};
+  const perkImg = (id) => (perks[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/img/${perks[id].icon}" alt="" title="${esc(perks[id].name)}">` : '');
+  const itemImg = (id) => `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/item/${id}.png" alt="">`;
+  const spellImg = (id) => (spells[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/spell/${spells[id].image}" alt="" title="${esc(spells[id].name)}">` : '');
+  const applied = S.applied?.gameId === S.draft?.gameId ? S.applied.parts || {} : {};
+  const state = (part) => (applied[part] === true ? '<span class="ok">Applied</span>' : applied[part] === false ? '<span class="fail">Failed</span>' : '');
+  const keystone = build.runes.perks[0];
+  return `
+    <div class="build">
+      <h3 class="sub head-row"><span>Build · ${BUCKET_TEXT[pick.bucket] || ''}</span><span class="hint">${build.games} games</span></h3>
+      <div class="build-row">
+        <div class="build-part runes">${perkImg(keystone)}<span>${esc(perks[keystone]?.name || '')}<small>${esc(perks[build.runes.primary]?.name || '')} · ${esc(perks[build.runes.sub]?.name || '')}</small></span>${state('runes')}<button class="btn ghost" data-apply="runes">Apply Runes</button></div>
+        <div class="build-part items">${build.items.core.map(itemImg).join('')}${build.items.boots ? itemImg(build.items.boots) : ''}${state('items')}<button class="btn ghost" data-apply="items">Apply Items</button></div>
+        <div class="build-part spells">${build.spells.map(spellImg).join('')}${state('spells')}<button class="btn ghost" data-apply="spells">Apply Spells</button></div>
+      </div>
+    </div>`;
+}
+
 // Score each champion had when it was locked, to show how later picks changed it
 const pickScores = { gameId: null, map: new Map() };
 
@@ -570,6 +635,9 @@ function renderDraft() {
       </div>`
     : '';
 
+  // The build for our pick once every champion is locked (sent to the client automatically)
+  const buildBlock = local?.locked ? buildHtml() : '';
+
   // After locking: your pick with its live breakdown
   let pickRow = '';
   if (local?.locked) {
@@ -602,12 +670,13 @@ function renderDraft() {
           <div class="timer"><div id="tbar"></div></div>
         </div>
         ${banBlock}
+        ${pickOrderHtml(d, blocked)}
         <div>
           <h3 class="sub head-row">
             <span>${local?.locked ? `Your Pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</span>
             ${!local?.locked && d.myPickActionId && recs.length ? '<span class="hint">Click to hover in the client</span>' : ''}
           </h3>
-          ${local?.locked ? pickRow : recs.length
+          ${local?.locked ? pickRow + buildBlock : recs.length
             ? `<div class="recs">${recs.map((r, i) => recRow(r, i, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>${hoverRow}`
             : `<p class="note">${hasStats
                 ? 'No pickable champions left for this role.'
@@ -619,6 +688,17 @@ function renderDraft() {
 
   // Inline style attributes are blocked by the CSP, so bar widths are set here
   for (const bar of $view.querySelectorAll('[data-w]')) bar.style.width = `${bar.dataset.w}%`;
+  // Apply buttons of the build
+  for (const b of $view.querySelectorAll('[data-apply]')) {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await run(api.applyBuild([b.dataset.apply]));
+      } finally {
+        b.disabled = false;
+      }
+    };
+  }
   // Pick and ban lists: a click hovers the champion for that action in the client
   for (const list of $view.querySelectorAll('.recs')) {
     list.onclick = async (e) => {

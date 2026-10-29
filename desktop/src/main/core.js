@@ -32,6 +32,11 @@ class AppCore extends EventEmitter {
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
       playerStats: {}, // how each player does on each champion
+      builds: {}, // runes, items and spells per champion, role and enemy damage
+      damage: null, // champions' magic share, to choose the build for the enemy team
+      gameData: null, // rune and summoner spell names and icons
+      applied: null, // { gameId, championId, bucket, parts: { runes, items, spells } } what was sent to the client
+      currentBuild: null, // buildFor() of the current draft, for the UI
       pickable: null, // champions you can pick in champ select (owned + free rotation)
     };
     this.current = null; // { rowId, gameId, status } - database row of the current draft
@@ -68,9 +73,20 @@ class AppCore extends EventEmitter {
     ]);
     this.championIds = new Set(champions.map((c) => c.id));
     this.#emit({ me, patch, champions, stats, model });
+    this.#loadBuilds(patch);
     await this.refreshTeam();
     await this.#linkRiotAccount();
     this.#watchModel();
+  }
+
+  // Builds and rune/spell names; refreshed with the model when champ select starts
+  async #loadBuilds(version) {
+    const [builds, damage, gameData] = await Promise.all([
+      this.data.loadBuilds?.().catch((err) => (this.log.error('[builds]', err.message), {})) ?? {},
+      this.data.loadDamage?.().catch(() => null) ?? null,
+      this.state.gameData ? this.state.gameData : this.data.loadGameData?.(version).catch(() => null) ?? null,
+    ]);
+    this.#emit({ builds: builds || {}, damage, gameData });
   }
 
   // The collector uploads a new model after each training. Take it when it appears, but
@@ -212,6 +228,7 @@ class AppCore extends EventEmitter {
     if (isNew) {
       this.#loadPickable(draft.gameId);
       this.refreshModel({ atDraftStart: draft.gameId }).catch((err) => this.log.error('[model]', err.message));
+      this.#loadBuilds(this.state.patch);
       const mine = (raw.actions || []).flat().filter((a) => a.actorCellId === draft.localCellId);
       this.log.info?.('champ select', JSON.stringify({
         gameId: draft.gameId, localCellId: draft.localCellId, myPickActionId: draft.myPickActionId,
@@ -220,6 +237,122 @@ class AppCore extends EventEmitter {
       }));
     }
     this.#enqueue(() => this.#persistDraft(draft));
+    this.#emit({ currentBuild: this.buildFor(draft) });
+    this.#autoApply(draft);
+  }
+
+  // ---------- Runes, items, spells ----------
+  // The build for our champion: the one made against this enemy team's kind of damage
+  // when there is one, else the general one. Needs every pick locked (the build depends
+  // on both teams). Returns { build, bucket, championId, role } or null.
+  buildFor(draft = this.state.draft) {
+    if (!draft) return null;
+    const me = draft.ally.find((p) => p.isLocal);
+    const enemies = draft.enemy.filter((p) => p.locked && p.championId).map((p) => p.championId);
+    if (!me?.locked || !me.championId || enemies.length < 5) return null;
+    const role = me.position || this.state.model && Engine.guessRoles?.({
+      model: this.state.model,
+      players: draft.ally.map((p) => ({ championId: p.championId, position: p.position })),
+    })?.roles[draft.ally.indexOf(me)];
+    if (!role) return null;
+    let bucket = 'any';
+    const dmg = this.state.damage;
+    if (dmg) {
+      const share = enemies.reduce((a, c) => a + (dmg.magic[c] ?? 0.5), 0) / enemies.length;
+      bucket = share >= dmg.thresholds[1] ? 'ap' : share <= dmg.thresholds[0] ? 'ad' : 'mixed';
+    }
+    const b = this.state.builds;
+    const build = b[`${me.championId}:${role}:${bucket}`] || b[`${me.championId}:${role}:any`];
+    if (!build) return null;
+    return { build, bucket: build.bucket, championId: me.championId, role };
+  }
+
+  // Once per game, as soon as all ten picks are locked: send the build to the client
+  #autoApply(draft) {
+    if (!draft.gameId || this.state.applied?.gameId === draft.gameId) return;
+    if (!this.buildFor(draft)) return;
+    this.state.applied = { gameId: draft.gameId };
+    this.applyBuild(['runes', 'items', 'spells']).catch((err) => this.log.error('[build]', err.message));
+  }
+
+  /** Sends parts of the build (runes, items, spells) to the client; returns what was applied */
+  async applyBuild(parts = ['runes', 'items', 'spells']) {
+    const pick = this.buildFor();
+    if (!pick) throw new Error('The build is ready once every champion is locked in');
+    const done = { ...(this.state.applied?.gameId === this.state.draft.gameId ? this.state.applied.parts : {}) };
+    for (const part of parts) {
+      try {
+        if (part === 'runes') await this.#applyRunes(pick);
+        if (part === 'items') await this.#applyItems(pick);
+        if (part === 'spells') await this.#applySpells(pick);
+        done[part] = true;
+      } catch (err) {
+        done[part] = false;
+        this.log.error(`[build ${part}]`, err.message);
+      }
+    }
+    this.#emit({ applied: { gameId: this.state.draft.gameId, championId: pick.championId, bucket: pick.bucket, parts: done } });
+    return done;
+  }
+
+  // A rune page named Itachio: updated if it exists, else created; with no free page the
+  // current editable page is replaced
+  async #applyRunes({ build, championId }) {
+    const r = build.runes;
+    const name = `Itachio ${this.state.champions.find((c) => c.id === championId)?.name || ''}`.trim();
+    const body = { name, primaryStyleId: r.primary, subStyleId: r.sub, selectedPerkIds: r.perks, current: true };
+    const pages = (await this.lcu.get('/lol-perks/v1/pages')) || [];
+    const editable = pages.filter((p) => p.isEditable);
+    const ours = editable.find((p) => String(p.name).startsWith('Itachio'));
+    if (ours) {
+      await this.lcu.request('PUT', `/lol-perks/v1/pages/${ours.id}`, { ...ours, ...body });
+      await this.lcu.request('PUT', '/lol-perks/v1/currentpage', ours.id);
+      return;
+    }
+    const owned = (await this.lcu.get('/lol-perks/v1/inventory'))?.ownedPageCount ?? editable.length;
+    if (editable.length < owned) {
+      await this.lcu.request('POST', '/lol-perks/v1/pages', body);
+      return;
+    }
+    const target = editable.find((p) => p.current) || editable[0];
+    if (!target) throw new Error('No editable rune page');
+    await this.lcu.request('PUT', `/lol-perks/v1/pages/${target.id}`, { ...target, ...body });
+    await this.lcu.request('PUT', '/lol-perks/v1/currentpage', target.id);
+  }
+
+  // An item set for the champion, shown in the in-game shop: replaces our earlier one
+  async #applyItems({ build, championId }) {
+    const summoner = await this.lcu.get('/lol-summoner/v1/current-summoner');
+    if (!summoner?.summonerId) throw new Error('No summoner');
+    const path = `/lol-item-sets/v1/item-sets/${summoner.summonerId}/sets`;
+    const current = (await this.lcu.get(path)) || { itemSets: [] };
+    const items = (ids) => ids.filter(Boolean).map((id) => ({ id: String(id), count: 1 }));
+    const blocks = [
+      { type: 'Core', items: items(build.items.core) },
+      ...(build.items.boots ? [{ type: 'Boots', items: items([build.items.boots]) }] : []),
+      { type: 'Also built', items: items(build.items.more) },
+    ].filter((b) => b.items.length);
+    const set = {
+      title: `Itachio ${this.state.champions.find((c) => c.id === championId)?.name || ''}`.trim(),
+      type: 'custom', map: 'any', mode: 'any', sortrank: 0, startedFrom: 'blank',
+      associatedChampions: [championId], associatedMaps: [11], blocks, preferredItemSlots: [],
+      uid: `itachio-${championId}`,
+    };
+    const others = (current.itemSets || []).filter((x) => x.uid !== set.uid);
+    await this.lcu.request('PUT', path, { ...current, itemSets: [...others, set], timestamp: Date.now() });
+  }
+
+  // Summoner spells: Flash stays on the key the player already has it on
+  async #applySpells({ build }) {
+    const session = await this.lcu.get('/lol-champ-select/v1/session');
+    const me = session?.myTeam?.find((p) => p.cellId === session.localPlayerCellId);
+    let [a, b] = build.spells;
+    const flash = 4;
+    if (me && (a === flash || b === flash)) {
+      const other = a === flash ? b : a;
+      [a, b] = me.spell2Id === flash ? [other, flash] : [flash, other];
+    }
+    await this.lcu.request('PATCH', '/lol-champ-select/v1/session/my-selection', { spell1Id: a, spell2Id: b });
   }
 
   // Sets a hover (or pick intent before our turn) in the client, for our pick or our

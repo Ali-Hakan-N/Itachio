@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
   joinTeam: call('team:join'),
   leaveTeam: call('team:leave'),
   kickMember: call('team:kick'),
+  applyBuild: call('build:apply'),
   upsertPool: call('pool:upsert'),
   removePool: call('pool:remove'),
   listHistory: call('history:list'),

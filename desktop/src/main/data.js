@@ -165,6 +165,44 @@ class DataStore {
     return { meta, synergy, matchup };
   }
 
+  // Runes, items and spells per champion, role and enemy damage (collector/src/model/builds.js):
+  // { "<champ>:<role>:<any|ap|ad|mixed>": { runes, items, spells, games } }
+  async loadBuilds() {
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const page = check(
+        await this.client.from('champion_builds').select('champion_id,role,bucket,games,runes,items,spells')
+          .order('champion_id').order('role').order('bucket').range(from, from + 999),
+      );
+      rows.push(...page);
+      if (page.length < 1000) break;
+    }
+    return Object.fromEntries(rows.map((r) => [`${r.champion_id}:${r.role}:${r.bucket}`, r]));
+  }
+  // Champions' magic share and the damage thresholds, to pick the build for the enemy team
+  async loadDamage() {
+    const row = check(await this.client.from('app_meta').select('value').eq('key', 'champion_damage').maybeSingle());
+    return row ? JSON.parse(row.value) : null;
+  }
+  // Names and icons of runes and summoner spells, from Data Dragon
+  async loadGameData(version) {
+    if (!version) return null;
+    const get = async (file) => {
+      const res = await fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/${file}`);
+      if (!res.ok) throw new Error(`Data Dragon ${file}: HTTP ${res.status}`);
+      return res.json();
+    };
+    const [trees, spells] = await Promise.all([get('runesReforged.json'), get('summoner.json')]);
+    const perks = {};
+    for (const t of trees) {
+      perks[t.id] = { name: t.name, icon: t.icon };
+      for (const slot of t.slots) for (const r of slot.runes) perks[r.id] = { name: r.name, icon: r.icon };
+    }
+    const summoner = {};
+    for (const sp of Object.values(spells.data)) summoner[sp.key] = { name: sp.name, image: sp.image.full };
+    return { perks, summoner };
+  }
+
   // Newest learned win model (collector/src/model), one JSON document, tagged with its snapshot id
   async loadModel() {
     const row = check(

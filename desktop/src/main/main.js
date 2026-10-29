@@ -217,6 +217,7 @@ app.whenReady().then(async () => {
     await core.refreshTeam();
     return core.snapshot();
   });
+  handle('build:apply', async (parts) => core.applyBuild(parts));
   handle('team:leave', async () => {
     await data.leaveTeam();
     await core.refreshTeam();

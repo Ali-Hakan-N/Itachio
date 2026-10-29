@@ -249,3 +249,41 @@ test('the draft stays on screen during the game and goes when it ends', async ()
   lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'WaitingForStats' });
   assert.equal(core.state.draft, null);
 });
+
+test('build: once all ten picks are locked, runes, items and spells go to the client once', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  const sent = [];
+  lcu.get = async (path) => {
+    if (path === '/lol-perks/v1/pages') return [{ id: 7, name: 'My page', isEditable: true, current: true }];
+    if (path === '/lol-perks/v1/inventory') return { ownedPageCount: 2 };
+    if (path === '/lol-summoner/v1/current-summoner') return { summonerId: 42 };
+    if (path.startsWith('/lol-item-sets/')) return { accountId: 1, itemSets: [{ uid: 'mine', title: 'Mine' }], timestamp: 1 };
+    if (path === '/lol-champ-select/v1/session') return { localPlayerCellId: 2, myTeam: [{ cellId: 2, spell1Id: 14, spell2Id: 4 }] };
+    return null;
+  };
+  lcu.request = async (method, path, body) => sent.push([method, path, body]);
+  const data = fakeData();
+  const build = { bucket: 'any', runes: { primary: 8100, sub: 8200, perks: [8112, 8139, 8138, 8135, 8226, 8237, 5008, 5008, 5001] }, items: { core: [6655, 3157], more: [3089], boots: 3020 }, spells: [4, 14] };
+  data.loadBuilds = async () => ({ '103:middle:any': build });
+  data.loadDamage = async () => null;
+  data.loadGameData = async () => null;
+  const core = new AppCore({ lcu, data, log: { error: () => {}, info: () => {} } });
+  await core.loadUserData();
+  await new Promise((r) => setTimeout(r, 20)); // builds load in the background
+  const { buildSession } = require('./mock-lcu');
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
+  await new Promise((r) => setTimeout(r, 50));
+  const post = sent.find((x) => x[1] === '/lol-perks/v1/pages' && x[0] === 'POST');
+  assert.ok(post, 'a new rune page (a free page is left)');
+  assert.deepEqual(post[2].selectedPerkIds, build.runes.perks);
+  const sets = sent.find((x) => x[1] === '/lol-item-sets/v1/item-sets/42/sets');
+  assert.ok(sets[2].itemSets.some((x) => x.uid === 'mine'), 'other item sets kept');
+  assert.ok(sets[2].itemSets.some((x) => x.associatedChampions?.[0] === 103 && x.blocks[0].items[0].id === '6655'));
+  const spells = sent.find((x) => x[1] === '/lol-champ-select/v1/session/my-selection');
+  assert.deepEqual(spells[2], { spell1Id: 14, spell2Id: 4 }, 'Flash stays on its key');
+  const count = sent.length;
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, count, 'only once per game');
+  assert.deepEqual(core.state.applied.parts, { runes: true, items: true, spells: true });
+});
