@@ -4,15 +4,17 @@
 //                   + Σ synergy with each ally + Σ matchup against each enemy
 //                   + class-pair terms (so unseen pairs still have a small effect)
 //                   + latent pair terms, when the training kept that layer
-// Only layers the training proved (cross-validated) are in the model.
+// Every layer is in the model with what the data has so far; its regularization is
+// tuned on held-out matches, so weights backed by little data stay small.
 //
 // Early game pairs (synE/vsE): what a pair is worth in winning through the first
 // minutes (lanes, first objectives), learned from that much less noisy data and kept
 // only when it improves cross-validated win predictions. They add to synergy and
 // matchups like the pairs learned from results alone.
 //
-// Temporary pairs (synT/vsT): while the synergy or matchup layer is not proven as a
-// whole, the training still tests single pairs one by one and exports those that pass
+// Temporary pairs (synT/vsT): only produced when the training is set to leave out
+// layers that are not proven (options.acceptSe). While the synergy or matchup layer is
+// left out as a whole, the training still tests single pairs one by one and exports those that pass
 // (false discovery rate 10%, collector/src/model/train.js). They count with their
 // estimated weight, phased in by evidence (weight / standard error): none at 1.5, full
 // from TEMP_FULL_Z, so a weakly backed pair has little effect. Each pair is capped at TEMP_PAIR and all of them together at TEMP_TOTAL

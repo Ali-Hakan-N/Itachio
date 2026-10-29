@@ -12,11 +12,13 @@
 //                  pair effects come from their dot products, so pairs seen rarely or
 //                  never still get an estimate from similar champions
 //
-// Each layer must prove itself: it is kept only if 5-fold cross-validated predictions
-// improve on the model without it by more than ACCEPT_SE standard errors (paired over
-// matches). A rejected layer is left out of the model; single pairs of a rejected pair
-// layer that pass their own test are exported separately as temporary pairs
-// (provisionalPairs).
+// Every layer is part of the model, with what the data has so far: its regularization
+// is tuned on held-out matches, so with little data its weights stay small and they grow
+// as matches come in. Each layer's 5-fold cross-validated gain over the model without it
+// is still measured and logged (paired over matches); "proven" means more than
+// PROVEN_SE standard errors. With options.acceptSe a layer is kept only above that many
+// standard errors instead; single pairs of a layer left out that way pass their own test
+// and are exported separately as temporary pairs (provisionalPairs).
 //
 // Regularization is set in pseudo-games (tau): a weight needs about tau matches of
 // evidence before it moves freely, so it shrinks less as data grows (the penalty per
@@ -57,7 +59,7 @@ const ADAPTIVE_ROUNDS = 3; // reweighting passes, close to a sparse (L1-like) pr
 // sets the size of that penalty, not its sign
 const NON_POSITIVE = new Set(['o']);
 const DEFAULTS = { folds: 5, latentDim: 6, tuneIters: 200, finalIters: 500, maxTuneRows: 60000, lr: 0.05 };
-const ACCEPT_SE = 2;
+const PROVEN_SE = 2;
 // Temporary pairs: while a pair layer is not proven as a whole, single pairs are still
 // tested one by one against the chosen model's cross-validated predictions (score test:
 // does this pair win more than the model expects?). Thousands of pairs are tested, so
@@ -528,9 +530,10 @@ function train(matches, ctx, options = {}) {
     const candidate = tuneLayer(current, layer);
     const zCand = outOfFold(D, candidate, o);
     const c = compare(D, rows, zCurrent, zCand);
-    const accepted = c.improvement > (o.acceptSe ?? ACCEPT_SE) * c.se;
-    layers.push({ name: layer.name, ...summary(D, rows, zCand), ...c, accepted });
-    log(`model: ${layer.name.padEnd(13)} gain ${(c.improvement * 1000).toFixed(2)} ± ${(c.se * 1000).toFixed(2)} ×1e-3 → ${accepted ? 'kept' : 'left out (not proven)'}`);
+    const proven = c.improvement > PROVEN_SE * c.se;
+    const accepted = o.acceptSe === undefined || c.improvement > o.acceptSe * c.se;
+    layers.push({ name: layer.name, ...summary(D, rows, zCand), ...c, accepted, proven });
+    log(`model: ${layer.name.padEnd(13)} gain ${(c.improvement * 1000).toFixed(2)} ± ${(c.se * 1000).toFixed(2)} ×1e-3 → ${!accepted ? 'left out' : proven ? 'kept (proven)' : 'kept (not proven yet)'}`);
     if (accepted) {
       current = candidate;
       zCurrent = zCand;

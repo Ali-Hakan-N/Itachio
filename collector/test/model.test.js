@@ -93,10 +93,23 @@ test('training keeps proven layers and finds the planted strength, synergy and m
   assert.equal(data.vsT.length, 0);
 });
 
-test('training leaves out pair layers when the pairs are only noise', () => {
+test('every layer is kept by default; noise pairs stay small', () => {
+  const matches = synthetic(6000, { pairs: false, seed: 11 });
+  const { share } = roleShares(matches);
+  const model = train(matches, { share, tagOf: () => 'None' }, FAST);
+  const byName = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l]));
+  assert.ok(byName.synergy.accepted && byName.matchup.accepted);
+  assert.ok(!byName.synergy.proven && !byName.matchup.proven);
+  // Tuned regularization keeps noise pairs near zero
+  const pairW = model.keys.map((k, i) => [k, model.w[i]]).filter(([k]) => k.startsWith('s:') || k.startsWith('v:'));
+  const big = pairW.filter(([, w]) => Math.abs(w) > 0.15).length;
+  assert.ok(big <= 0.02 * pairW.length, `${big} of ${pairW.length} noise pairs above 0.15`);
+});
+
+test('with acceptSe, pair layers of pure noise are left out', () => {
   const matches = synthetic(6000, { pairs: false, seed: 11 });
   const { share, games } = roleShares(matches);
-  const model = train(matches, { share, tagOf: () => 'None' }, FAST);
+  const model = train(matches, { share, tagOf: () => 'None' }, { ...FAST, acceptSe: 2 });
   const kept = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l.accepted]));
   assert.equal(kept.synergy, false);
   assert.equal(kept.matchup, false);

@@ -243,7 +243,7 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
     accuracy: `${(m.accuracy * 100).toFixed(2)}% ± ${(m.accuracyCI * 100).toFixed(2)}`,
     logloss: m.logloss,
     alwaysFiftyLogloss: m.baseLogloss,
-    layers: m.layers.map((l) => ({ name: l.name, kept: l.accepted, gain: l.improvement, se: l.se })),
+    layers: m.layers.map((l) => ({ name: l.name, kept: l.accepted, proven: l.proven ?? true, gain: l.improvement, se: l.se })),
     calibration: m.calibration,
     pointsPerLogit: data.pointsPerLogit,
     weights: { synergy: data.syn.length, matchup: data.vs.length, latent: data.fm ? Object.keys(data.fm.S).length : 0 },
