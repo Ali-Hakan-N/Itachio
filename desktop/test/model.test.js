@@ -75,3 +75,36 @@ test('Engine falls back to the older scoring without a model', () => {
   assert.equal(r[0].championId, 9);
   assert.equal(r[0].score, 61);
 });
+
+test('latent pairs add synergy and antisymmetric matchups', () => {
+  const m = {
+    ...model,
+    fm: {
+      k: 2,
+      S: { '4:3': [0.3, 0], '5:4': [0.3, 0] }, // <S4, S5> = 0.09
+      P: { '1:0': [0.2, 0], '6:2': [0, 0] },
+      Q: { '1:0': [0, 0], '6:2': [0.25, 0] }, // 1 against 6: 0.05; 6 against 1: -0.05
+    },
+  };
+  const bot = evaluate({ model: m, championId: 4, role: 'bottom', allies: [{ championId: 5, position: 'utility' }] });
+  const botNoFm = evaluate({ model, championId: 4, role: 'bottom', allies: [{ championId: 5, position: 'utility' }] });
+  assert.ok(bot.score > botNoFm.score);
+  const a = evaluate({ model: m, championId: 1, role: 'top', enemies: [{ championId: 6, position: 'middle' }] });
+  const b = evaluate({ model, championId: 1, role: 'top', enemies: [{ championId: 6, position: 'middle' }] });
+  assert.ok(a.score > b.score);
+  const c = evaluate({ model: m, championId: 6, role: 'middle', enemies: [{ championId: 1, position: 'top' }] });
+  const d = evaluate({ model, championId: 6, role: 'middle', enemies: [{ championId: 1, position: 'top' }] });
+  assert.ok(c.score < d.score);
+});
+
+test('picks resting on little data are marked unsure', () => {
+  const m = { ...model, champ: { ...model.champ, '2:0': [0.0, 25, 0.95, 0.2] } };
+  assert.equal(evaluate({ model: m, championId: 2, role: 'top' }).unsure, true);
+  const sure = { ...model, champ: { ...model.champ, '2:0': [0.0, 900, 0.95, 0.01] } };
+  assert.equal(evaluate({ model: sure, championId: 2, role: 'top' }).unsure, false);
+});
+
+test('an over-stretched scale is capped', () => {
+  const wild = { ...model, pointsPerLogit: 600 };
+  assert.ok(evaluate({ model: wild, championId: 1, role: 'top' }).score === evaluate({ model: { ...model, pointsPerLogit: 187.5 }, championId: 1, role: 'top' }).score);
+});

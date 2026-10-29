@@ -381,3 +381,7 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
   .logo.big { animation: none; }
   .progress > div { transition: none; }
 }
+
+/* ---------- Little data ---------- */
+.rec.unsure .champ, .rec.unsure .score { opacity: 0.55; }
+.slot-score.unsure b { opacity: 0.5; }

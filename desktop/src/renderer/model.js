@@ -3,6 +3,10 @@
 //   logit(champion) = strength(champion, role) + off-role(role) × -ln(share in role)
 //                   + Σ synergy with each ally + Σ matchup against each enemy
 //                   + class-pair terms (so unseen pairs still have a small effect)
+//                   + latent pair terms, when the training kept that layer
+// Only layers the training proved (cross-validated) are in the model.
+// Each score also carries an uncertainty in points from the weights' standard errors;
+// picks resting on little data are marked unsure.
 //   score = 50 + 50 × tanh(pointsPerLogit × (logit - center) / 50)
 //
 // The scale is fixed per model, not per draft: 50 is an average champion, and
@@ -17,26 +21,30 @@
   const ROLES = ['top', 'jungle', 'middle', 'bottom', 'utility'];
   const ROLE_INDEX = Object.fromEntries(ROLES.map((r, i) => [r, i]));
   const OFF_ROLE_SHARE = 0.05; // below this share a pick is marked off-role
+  const UNSURE_POINTS = 8; // uncertainty above this marks a pick as resting on little data
+  const MAX_POINTS_PER_LOGIT = 187.5; // 15 points per 0.08 logit; guards against an over-stretched scale
 
   const cache = new WeakMap();
   function index(model) {
     if (cache.has(model)) return cache.get(model);
     const champ = new Map();
     const bestRole = new Map();
-    for (const [key, [w, games, share]] of Object.entries(model.champ || {})) {
-      champ.set(key, { w, games, share });
+    for (const [key, [w, games, share, se]] of Object.entries(model.champ || {})) {
+      champ.set(key, { w, games, share, se: se || 0 });
       const [c, r] = key.split(':').map(Number);
       const b = bestRole.get(c);
       if (!b || b.games < games) bestRole.set(c, { r, games });
     }
+    // Pair weights as { w, se }; the reversed key flips the sign for matchups
     const pair = (list, anti) => {
       const m = new Map();
-      for (const [a, ra, b, rb, w] of list || []) {
-        m.set(`${a}:${ra}:${b}:${rb}`, w);
-        m.set(`${b}:${rb}:${a}:${ra}`, anti ? -w : w);
+      for (const [a, ra, b, rb, w, se] of list || []) {
+        m.set(`${a}:${ra}:${b}:${rb}`, { w, se: se || 0 });
+        m.set(`${b}:${rb}:${a}:${ra}`, { w: anti ? -w : w, se: se || 0 });
       }
       return m;
     };
+    const vectors = (obj) => new Map(Object.entries(obj || {}));
     const classPair = (obj, anti) => {
       const m = new Map();
       for (const [key, w] of Object.entries(obj || {})) {
@@ -56,7 +64,8 @@
       tags: new Map(Object.entries(model.tags || {}).map(([id, t]) => [Number(id), t])),
       off: model.off || [0, 0, 0, 0, 0],
       floor: model.shareFloor || 0.002,
-      K: model.pointsPerLogit || 75,
+      K: Math.min(model.pointsPerLogit || 75, MAX_POINTS_PER_LOGIT),
+      fm: model.fm ? { S: vectors(model.fm.S), P: vectors(model.fm.P), Q: vectors(model.fm.Q) } : null,
       center: model.center || 0,
     };
     cache.set(model, ix);
@@ -71,19 +80,31 @@
   // A player on the board: { championId, position? } or a bare champion id
   const asPick = (p) => (typeof p === 'number' ? { championId: p, position: '' } : p);
 
+  const dot = (a, b) => {
+    if (!a || !b) return 0;
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+    return s;
+  };
+
   function scoreOne(ix, championId, r, allies, enemies) {
-    const e = ix.champ.get(`${championId}:${r}`);
+    const self = `${championId}:${r}`;
+    const e = ix.champ.get(self);
     const share = e ? e.share : 0;
     const base = (e ? e.w : 0) + ix.off[r] * -Math.log(Math.max(share, ix.floor)) - ix.center;
     const tag = ix.tags.get(championId) || 'None';
+    // Champions never seen in this role have no standard error: treat them as very unsure
+    let variance = e ? e.se * e.se : 1;
 
     let syn = 0;
     const allyHits = [];
     for (const p of allies.map(asPick)) {
       if (p.championId === championId) continue;
       const ra = roleIndex(ix, p.championId, p.position);
-      const v = (ra === null ? 0 : ix.syn.get(`${championId}:${r}:${p.championId}:${ra}`) || 0) +
-        (ix.ts.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
+      const explicit = ra === null ? null : ix.syn.get(`${championId}:${r}:${p.championId}:${ra}`);
+      if (explicit) variance += explicit.se * explicit.se;
+      const latent = ix.fm && ra !== null ? dot(ix.fm.S.get(self), ix.fm.S.get(`${p.championId}:${ra}`)) : 0;
+      const v = (explicit ? explicit.w : 0) + latent + (ix.ts.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
       syn += v;
       if (v) allyHits.push({ championId: p.championId, value: v });
     }
@@ -92,8 +113,13 @@
     const enemyHits = [];
     for (const p of enemies.map(asPick)) {
       const re = roleIndex(ix, p.championId, p.position);
-      const v = (re === null ? 0 : ix.vs.get(`${championId}:${r}:${p.championId}:${re}`) || 0) +
-        (ix.tv.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
+      const other = `${p.championId}:${re}`;
+      const explicit = re === null ? null : ix.vs.get(`${championId}:${r}:${other}`);
+      if (explicit) variance += explicit.se * explicit.se;
+      const latent = ix.fm && re !== null
+        ? dot(ix.fm.P.get(self), ix.fm.Q.get(other)) - dot(ix.fm.P.get(other), ix.fm.Q.get(self))
+        : 0;
+      const v = (explicit ? explicit.w : 0) + latent + (ix.tv.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
       mu += v;
       if (v) enemyHits.push({ championId: p.championId, value: v, lane: re === r });
     }
@@ -109,6 +135,8 @@
       score: Math.round(score),
       offRole: share < OFF_ROLE_SHARE,
       games: e ? e.games : 0,
+      uncertainty: Math.round(ix.K * Math.sqrt(variance)),
+      unsure: ix.K * Math.sqrt(variance) > UNSURE_POINTS,
       allies: allyHits.sort((a, b) => b.value - a.value),
       enemies: enemyHits.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
     };

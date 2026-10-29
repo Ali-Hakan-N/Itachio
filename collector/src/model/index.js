@@ -24,6 +24,8 @@ const SCALE_MIN_GAMES = 100;
 // scale is then not stretched past this, so scores stay near 50 instead of turning
 // noise into big numbers. They spread out as data comes in.
 const MIN_SPREAD = 0.08;
+const FM_MIN_GAMES = 20;
+const REPORT_FILE = path.join(DATA_DIR, '..', 'model-report.json');
 const PRUNE = 0.002; // pair weights smaller than this are left out of the upload
 const MIN_MATCHES = 2000;
 const MAX_TRAIN_MATCHES = 150000; // newest matches only, keeps training memory around 500 MB
@@ -64,11 +66,14 @@ function loadMatches(patch) {
 
 /**
  * The model as the app reads it. Roles are indexes into ROLES.
- *   champ: { "<champ>:<role>": [weight, games, share] }
+ *   champ: { "<champ>:<role>": [weight, games, share, standard error] }
  *   off:   weight per role for -ln(share)
- *   syn:   [[a, ra, b, rb, weight]]   same team, a:ra before b:rb
- *   vs:    [[a, ra, b, rb, weight]]   a against b; b against a is -weight
+ *   syn:   [[a, ra, b, rb, weight, se]]   same team, a:ra before b:rb
+ *   vs:    [[a, ra, b, rb, weight, se]]   a against b; b against a is -weight
  *   ts/tv: { "<classA>:<classB>": weight }   classes sorted; tv is classA against classB
+ *   fm:    { k, S, P, Q: { "<champ>:<role>": vector } } latent pairs, when that layer was kept:
+ *          synergy <S_a, S_b>, a against b <P_a, Q_b> - <P_b, Q_a>
+ * Layers the training left out are absent (no pair weights, no fm).
  */
 function exportModel(model, { share, games, tags, patch, matches }) {
   const champ = {};
@@ -77,16 +82,30 @@ function exportModel(model, { share, games, tags, patch, matches }) {
   const vs = [];
   const ts = {};
   const tv = {};
+  const se = (i) => (model.se ? round(model.se[i], 5) : null);
+  const on = new Set(model.groups || ['c', 'o', 's', 'ts', 'v', 'tv']);
   model.keys.forEach((key, i) => {
     const w = round(model.w[i], 5);
     const p = key.split(':');
-    if (p[0] === 'c') champ[`${p[1]}:${p[2]}`] = [w, games.get(`${p[1]}:${p[2]}`) || 0, round(share.get(`${p[1]}:${p[2]}`) || 0, 4)];
+    if (!on.has(p[0])) return;
+    if (p[0] === 'c') champ[`${p[1]}:${p[2]}`] = [w, games.get(`${p[1]}:${p[2]}`) || 0, round(share.get(`${p[1]}:${p[2]}`) || 0, 4), se(i)];
     else if (p[0] === 'o') off[Number(p[1])] = w;
-    else if (p[0] === 's' && Math.abs(w) >= PRUNE) syn.push([+p[1], +p[2], +p[3], +p[4], w]);
-    else if (p[0] === 'v' && Math.abs(w) >= PRUNE) vs.push([+p[1], +p[2], +p[3], +p[4], w]);
+    else if (p[0] === 's' && Math.abs(w) >= PRUNE) syn.push([+p[1], +p[2], +p[3], +p[4], w, se(i)]);
+    else if (p[0] === 'v' && Math.abs(w) >= PRUNE) vs.push([+p[1], +p[2], +p[3], +p[4], w, se(i)]);
     else if (p[0] === 'ts') ts[`${p[1]}:${p[2]}`] = w;
     else if (p[0] === 'tv') tv[`${p[1]}:${p[2]}`] = w;
   });
+
+  // Latent vectors of champion:role pairs with enough games (others are near zero anyway)
+  let fm = null;
+  if (model.fm) {
+    fm = { k: model.fm.k, S: {}, P: {}, Q: {} };
+    const k = model.fm.k;
+    model.fm.entities.forEach((key, e) => {
+      if ((games.get(key) || 0) < FM_MIN_GAMES) return;
+      for (const name of ['S', 'P', 'Q']) fm[name][key] = Array.from(model.fm[name].subarray(e * k, e * k + k), (v) => round(v, 4));
+    });
+  }
   // Scale: spread of champion strength (with the off-role term) among well-played picks
   const bases = [];
   for (const [key, [w, n, s]] of Object.entries(champ)) {
@@ -120,6 +139,7 @@ function exportModel(model, { share, games, tags, patch, matches }) {
     vs,
     ts,
     tv,
+    fm,
     tags: tagOf,
   };
 }
@@ -127,6 +147,51 @@ function exportModel(model, { share, games, tags, patch, matches }) {
 function check({ data, error }) {
   if (error) throw new Error(error.message);
   return data;
+}
+
+async function loadNames(client) {
+  const rows = check(await client.from('champions').select('id,name'));
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/** Human-readable training report: log lines and data/model-report.json */
+function writeReport({ data, metrics: m, champions, seconds, log }) {
+  const scoreOf = (w, role, share) =>
+    50 + 50 * Math.tanh((data.pointsPerLogit * (w + data.off[role] * -Math.log(Math.max(share, SHARE_FLOOR)) - data.center)) / 50);
+  const top = {};
+  ROLES.forEach((role, r) => {
+    top[role] = Object.entries(data.champ)
+      .filter(([key, [, games]]) => Number(key.split(':')[1]) === r && games >= SCALE_MIN_GAMES)
+      .map(([key, [w, games, share, se]]) => ({
+        champion: champions.get(Number(key.split(':')[0])) || key,
+        score: Math.round(scoreOf(w, r, share)),
+        plusMinus: se ? Math.round(se * data.pointsPerLogit) : null,
+        games,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  });
+  const report = {
+    trainedAt: data.trainedAt,
+    patch: data.patch,
+    matches: m.matches,
+    seconds,
+    accuracy: `${(m.accuracy * 100).toFixed(2)}% ± ${(m.accuracyCI * 100).toFixed(2)}`,
+    logloss: m.logloss,
+    alwaysFiftyLogloss: m.baseLogloss,
+    layers: m.layers.map((l) => ({ name: l.name, kept: l.accepted, gain: l.improvement, se: l.se })),
+    calibration: m.calibration,
+    pointsPerLogit: data.pointsPerLogit,
+    weights: { synergy: data.syn.length, matchup: data.vs.length, latent: data.fm ? Object.keys(data.fm.S).length : 0 },
+    topByRole: top,
+  };
+  try {
+    fs.writeFileSync(REPORT_FILE, JSON.stringify(report, null, 2));
+  } catch {
+    /* the report is optional */
+  }
+  log(`model: ${m.matches} matches, ${seconds}s · kept: ${m.layers.filter((l) => l.accepted).map((l) => l.name).join(', ')}`);
+  for (const role of ROLES) log(`model: top ${role.padEnd(7)} ${top[role].map((t) => `${t.champion} ${t.score}`).join(', ') || '(not enough games yet)'}`);
 }
 
 async function loadTags(client) {
@@ -137,10 +202,10 @@ async function loadTags(client) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Trains in a worker thread; resolves null if shouldStop() turned true and the training was stopped
-function trainInWorker({ matches, share, tags, log, shouldStop, pollMs = BUSY_POLL_MS }) {
+function trainInWorker({ matches, share, tags, log, shouldStop, pollMs = BUSY_POLL_MS, options = {} }) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(path.join(__dirname, 'worker.js'), {
-      workerData: { matches, share: [...share], tags: [...tags] },
+      workerData: { matches, share: [...share], tags: [...tags], options },
     });
     let stopped = false;
     const timer = setInterval(async () => {
@@ -206,11 +271,8 @@ async function trainAndPublish({ client, patch, log, waitMs = 0 }) {
   if (!model) return null;
 
   const m = model.metrics;
-  log(
-    `model: holdout accuracy ${(m.accuracy * 100).toFixed(2)}%, logloss ${m.logloss.toFixed(4)} ` +
-      `(always-50% baseline ${m.baseLogloss.toFixed(4)}), ${Math.round((Date.now() - t0) / 1000)}s`,
-  );
   const data = exportModel(model, { share, games, tags, patch, matches: matches.length });
+  writeReport({ data, metrics: m, champions: await loadNames(client), seconds: Math.round((Date.now() - t0) / 1000), log });
   check(
     await client.from('model_snapshots').insert({ source: 'riot-model', patch, matches: matches.length, metrics: m, data }).select('id'),
   );

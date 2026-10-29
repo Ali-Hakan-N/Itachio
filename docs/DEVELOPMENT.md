@@ -19,7 +19,10 @@ logit = strength(champion, role) + off-role(role) × -ln(share of the champion's
       + class pairs (Mage + Tank, Fighter vs Mage ...) so unseen pairs still count a little
 ```
 
-- L2 regularization per group pulls weights with little data toward zero; no thresholds. Its strength is picked on a held-out 10% of the matches, and the log prints the holdout accuracy and log loss next to an always-50% baseline.
+- The model is built in layers: strength, then synergy, matchups and latent pairs (a factorization machine that also estimates rarely seen pairs). A layer is kept only if 5-fold cross-validated predictions improve on the model without it by more than 2 standard errors, paired over matches. Rejected layers are left out entirely, so every effect in the app is backed by the data.
+- Regularization is in pseudo-games (tau), tuned per layer on two validation splits; pair layers also try adaptive shrinkage (iterative reweighting, close to a sparse prior), which keeps real effects and pushes noise to zero.
+- The chosen model is calibrated with Platt scaling on the cross-validated predictions; each explicit weight gets a standard error, and the app marks low-data picks.
+- Every training writes a report to the log and to `collector/data/model-report.json`: cross-validated accuracy with a 95% interval, log loss against an always-50% baseline, each layer's gain and whether it was kept, calibration before and after, and the top champions per role.
 - Scores use a fixed 0-100 scale: `50 + 50 × tanh(pointsPerLogit × (logit - center) / 50)`. 50 is an average champion; one standard deviation of champion strength is 15 points. The scale is the same for every draft.
 - Until a model exists (2,000 single matches), the app falls back to the older aggregate scores (`champion_meta`, `champion_synergy`, `champion_matchup`).
 

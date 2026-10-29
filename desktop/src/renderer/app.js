@@ -344,7 +344,7 @@ function recRow(r, i, { canHover, hoverId, rank }) {
   const tier = tierOf(r.score);
   const hovering = r.championId === hoverId;
   return `
-    <button type="button" class="rec ${hovering ? 'hovering' : ''}" data-hover="${r.championId}"
+    <button type="button" class="rec ${hovering ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}"
       ${canHover ? 'title="Hover in the client"' : 'disabled'}>
       <span class="rank">${rank ?? i + 1}</span>
       ${champImg(r.championId)}
@@ -352,6 +352,7 @@ function recRow(r, i, { canHover, hoverId, rank }) {
         <span class="name">${esc(champName(r.championId))}
           <span class="tier t-${tier}">${tier}</span>
           ${r.offRole ? '<span class="badge warn">Off-role</span>' : ''}
+          ${r.unsure && !r.offRole ? `<span class="badge" title="Rough estimate: ±${r.uncertainty} points">Low data</span>` : ''}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
       </span>
@@ -388,7 +389,7 @@ function slotScore(d, which, p, championId, sink) {
     ? `<small class="${ev.score > atPick ? 'up' : 'down'}">picked at ${atPick}</small>`
     : ev.offRole ? '<small class="warn">off-role</small>' : p.locked ? '' : '<small>if picked</small>';
   return `
-    <div class="slot-score ${p.locked ? '' : 'pending'}">
+    <div class="slot-score ${p.locked ? '' : 'pending'} ${ev.unsure ? 'unsure' : ''}"${ev.unsure ? ` title="Rough estimate: ±${ev.uncertainty} points"` : ''}>
       <b class="sc sc-${tierOf(ev.score)}">${ev.score}</b>
       ${label}
     </div>`;
