@@ -766,7 +766,6 @@ function renderTeam() {
       <button class="btn ghost" id="copy">Copy Code</button>
       <span class="grow"></span>
       <button class="btn ghost" id="prof">Edit Profile</button>
-      <button class="btn ghost danger" id="reset">Reset My Champion Data</button>
       <button class="btn ghost" id="leave">Leave Team</button>
       <button class="btn ghost" id="out">Sign Out</button>
     </div>
@@ -795,16 +794,6 @@ function renderTeam() {
   document.getElementById('prof').onclick = () => {
     screen = 'profile';
     render();
-  };
-  document.getElementById('reset').onclick = async () => {
-    const ok = confirm(
-      'Reset your champion data?\n\nYour champion statistics are deleted and every game you played until now stops counting for you. ' +
-        'Only games from now on will build them up again. This cannot be undone.',
-    );
-    if (!ok) return;
-    S = await run(api.resetChampionStats());
-    toast('Your champion data was reset');
-    renderMain();
   };
   document.getElementById('leave').onclick = async () => {
     if (!confirm('Are you sure you want to leave the team?')) return;

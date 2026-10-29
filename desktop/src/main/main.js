@@ -217,11 +217,6 @@ app.whenReady().then(async () => {
     await core.refreshTeam();
     return core.snapshot();
   });
-  handle('stats:reset', async () => {
-    await data.resetChampionStats();
-    await core.refreshTeam();
-    return core.snapshot();
-  });
   handle('team:leave', async () => {
     await data.leaveTeam();
     await core.refreshTeam();

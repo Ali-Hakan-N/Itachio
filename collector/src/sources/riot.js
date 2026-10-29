@@ -33,7 +33,9 @@ const path = require('node:path');
 const DRY_RUN_MAX_PER_REGION = 5;
 const TRAIN_EVERY_MS = 60 * 60_000;
 const TRAIN_CHECK_MS = 5 * 60_000;
-const PLAYERS_EVERY_MS = 3 * 60 * 60_000; // player analysis after a training, at most this often
+// The team's players come first: their matches are read and analyzed before the general
+// crawl starts, then again this often (they are few, so it is quick)
+const PLAYERS_EVERY_MS = 2 * 60 * 60_000;
 const FINAL_TRAIN_WAIT_MS = 3 * 60 * 60_000;
 // scripts/schedule-windows.ps1 -Stop creates this file: stop cleanly, like Ctrl+C
 const STOP_FILE = path.join(__dirname, '..', '..', 'data', 'stop');
@@ -128,17 +130,28 @@ module.exports = {
           if (training || Date.now() - lastTrain < TRAIN_EVERY_MS) return;
           training = model
             .trainAndPublish({ client, patch, log })
-            .then(async (m) => {
-              if (!m) return;
-              lastTrain = Date.now();
-              // Players are compared with the model just trained
-              if (Date.now() - lastPlayers < PLAYERS_EVERY_MS) return;
-              lastPlayers = Date.now();
-              await players.updatePlayers({ client, api, log }).catch((err) => log(`player analysis failed (${err.message})`));
+            .then((m) => {
+              if (m) lastTrain = Date.now();
             })
             .catch((err) => log(`model training failed (${err.message})`))
             .finally(() => (training = null));
         }, TRAIN_CHECK_MS);
+
+    // Team players first, then on a timer alongside the crawl
+    let playersRun = null;
+    const updatePlayers = () => {
+      if (dryRun || playersRun) return playersRun;
+      lastPlayers = Date.now();
+      playersRun = players
+        .updatePlayers({ client, api, log })
+        .catch((err) => log(`player analysis failed (${err.message})`))
+        .finally(() => (playersRun = null));
+      return playersRun;
+    };
+    await updatePlayers();
+    const playersTimer = dryRun ? null : setInterval(() => {
+      if (Date.now() - lastPlayers >= PLAYERS_EVERY_MS) updatePlayers();
+    }, TRAIN_CHECK_MS);
 
     log(`patch ${patch} · ${platforms.length} servers · up to ${minutes} min${dryRun ? ' · dry run (no writes)' : ''}`);
     const crawlStats = await crawl({
@@ -164,7 +177,9 @@ module.exports = {
       log,
     });
     clearInterval(trainTimer);
+    clearInterval(playersTimer);
     clearInterval(stopWatch);
+    await playersRun;
     await rescoring;
     await training;
     log(`riot: ${api.requests} requests${stop.reason ? ` · stopped (${stop.reason})` : ''}`);

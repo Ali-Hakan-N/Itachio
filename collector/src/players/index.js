@@ -4,8 +4,8 @@
 //   team     the Flex games all five team members played together, recorded by the app
 //            (drafts with queue 440 and every ally pick linked to a team member), read
 //            once from Riot by match id (server + game id) into data/players/team-games.jsonl.
-//            Players are matched by their pick in the recorded draft. Games before a
-//            player's stats_reset_at (reset in the app) do not count for them.
+//            Players are matched by their pick in the recorded draft. Every such game
+//            counts, always.
 // How each player does on each champion comes from analyze.js for both.
 
 const fs = require('node:fs');
@@ -144,7 +144,7 @@ async function updatePlayers({ client, api, log, data = null }) {
   if (!ENABLED) return log('players: analysis is paused');
   const model = data || check(await client.from('model_snapshots').select('data').order('id', { ascending: false }).limit(1).maybeSingle())?.data;
   if (!model) return log('players: no model yet, skipped');
-  const players = check(await client.from('players').select('id,team_id,riot_id,stats_reset_at').not('team_id', 'is', null));
+  const players = check(await client.from('players').select('id,team_id,riot_id').not('team_id', 'is', null));
   await updateHistory({ client, api, log, model, players });
   await updateTeam({ client, api, log, model, players });
 }
@@ -174,7 +174,6 @@ async function updateTeam({ client, api, log, model, players }) {
   }
 
   // Every player's games: their role is where their champion sits on our side
-  const resetAt = new Map(players.map((p) => [p.id, p.stats_reset_at ? Date.parse(p.stats_reset_at) : 0]));
   const byPlayer = new Map();
   for (const g of games) {
     const entry = cache.get(g.matchId);
@@ -183,7 +182,7 @@ async function updateTeam({ client, api, log, model, players }) {
     const team = side === 'b' ? entry.m.b : entry.m.r;
     for (const p of g.picks) {
       const role = team.indexOf(p.championId);
-      if (role < 0 || entry.start < (resetAt.get(p.playerId) || 0)) continue;
+      if (role < 0) continue;
       if (!byPlayer.has(p.playerId)) byPlayer.set(p.playerId, []);
       byPlayer.get(p.playerId).push({ id: g.matchId, start: entry.start, m: entry.m, side, role });
     }

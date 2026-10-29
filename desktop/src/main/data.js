@@ -94,10 +94,6 @@ class DataStore {
   async leaveTeam() {
     check(await this.client.rpc('leave_team'));
   }
-  // Starts the caller's champion statistics over (earlier games stop counting for them)
-  async resetChampionStats() {
-    check(await this.client.rpc('reset_my_champion_stats'));
-  }
   // Only the team owner may do this; the database checks it
   async kickMember(playerId) {
     check(await this.client.rpc('kick_member', { p_player: playerId }));

@@ -16,6 +16,7 @@ const { Worker } = require('node:worker_threads');
 const idle = require('./idle');
 const { counterpickTendency } = require('./choice');
 const { exportComp } = require('./comp');
+const { analyzeBuilds, loadDdragon } = require('./builds');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
@@ -444,8 +445,30 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const ids = check(await client.from('model_snapshots').select('id').order('id', { ascending: false }));
   const old = ids.slice(KEEP_SNAPSHOTS).map((r) => r.id);
   if (old.length) check(await client.from('model_snapshots').delete().in('id', old));
+  await publishBuilds(client, matches, patch, log).catch((err) => log(`builds: failed (${err.message})`));
   log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights, early game ${data.synE.length} + ${data.vsE.length})`);
   return m;
 }
 
-module.exports = { banRates, pickTraining, storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
+/**
+ * Runes, items and spells per champion and role (builds.js) to champion_builds, and the
+ * champions' magic share with the damage thresholds to app_meta 'champion_damage', so the
+ * app can tell which build fits the enemy team.
+ */
+async function publishBuilds(client, matches, patch, log) {
+  const meta = check(await client.from('app_meta').select('value').eq('key', 'current_patch').maybeSingle());
+  const facts = await loadDdragon(meta?.value || `${patch}.1`);
+  const { rows, thresholds } = analyzeBuilds(matches, facts);
+  if (!rows.length) return log('builds: no games with runes and items yet');
+  check(await client.from('champion_builds').delete().neq('bucket', ''));
+  const stamp = new Date().toISOString();
+  for (let i = 0; i < rows.length; i += 500) {
+    check(await client.from('champion_builds').insert(rows.slice(i, i + 500).map((r) => ({ ...r, patch, updated_at: stamp }))));
+  }
+  const damage = { magic: Object.fromEntries(Object.entries(facts.magic).map(([c, v]) => [c, round(v, 3)])), thresholds: thresholds.map((t) => round(t, 3)) };
+  check(await client.from('app_meta').upsert({ key: 'champion_damage', value: JSON.stringify(damage), updated_at: stamp }));
+  const general = rows.filter((r) => r.bucket === 'any').length;
+  log(`builds: ${general} champion builds, ${rows.length - general} against one kind of damage`);
+}
+
+module.exports = { banRates, publishBuilds, pickTraining, storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
