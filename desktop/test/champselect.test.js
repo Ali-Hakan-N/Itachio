@@ -79,3 +79,12 @@ test('finds the local player pick action until it is locked', () => {
   assert.equal(normalizeSession(buildSession(0)).myPickActionId, 11);
   assert.equal(normalizeSession(buildSession(SCRIPT.length)).myPickActionId, null);
 });
+
+test('our ban: action id while it is open, with the hovered champion', () => {
+  // Local cell 2 bans fifth (action id 5, champion 777)
+  assert.equal(normalizeSession(buildSession(0)).myBanActionId, 5);
+  const during = normalizeSession(buildSession(4));
+  assert.equal(during.myBanActionId, 5);
+  assert.equal(during.banHoverId, 777);
+  assert.equal(normalizeSession(buildSession(5)).myBanActionId, null);
+});

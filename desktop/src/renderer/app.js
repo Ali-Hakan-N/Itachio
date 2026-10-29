@@ -353,6 +353,27 @@ function recRow(r, i, { canHover, hoverId, rank }) {
     </button>`;
 }
 
+// A ban suggestion: score 0-100 for how much banning it helps (see model.js)
+function banRow(r, i, { canHover, hoverId }) {
+  const tier = tierOf(r.score);
+  const hovering = r.championId === hoverId;
+  const pct = r.pickChance * 100;
+  return `
+    <button type="button" class="rec ban ${hovering ? 'hovering' : ''}" data-hover="${r.championId}" data-kind="ban"
+      ${canHover ? 'title="Hover this ban in the client"' : 'disabled'}>
+      <span class="rank">${i + 1}</span>
+      ${champImg(r.championId)}
+      <span class="info">
+        <span class="name">${esc(champName(r.championId))}
+          <span class="badge">${ROLE_NAME[r.role] || ''}</span>
+          <span class="badge" title="How often a team picks it there when it is not banned">Picked ${pct < 1 ? pct.toFixed(1) : Math.round(pct)}%</span>
+          ${hovering ? '<span class="badge live">Hovering</span>' : ''}
+        </span>
+      </span>
+      <span class="score"><b class="sc sc-${tier}">${r.score}</b><i class="bar-${tier}" data-w="${r.score}"></i></span>
+    </button>`;
+}
+
 // Score each champion had when it was locked, to show how later picks changed it
 const pickScores = { gameId: null, map: new Map() };
 
@@ -432,6 +453,28 @@ function renderDraft() {
         limit: 10,
       });
 
+  // Our ban is still open: what to ban, against our picks and intents and their locks
+  const bans = d.myBanActionId
+    ? Engine.recommendBans({
+        model: S.model,
+        unavailable: blocked,
+        allies: draftContext(d).allies,
+        enemies: d.enemy.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position })),
+        limit: 10,
+      })
+    : [];
+  const banBlock = d.myBanActionId
+    ? `<div>
+        <h3 class="sub head-row">
+          <span>Ban suggestions</span>
+          ${bans.length ? '<span class="hint">Click to hover the ban in the client</span>' : ''}
+        </h3>
+        ${bans.length
+          ? `<div class="recs" data-kind="ban">${bans.map((r, i) => banRow(r, i, { canHover: true, hoverId: d.banHoverId })).join('')}</div>`
+          : '<p class="note">Ban suggestions need the learned model; they appear after the next training.</p>'}
+      </div>`
+    : '';
+
   // After locking: your pick with its live breakdown
   let pickRow = '';
   if (local?.locked) {
@@ -460,6 +503,7 @@ function renderDraft() {
           </div>
           <div class="timer"><div id="tbar"></div></div>
         </div>
+        ${banBlock}
         <div>
           <h3 class="sub head-row">
             <span>${local?.locked ? `Your pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</span>
@@ -475,17 +519,17 @@ function renderDraft() {
       ${redCol}
     </div>`;
 
-  const list = $view.querySelector('.recs');
   // Inline style attributes are blocked by the CSP, so bar widths are set here
   for (const bar of $view.querySelectorAll('[data-w]')) bar.style.width = `${bar.dataset.w}%`;
-  if (list) {
+  // Pick and ban lists: a click hovers the champion for that action in the client
+  for (const list of $view.querySelectorAll('.recs')) {
     list.onclick = async (e) => {
       const b = e.target.closest('[data-hover]');
       if (!b || b.disabled) return;
       for (const x of list.querySelectorAll('.rec.hovering')) x.classList.remove('hovering');
       b.classList.add('hovering', 'sending');
       try {
-        await run(api.hoverChampion(Number(b.dataset.hover)));
+        await run(api.hoverChampion(Number(b.dataset.hover), b.dataset.kind === 'ban' ? 'ban' : 'pick'));
       } catch {
         b.classList.remove('hovering');
       } finally {

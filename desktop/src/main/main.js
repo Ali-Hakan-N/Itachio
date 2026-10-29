@@ -180,12 +180,13 @@ app.whenReady().then(async () => {
     await core.refreshTeam();
   });
 
-  handle('draft:hover', async (championId) => {
+  handle('draft:hover', async (championId, kind) => {
+    const what = kind === 'ban' ? 'ban' : 'pick';
     try {
-      await core.hoverChampion(Number(championId));
-      fileLog.info('hover', championId, 'ok');
+      await core.hoverChampion(Number(championId), what);
+      fileLog.info('hover', what, championId, 'ok');
     } catch (err) {
-      fileLog.error('hover', championId, err);
+      fileLog.error('hover', what, championId, err);
       throw err;
     }
   });

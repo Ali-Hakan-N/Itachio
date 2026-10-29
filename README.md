@@ -21,9 +21,10 @@ Pick better in champ select. Flex Drafter watches your League of Legends draft l
 
 1. Keep Flex Drafter open and start League. The app finds the client by itself; the dot at the top right turns green.
 2. When champ select starts, the **Draft** tab shows both teams and your top 10 picks.
-3. Click a champion in the list to hover it in the client. You still lock in from the client.
-4. Every champion on the board has a live score. It changes as new picks come in, and a locked pick shows the score it had when it was locked.
-5. Each team's average score is shown at the top of its side.
+3. While your ban is open, **Ban suggestions** show the 10 champions most worth banning, scored 0 to 100. Click one to hover it as your ban in the client.
+4. Click a champion in the pick list to hover it in the client. You still lock in from the client.
+5. Every champion on the board has a live score. It changes as new picks come in, and a locked pick shows the score it had when it was locked.
+6. Each team's average score is shown at the top of its side.
 
 Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), blue (B), gray (C), red (D).
 

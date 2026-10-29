@@ -30,6 +30,7 @@ const PRUNE = 0.002; // pair weights smaller than this are left out of the uploa
 const MIN_MATCHES = 2000;
 const MAX_TRAIN_MATCHES = 150000; // newest matches only, keeps training memory around 500 MB
 const KEEP_SNAPSHOTS = 3;
+const BAN_MIN_MATCHES = 500; // ban rates are exported from this many matches with bans
 const IDLE_CHECK_MS = 60_000; // while waiting for a free computer
 const BUSY_POLL_MS = 20_000; // while training: stop if a game starts
 
@@ -75,9 +76,22 @@ function loadMatches(patch) {
  *          synergy <S_a, S_b>, a against b <P_a, Q_b> - <P_b, Q_a>
  *   synT/vsT: [[a, ra, b, rb, weight, se, games]] temporary pairs: single pairs with clear
  *          evidence from a pair layer that was not proven as a whole (empty once it is)
+ *   synE/vsE: [[a, ra, b, rb, weight]] pairs through the early game layer (model/early.js),
+ *          when it was kept: added to syn/vs (same sign rules)
+ *   early: { matches, kept, accuracy of the early state alone, kappa } or null
+ *   banRate: { "<champ>": share of matches it was banned in } (when enough matches have bans)
  * Layers the training left out are absent (no pair weights, no fm).
  */
-function exportModel(model, { share, games, tags, patch, matches }) {
+/** Share of matches each champion was banned in, from matches that record bans */
+function banRates(matches) {
+  const withBans = matches.filter((m) => Array.isArray(m.x));
+  if (withBans.length < BAN_MIN_MATCHES) return null;
+  const count = new Map();
+  for (const m of withBans) for (const c of new Set(m.x)) count.set(c, (count.get(c) || 0) + 1);
+  return Object.fromEntries([...count].map(([c, n]) => [c, round(n / withBans.length, 4)]));
+}
+
+function exportModel(model, { share, games, tags, patch, matches, banRate = null }) {
   const champ = {};
   const off = new Array(5).fill(0);
   const syn = [];
@@ -115,6 +129,20 @@ function exportModel(model, { share, games, tags, patch, matches }) {
     });
   const synT = temporary(model.provisional?.s);
   const vsT = temporary(model.provisional?.v);
+  const throughEarly = (list) =>
+    (list || [])
+      .filter(([, w]) => Math.abs(w) >= PRUNE)
+      .map(([key, w]) => [...key.split(':').slice(1).map(Number), round(w, 5)]);
+  const synE = throughEarly(model.early?.pairs.s);
+  const vsE = throughEarly(model.early?.pairs.v);
+  const early = model.early
+    ? {
+        matches: model.early.matches,
+        kept: model.early.kept,
+        accuracy: round(model.early.surrogate.accuracy, 4),
+        kappa: model.early.kappa ? { s: round(model.early.kappa.s, 4), v: round(model.early.kappa.v, 4) } : null,
+      }
+    : null;
 
   // Scale: spread of champion strength (with the off-role term) among well-played picks
   const bases = [];
@@ -149,6 +177,10 @@ function exportModel(model, { share, games, tags, patch, matches }) {
     vs,
     synT,
     vsT,
+    synE,
+    vsE,
+    early,
+    banRate,
     ts,
     tv,
     fm,
@@ -209,6 +241,11 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
     weights: { synergy: data.syn.length, matchup: data.vs.length, latent: data.fm ? Object.keys(data.fm.S).length : 0 },
     topByRole: top,
     temporary: { synergy: pairs(data.synT, ' + '), matchup: pairs(data.vsT, ' vs ') },
+    early: data.early && {
+      ...data.early,
+      synergy: pairs(data.synE, ' + '),
+      matchup: pairs(data.vsE, ' vs '),
+    },
   };
   try {
     fs.writeFileSync(REPORT_FILE, JSON.stringify(report, null, 2));
@@ -331,7 +368,7 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   if (!model) return null;
 
   const m = model.metrics;
-  const data = exportModel(model, { share, games, tags, patch, matches: matches.length });
+  const data = exportModel(model, { share, games, tags, patch, matches: matches.length, banRate: banRates(matches) });
   writeReport({ data, metrics: m, champions: await loadNames(client), seconds: Math.round((Date.now() - t0) / 1000), log });
   check(
     await client.from('model_snapshots').insert({ source: 'riot-model', patch, matches: matches.length, metrics: m, data }).select('id'),
@@ -339,8 +376,8 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const ids = check(await client.from('model_snapshots').select('id').order('id', { ascending: false }));
   const old = ids.slice(KEEP_SNAPSHOTS).map((r) => r.id);
   if (old.length) check(await client.from('model_snapshots').delete().in('id', old));
-  log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights, temporary ${data.synT.length} synergy and ${data.vsT.length} matchup)`);
+  log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights, temporary ${data.synT.length} + ${data.vsT.length}, early game ${data.synE.length} + ${data.vsE.length})`);
   return m;
 }
 
-module.exports = { storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
+module.exports = { banRates, storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };

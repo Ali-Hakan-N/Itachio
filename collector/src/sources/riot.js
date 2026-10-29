@@ -37,16 +37,31 @@ const FINAL_TRAIN_WAIT_MS = 3 * 60 * 60_000;
 const STOP_FILE = path.join(__dirname, '..', '..', 'data', 'stop');
 const STOP_CHECK_MS = 30_000;
 const DB_TRIES = 5;
+const OFFLINE_MAX_MS = 3 * 60 * 60_000; // a lost connection is waited out this long
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Database calls can time out under load: retry with growing pauses instead of
-// stopping a region. Returns fallback() if every try fails.
+// stopping a region. A lost connection does not count as a try; it is waited out.
+// Returns fallback() if every try fails.
+const isNetworkError = (err) => /fetch failed|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network/i.test(String(err?.message || err));
 async function withRetry(what, fn, log, fallback) {
+  let offlineSince = null;
   for (let attempt = 1; ; attempt++) {
     try {
       return await fn();
     } catch (err) {
+      if (isNetworkError(err)) {
+        if (offlineSince === null) {
+          offlineSince = Date.now();
+          log(`${what}: connection lost, waiting for the network`);
+        }
+        if (Date.now() - offlineSince < OFFLINE_MAX_MS) {
+          attempt = 0;
+          await sleep(60_000);
+          continue;
+        }
+      }
       if (attempt >= DB_TRIES) {
         log(`${what} failed ${DB_TRIES} times (${err.message}); skipped`);
         return fallback();

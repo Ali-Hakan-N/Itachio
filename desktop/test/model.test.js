@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 global.Recommend = require('../src/renderer/recommend');
-const { recommend, evaluate, Engine } = require('../src/renderer/model');
+const { recommend, evaluate, recommendBans, Engine } = require('../src/renderer/model');
 
 // Roles: 0 top, 1 jungle, 2 middle, 3 bottom, 4 utility
 // 1 strong top, 2 average top, 3 mid that is rarely played top, 4 bot, 5 support, 6 enemy mid
@@ -133,4 +133,35 @@ test('picks with few games in the role are marked unsure', () => {
   const m = { ...model, champ: { ...model.champ, '2:0': [0.0, 25, 0.95, 0.2] } };
   assert.equal(evaluate({ model: m, championId: 2, role: 'top' }).unsure, true);
   assert.equal(evaluate({ model, championId: 2, role: 'top' }).unsure, false);
+});
+
+test('bans: strong, often picked champions first; counters to our picks rise; open roles only', () => {
+  const m = {
+    ...model,
+    matches: 1000,
+    champ: {
+      ...model.champ,
+      '7:0': [0.2, 300, 1], // strong top, picked 15% of games
+      '8:0': [0.2, 20, 1], // just as strong, rarely picked
+      '9:2': [0.05, 400, 1], // a bit above average mid, counters our 1 top
+      '10:4': [0.3, 900, 1], // very strong support, often banned
+    },
+    vs: [...model.vs, [1, 0, 9, 2, -0.3]],
+    banRate: { 10: 0.5 },
+  };
+  const bans = recommendBans({ model: m });
+  const at = (id) => bans.findIndex((b) => b.championId === id);
+  assert.ok(at(7) >= 0 && at(7) < at(8), 'often picked before rarely picked');
+  assert.equal(bans[0].championId, 10, 'ban rate raises the chance it is picked when open');
+  assert.ok(bans.every((b) => b.score >= 0 && b.score <= 100));
+  // 9 mid counters our top 1: worth more once we intend to play 1
+  const plain = recommendBans({ model: m }).find((b) => b.championId === 9)?.value || 0;
+  const vsUs = recommendBans({ model: m, allies: [{ championId: 1, position: 'top' }] }).find((b) => b.championId === 9).value;
+  assert.ok(vsUs > plain);
+  // Our own pick intents are never suggested; a role the enemy already filled is skipped
+  assert.ok(!recommendBans({ model: m, allies: [{ championId: 7, position: 'top' }] }).some((b) => b.championId === 7));
+  assert.ok(!recommendBans({ model: m, enemies: [{ championId: 2, position: 'top' }] }).some((b) => b.championId === 7));
+  // Unavailable (banned or locked) champions are left out
+  assert.ok(!recommendBans({ model: m, unavailable: new Set([10]) }).some((b) => b.championId === 10));
+  assert.deepEqual(Engine.recommendBans({ model: null }), []);
 });

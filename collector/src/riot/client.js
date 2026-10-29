@@ -1,10 +1,14 @@
 // Riot API client. Keeps a separate rate limiter per host (tr1, europe, ...),
 // because Riot's limits are per host too. On 429 it waits for Retry-After, on 5xx
 // it retries a few times, and on an invalid key (401/403) it stops the whole run.
+// When the connection is lost it waits for the network (up to OFFLINE_MAX_MS) instead
+// of giving up, so an internet outage does not end the day's collecting.
 
 class RiotKeyError extends Error {}
 
 const sleepReal = (ms) => new Promise((r) => setTimeout(r, ms));
+const OFFLINE_MAX_MS = 3 * 60 * 60_000;
+const OFFLINE_WAIT_MS = 60_000;
 
 // "20:1,100:120" -> [[20, 1000], [100, 120000]]  (requests : seconds)
 function parseLimits(spec) {
@@ -105,9 +109,22 @@ class RiotClient {
       try {
         res = await this.fetch(url, { headers: { 'X-Riot-Token': this.key } });
       } catch (err) {
-        if (attempt >= 4) throw new Error(`${host}${path}: connection failed (${err.message})`);
-        await this.sleep(2000 * attempt);
+        if (attempt < 4) {
+          await this.sleep(2000 * attempt);
+          continue;
+        }
+        // Still failing: most likely the network is down. Wait for it.
+        const since = (this.offlineSince ??= this.now());
+        if (this.now() - since > OFFLINE_MAX_MS) throw new Error(`${host}${path}: connection failed (${err.message})`);
+        if (!this.offlineLogged) this.log(`connection lost (${err.message}), waiting for the network`);
+        this.offlineLogged = true;
+        await this.sleep(OFFLINE_WAIT_MS);
         continue;
+      }
+      if (this.offlineSince !== undefined) {
+        if (this.offlineLogged) this.log(`connection back after ${Math.round((this.now() - this.offlineSince) / 60_000)} min`);
+        this.offlineSince = undefined;
+        this.offlineLogged = false;
       }
 
       this.#adoptLimits(res);

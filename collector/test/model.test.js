@@ -134,3 +134,85 @@ test('worker: trains in a background thread, and stops when asked', async () => 
   const stopped = await trainInWorker({ matches, share, tags: new Map(), log: () => {}, shouldStop: async () => true, pollMs: 5 });
   assert.equal(stopped, null);
 });
+
+// Matches with early data: 4 bot wins its lane against 5 bot, and 2 mid wins its lane
+// against the enemy jungler 3 (a pair in different roles). The result depends on the
+// lanes, so these pairs reach the result only through the early game.
+function syntheticEarly(n, seed = 5) {
+  let s = seed;
+  const rand = () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  };
+  const gauss = () => Math.sqrt(-2 * Math.log(rand() + 1e-12)) * Math.cos(2 * Math.PI * rand());
+  const pick = (pool, used) => {
+    for (;;) {
+      const c = pool[Math.floor(rand() * pool.length)];
+      if (!used.has(c)) return used.add(c), c;
+    }
+  };
+  const pools = [[1, 21, 22, 23], [3, 31, 32, 33], [2, 41, 42, 43], [4, 5, 51, 52], [61, 62, 63, 64]];
+  const lane = (adv, sign) => {
+    const cs = Math.round(70 + sign * 6 * adv);
+    return [cs, 0, Math.max(0, Math.round(2 + sign * adv)), +(sign * adv > 0.5), +(sign * adv > 0.8), Math.max(0, Math.round(1 + sign * adv / 2)), 0];
+  };
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const used = new Set();
+    const b = pools.map((p) => pick(p, used));
+    const r = pools.map((p) => pick(p, used));
+    const adv = [0, 1, 2, 3, 4].map(() => gauss());
+    adv[3] += (b[3] === 4 && r[3] === 5) * 1.5 - (r[3] === 4 && b[3] === 5) * 1.5;
+    adv[2] += (b[2] === 2 && r[1] === 3) * 1.5 - (r[2] === 2 && b[1] === 3) * 1.5;
+    const z = (b[0] === 1) * 0.5 - (r[0] === 1) * 0.5 + 0.5 * adv.reduce((x, y) => x + y, 0);
+    const w = rand() < 1 / (1 + Math.exp(-z)) ? 1 : 0;
+    out.push({
+      id: `E_${i}`, q: 440, w, b, r,
+      lb: adv.map((a) => lane(a, 1)),
+      lr: adv.map((a) => lane(a, -1)),
+      f: [0, 0, 0, 0, 0].map(() => (rand() < 0.5 ? 1 : -1)),
+    });
+  }
+  return out;
+}
+
+test('early game layer: pairs that matter through the lanes are learned and kept', () => {
+  const matches = syntheticEarly(5000);
+  const { share, games } = roleShares(matches);
+  const model = train(matches, { share, tagOf: () => 'None' }, { ...FAST, earlyMinMatches: 1000 });
+  const kept = Object.fromEntries(model.metrics.layers.map((l) => [l.name, l.accepted]));
+  assert.ok(kept['early game'], 'early game layer kept');
+  assert.ok(model.early.surrogate.accuracy > 0.6, `surrogate ${model.early.surrogate.accuracy}`);
+  const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
+  const find = (list, a, ra, b, rb) => list.find((x) => x[0] === a && x[1] === ra && x[2] === b && x[3] === rb);
+  const bot = find(data.vsE, 4, 3, 5, 3);
+  const cross = find(data.vsE, 2, 2, 3, 1);
+  assert.ok(bot && bot[4] > 0.1, `bot lane ${bot}`);
+  assert.ok(cross && cross[4] > 0.1, `mid against jungle ${cross}`);
+  // The planted pairs are the strongest ones
+  const top = [...data.vsE].sort((x, y) => Math.abs(y[4]) - Math.abs(x[4])).slice(0, 2).map((x) => x.slice(0, 4).join(':'));
+  assert.deepEqual(top.sort(), ['2:2:3:1', '4:3:5:3']);
+  assert.ok(data.early.kept && data.early.kappa.v > 0);
+});
+
+test('early game layer is skipped without enough early data', () => {
+  const matches = synthetic(2500);
+  const { share } = roleShares(matches);
+  const model = train(matches, { share, tagOf: () => 'None' }, FAST);
+  assert.equal(model.early, null);
+  assert.ok(!model.metrics.layers.some((l) => l.name === 'early game'));
+});
+
+test('bans are kept in compact matches and turned into ban rates', () => {
+  const { banRates } = require('../src/model');
+  const roles = ['top', 'jungle', 'middle', 'bottom', 'utility'];
+  const parsed = { id: 'B_1', queue: 440, b: [7, 8], p: roles.flatMap((r, i) => [{ c: i + 1, r, t: 100, w: true }, { c: i + 11, r, t: 200, w: false }]) };
+  assert.deepEqual(toCompact(parsed).x, [7, 8]);
+  const many = Array.from({ length: 600 }, (_, i) => ({ x: i % 3 === 0 ? [7, 7] : [8] }));
+  const rates = banRates(many);
+  assert.equal(rates[7], 0.3333); // counted once per match
+  assert.equal(rates[8], 0.6667);
+  assert.equal(banRates(many.slice(0, 100)), null); // too few matches with bans
+});

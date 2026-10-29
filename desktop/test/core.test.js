@@ -173,3 +173,18 @@ test('pick score: each teammate pick is saved with its score at lock time', asyn
   assert.ok(mine.score > 50);
   assert.equal(data.db.actions.get('enemy:pick:1').score, null); // enemies are not scored
 });
+
+test('hover: a ban suggestion is hovered on our ban action', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  lcu.get = async () => null;
+  const sent = [];
+  lcu.request = async (method, path, body) => sent.push([method, path, body]);
+  const core = new AppCore({ lcu, data: fakeData(), log: { error: () => {} } });
+  await core.loadUserData();
+  const { buildSession } = require('./mock-lcu');
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(2), eventType: 'Update' });
+  await core.hoverChampion(157, 'ban');
+  assert.deepEqual(sent, [['PATCH', '/lol-champ-select/v1/session/actions/5', { championId: 157 }]]);
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(5), eventType: 'Update' });
+  await assert.rejects(core.hoverChampion(157, 'ban'), /No ban/);
+});

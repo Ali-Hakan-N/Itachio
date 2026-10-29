@@ -1,6 +1,9 @@
 // Win model for "does blue win", trained on single matches and built up in layers:
 //
 //   strength       champion strength per role + learned off-role term
+//   early game     what the draft's pairs do to the first minutes (lanes and first
+//                  objectives), learned by early.js from far less noisy signals, as two
+//                  features; the win model learns how much of it turns into wins
 //   synergy        a weight for every same-team pair (champion:role × champion:role)
 //                  and for every class pair (Mage + Tank ...)
 //   matchup        a weight for every enemy pair, and for class against class
@@ -25,12 +28,13 @@
 // fitted on all matches, and each explicit weight gets an approximate standard error
 // (Laplace).
 //
-// train() returns { keys, w, bias, lambdas, metrics } like before, plus se, groups, fm
-// and provisional.
+// train() returns { keys, w, bias, lambdas, metrics } like before, plus se, groups, fm,
+// provisional and early.
 
 const { features, groupOf } = require('./features');
+const { earlyModel } = require('./early');
 
-const GROUP_CODE = { c: 0, o: 1, s: 2, ts: 3, v: 4, tv: 5 };
+const GROUP_CODE = { c: 0, o: 1, s: 2, ts: 3, v: 4, tv: 5, e: 6 };
 const CODE_GROUP = Object.fromEntries(Object.entries(GROUP_CODE).map(([g, c]) => [c, g]));
 // Grids are tau in pseudo-games
 const LAYERS = [
@@ -39,6 +43,11 @@ const LAYERS = [
   { name: 'matchup', groups: ['v', 'tv'], tune: 'v', grid: [10, 30, 100, 300, 1000, 3000], adaptive: true },
   { name: 'latent pairs', fm: true, grid: [3, 30, 300] },
 ];
+// Two weights (synergy and matchup part of the predicted early advantage); used when
+// enough matches have early data
+const EARLY_LAYER = { name: 'early game', groups: ['e'], tune: 'e', grid: [0.3, 3, 30] };
+const EARLY_MIN_MATCHES = 3000;
+const EARLY_KEYS = ['e:s', 'e:v'];
 const FIXED_TAU = { o: 1, ts: 10, tv: 10 };
 const ADAPTIVE_RANGE = [0.02, 10]; // how far adaptive shrinkage may move a weight's penalty
 const ADAPTIVE_ROUNDS = 3; // reweighting passes, close to a sparse (L1-like) prior
@@ -67,6 +76,31 @@ function hash(id) {
   let h = 2166136261;
   for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
   return h >>> 0;
+}
+
+/** Adds dense columns (one value per row) to a design matrix, in place */
+function appendColumns(D, names, values, group) {
+  const n = D.y.length;
+  const extra = names.length;
+  const rowPtr = new Int32Array(n + 1);
+  const cols = new Int32Array(D.cols.length + n * extra);
+  const vals = new Float32Array(D.vals.length + n * extra);
+  const first = D.keys.length;
+  let k = 0;
+  for (let r = 0; r < n; r++) {
+    for (let j = D.rowPtr[r]; j < D.rowPtr[r + 1]; j++, k++) {
+      cols[k] = D.cols[j];
+      vals[k] = D.vals[j];
+    }
+    for (let e = 0; e < extra; e++, k++) {
+      cols[k] = first + e;
+      vals[k] = values[e][r];
+    }
+    rowPtr[r + 1] = k;
+  }
+  D.keys = [...D.keys, ...names];
+  D.groups = Uint8Array.from([...D.groups, ...names.map(() => GROUP_CODE[group])]);
+  Object.assign(D, { rowPtr, cols, vals });
 }
 
 /** Sparse design matrix (CSR) plus the 10 champion:role entities of every match */
@@ -438,6 +472,11 @@ function train(matches, ctx, options = {}) {
   const t0 = Date.now();
   const D = design(matches, ctx, o.folds);
   const rows = matches.map((_, i) => i);
+  const early = o.early === false
+    ? null
+    : earlyModel(D, matches, { folds: o.folds, minMatches: o.earlyMinMatches ?? EARLY_MIN_MATCHES, codes: GROUP_CODE, log });
+  if (early) appendColumns(D, EARLY_KEYS, [early.features.s, early.features.v], 'e');
+  const plan = early ? [LAYERS[0], EARLY_LAYER, ...LAYERS.slice(1)] : LAYERS;
   o.rows = rows;
   // Settings are compared on two validation splits, averaged, so the choice depends less on luck
   const splits = [0, 1].map((f) => ({
@@ -483,7 +522,7 @@ function train(matches, ctx, options = {}) {
   log(`model: strength      gain ${(vsBase.improvement * 1000).toFixed(2)} ± ${(vsBase.se * 1000).toFixed(2)} ×1e-3 over always-50%`);
 
   const rejected = [];
-  for (const layer of LAYERS.slice(1)) {
+  for (const layer of plan.slice(1)) {
     const candidate = tuneLayer(current, layer);
     const zCand = outOfFold(D, candidate, o);
     const c = compare(D, rows, zCurrent, zCand);
@@ -514,6 +553,7 @@ function train(matches, ctx, options = {}) {
     fm = { k: current.fm.k, entities: D.entities, ...params.L };
   }
 
+  const earlyOut = earlyResult(D, early, current, params, se);
   const provisional = provisionalPairs(D, rows, Float64Array.from(zCurrent, (z) => cal.a * z + cal.b), rejected, log);
 
   const n = rows.length;
@@ -546,7 +586,26 @@ function train(matches, ctx, options = {}) {
     groups: [...current.groups],
     fm,
     provisional,
+    early: earlyOut,
   };
+}
+
+/**
+ * Early game layer in win terms. When it was kept, every pair's early weight times the
+ * win model's weight for that part: what the pair is worth in log-odds of winning
+ * through the early game. Returns null without early data.
+ */
+function earlyResult(D, early, cfg, params, se) {
+  if (!early) return null;
+  const out = { matches: early.matches, surrogate: early.surrogate, lambdas: early.lambdas, kept: cfg.groups.has('e'), pairs: { s: [], v: [] } };
+  if (!out.kept) return out;
+  const [is, iv] = EARLY_KEYS.map((k) => D.keys.indexOf(k));
+  out.kappa = { s: params.w[is], v: params.w[iv], seS: se[is], seV: se[iv] };
+  for (const [g, kappa] of [['s', out.kappa.s], ['v', out.kappa.v]]) {
+    const w = early.weights[g];
+    for (let i = 0; i < w.length; i++) if (w[i]) out.pairs[g].push([D.keys[i], kappa * w[i]]);
+  }
+  return out;
 }
 
 // Complementary error function (Numerical Recipes, error below 1.2e-7), x >= 0.
@@ -601,4 +660,4 @@ function provisionalPairs(D, rows, z, rejected, log) {
   return out;
 }
 
-module.exports = { train, fit, design, predict, LAYERS };
+module.exports = { train, fit, design, predict, appendColumns, LAYERS };

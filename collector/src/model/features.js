@@ -1,9 +1,11 @@
 // Turns matches into features for the win model. Pure functions.
 //
-// A compact match: { id, q, w, b, r, lb?, lr? }
+// A compact match: { id, q, w, b, r, x?, lb?, lr?, f? }
 //   b / r: blue / red champion ids by role [top, jungle, middle, bottom, utility]
 //   w: 1 when blue won
-//   lb / lr: laning phase per role, as riot/parse.js laneOf() (newer matches only)
+//   x: banned champion ids, both teams (newer matches)
+//   lb / lr: early game per role, as riot/parse.js laneOf() (newer matches only)
+//   f: first blood, tower, dragon, herald, grubs: 1 blue, -1 red, 0 nobody (newer matches)
 //
 // Features, seen from blue (+1 for blue, -1 for red):
 //   c:<champ>:<role>                 champion strength in a role
@@ -37,7 +39,9 @@ function toCompact(m) {
   }
   if (b.includes(0) || r.includes(0) || blueWon === null) return null;
   const out = { id: m.id, q: m.queue, w: blueWon ? 1 : 0, b, r };
+  if (Array.isArray(m.b)) out.x = m.b;
   if (lb.some(Boolean) || lr.some(Boolean)) Object.assign(out, { lb, lr });
+  if (m.first) out.f = m.first.map((t) => (t === 100 ? 1 : t === 200 ? -1 : 0));
   return out;
 }
 

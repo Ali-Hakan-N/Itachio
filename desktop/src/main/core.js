@@ -191,10 +191,11 @@ class AppCore extends EventEmitter {
     this.#enqueue(() => this.#persistDraft(draft));
   }
 
-  // Sets a hover (or pick intent before our turn) in the client. Locking stays in the client.
-  async hoverChampion(championId) {
-    const actionId = this.state.draft?.myPickActionId;
-    if (!actionId) throw new Error('No pick to set right now');
+  // Sets a hover (or pick intent before our turn) in the client, for our pick or our
+  // ban. Locking stays in the client.
+  async hoverChampion(championId, kind = 'pick') {
+    const actionId = kind === 'ban' ? this.state.draft?.myBanActionId : this.state.draft?.myPickActionId;
+    if (!actionId) throw new Error(kind === 'ban' ? 'No ban to set right now' : 'No pick to set right now');
     await this.lcu.request('PATCH', `/lol-champ-select/v1/session/actions/${actionId}`, { championId });
   }
 

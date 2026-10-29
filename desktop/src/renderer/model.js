@@ -6,6 +6,11 @@
 //                   + latent pair terms, when the training kept that layer
 // Only layers the training proved (cross-validated) are in the model.
 //
+// Early game pairs (synE/vsE): what a pair is worth in winning through the first
+// minutes (lanes, first objectives), learned from that much less noisy data and kept
+// only when it improves cross-validated win predictions. They add to synergy and
+// matchups like the pairs learned from results alone.
+//
 // Temporary pairs (synT/vsT): while the synergy or matchup layer is not proven as a
 // whole, the training still tests single pairs one by one and exports those that pass
 // (false discovery rate 10%, collector/src/model/train.js). They count with their
@@ -23,6 +28,18 @@
 // Order and strategy are the model's; only the presentation is stretched. The scale
 // is fixed per model, not per draft. Picks with few games in the data are marked unsure.
 //
+// Bans: banning a champion is worth what it would cost us if the enemy picked it,
+// times how likely they are to pick it:
+//   value = Σ over roles still open on the enemy team of
+//           P(enemy picks it in that role) × (its logit there - the role's average pick)
+// P is its share of a team's games in that role, divided by (1 - its ban rate) so
+// champions that are often banned are not undervalued. The logit is the same model as
+// for picks, seen from the enemy: their locked picks are its allies, our picks and
+// pick intents its enemies, so a champion that counters our picks is worth more.
+//   ban score = 100 × (1 - exp(-value / BAN_UNIT)), BAN_UNIT = 0.1 standard deviations
+// of strength: a champion one standard deviation above its role's average that the
+// enemy picks one game in ten scores 63. Fixed per model, not relative to the list.
+//
 // Engine picks this model when the app has one and falls back to the older
 // recommend.js otherwise. Exposed as window.Engine in the browser and as
 // module.exports in Node (tests).
@@ -34,6 +51,8 @@
   const SPREAD = 0.35; // how far one standard deviation of strength moves the score
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
+  const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
+  const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
   const TEMP_FROM_Z = 1.5; // evidence (weight / standard error) where a temporary pair starts to count
   const TEMP_FULL_Z = 2.5; // evidence from which it counts fully
   const TEMP_PAIR = 0.5; // cap of one temporary pair, in standard deviations of strength
@@ -50,12 +69,19 @@
       const b = bestRole.get(c);
       if (!b || b.games < games) bestRole.set(c, { r, games });
     }
-    // Pair weights as { w, se }; the reversed key flips the sign for matchups
-    const pair = (list, anti) => {
+    // Pair weights as { w, se }; the reversed key flips the sign for matchups.
+    // A pair in several lists (results, early game) adds up.
+    const pair = (lists, anti) => {
       const m = new Map();
-      for (const [a, ra, b, rb, w, se] of list || []) {
-        m.set(`${a}:${ra}:${b}:${rb}`, { w, se: se || 0 });
-        m.set(`${b}:${rb}:${a}:${ra}`, { w: anti ? -w : w, se: se || 0 });
+      const add = (key, w, se) => {
+        const e = m.get(key);
+        m.set(key, e ? { w: e.w + w, se: Math.hypot(e.se, se) } : { w, se });
+      };
+      for (const list of lists) {
+        for (const [a, ra, b, rb, w, se] of list || []) {
+          add(`${a}:${ra}:${b}:${rb}`, w, se || 0);
+          add(`${b}:${rb}:${a}:${ra}`, anti ? -w : w, se || 0);
+        }
       }
       return m;
     };
@@ -72,10 +98,10 @@
     const ix = {
       champ,
       bestRole,
-      syn: pair(model.syn, false),
-      vs: pair(model.vs, true),
-      synT: pair(model.synT, false),
-      vsT: pair(model.vsT, true),
+      syn: pair([model.syn, model.synE], false),
+      vs: pair([model.vs, model.vsE], true),
+      synT: pair([model.synT], false),
+      vsT: pair([model.vsT], true),
       ts: classPair(model.ts, false),
       tv: classPair(model.tv, true),
       tags: new Map(Object.entries(model.tags || {}).map(([id, t]) => [Number(id), t])),
@@ -91,6 +117,22 @@
     ix.center = bases.length ? bases.reduce((a, b) => a + b, 0) / bases.length : 0;
     const sd = bases.length > 1 ? Math.sqrt(bases.reduce((a, b) => a + (b - ix.center) ** 2, 0) / bases.length) : 0;
     ix.sd = sd > 1e-6 ? sd : 0.08;
+    // Ban inputs: how likely a team is to pick each champion:role, and the role's average pick
+    ix.matches = model.matches || 0;
+    ix.banRate = new Map(Object.entries(model.banRate || {}).map(([id, r]) => [Number(id), r]));
+    ix.pickChance = new Map();
+    ix.roleAverage = [0, 0, 0, 0, 0];
+    const weightSum = [0, 0, 0, 0, 0];
+    if (ix.matches) {
+      for (const [key, e] of champ) {
+        const [c, r] = key.split(':').map(Number);
+        const p = Math.min(0.9, e.games / (2 * ix.matches) / Math.max(0.1, 1 - (ix.banRate.get(c) || 0)));
+        ix.pickChance.set(key, p);
+        ix.roleAverage[r] += p * (strengthOf(key, e) - ix.center);
+        weightSum[r] += p;
+      }
+      for (let r = 0; r < 5; r++) ix.roleAverage[r] = weightSum[r] ? ix.roleAverage[r] / weightSum[r] : 0;
+    }
     cache.set(model, ix);
     return ix;
   }
@@ -165,7 +207,8 @@
     }
     mu += clamp(muT, TEMP_TOTAL * ix.sd);
 
-    const score = toScore(ix, base + syn + mu);
+    const logit = base + syn + mu;
+    const score = toScore(ix, logit);
     const baseScore = toScore(ix, base);
     return {
       championId,
@@ -174,6 +217,7 @@
       synergy: Math.round(toScore(ix, base + syn) - baseScore),
       matchup: Math.round(score - toScore(ix, base + syn)),
       score: Math.round(score),
+      logit,
       offRole: share < OFF_ROLE_SHARE,
       games: e ? e.games : 0,
       uncertainty: Math.round((50 * SPREAD * Math.sqrt(variance)) / ix.sd),
@@ -205,15 +249,55 @@
     return scoreOne(ix, championId, r, allies, enemies);
   }
 
+  /**
+   * Ban suggestions: { model, unavailable, allies, enemies, limit }. allies are our
+   * picks and pick intents, enemies the enemy's locked picks (both { championId, position }).
+   * Returns [{ championId, score, role, pickChance, value }], best ban first.
+   */
+  function recommendBans({ model, unavailable = new Set(), allies = [], enemies = [], limit = 10 }) {
+    const ix = index(model);
+    if (!ix.matches) return [];
+    const mine = new Set(allies.map((p) => asPick(p).championId));
+    const taken = new Set(enemies.map((p) => roleIndex(ix, asPick(p).championId, asPick(p).position)));
+    const out = [];
+    for (const championId of ix.bestRole.keys()) {
+      if (unavailable.has(championId) || mine.has(championId)) continue;
+      let value = 0;
+      let main = null;
+      for (let r = 0; r < 5; r++) {
+        if (taken.has(r)) continue;
+        const key = `${championId}:${r}`;
+        const e = ix.champ.get(key);
+        if (!e || e.games < BAN_MIN_GAMES) continue;
+        const p = ix.pickChance.get(key) || 0;
+        const harm = scoreOne(ix, championId, r, enemies, allies).logit - ix.roleAverage[r];
+        const part = p * harm;
+        value += part;
+        if (!main || part > main.part) main = { r, part, p };
+      }
+      if (!main || value <= 0) continue;
+      out.push({
+        championId,
+        value,
+        score: Math.round(100 * (1 - Math.exp(-value / (BAN_UNIT * ix.sd)))),
+        role: ROLES[main.r],
+        pickChance: main.p,
+      });
+    }
+    return out.sort((a, b) => b.value - a.value).slice(0, limit);
+  }
+
   // Older engine (recommend.js) takes allies as champion ids
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
   const Engine = {
     recommend: (args) => (has(args.model) ? recommend(args) : root.Recommend.recommend(legacy(args))),
     evaluate: (args) => (has(args.model) ? evaluate(args) : root.Recommend.evaluate(legacy(args))),
+    // Bans need the learned model; without one there are no suggestions
+    recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),
   };
 
-  const api = { recommend, evaluate, Engine, ROLES };
+  const api = { recommend, evaluate, recommendBans, Engine, ROLES };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Engine = Engine;
 })(typeof window !== 'undefined' ? window : globalThis);
