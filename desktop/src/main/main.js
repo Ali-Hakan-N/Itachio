@@ -9,18 +9,23 @@ const { AppCore } = require('./core');
 const { setupUpdater } = require('./updater');
 
 // The app was called Flex Drafter: its data folder was %APPDATA%\FlexDrafter. On the first
-// start as Itachio the saved sign-in and the log move over, so nobody has to sign in again.
+// start as Itachio the saved sign-in and the log move over, so nobody has to sign in again,
+// then the old data folder and the old update cache are removed.
 (function moveOldData() {
   const now = app.getPath('userData');
   const old = path.join(app.getPath('appData'), 'FlexDrafter');
   try {
-    if (!fs.existsSync(old) || fs.existsSync(path.join(now, 'session.json'))) return;
-    fs.mkdirSync(now, { recursive: true });
-    for (const [from, to] of [['session.json', 'session.json'], ['flex-drafter.log', 'itachio.log']]) {
-      if (fs.existsSync(path.join(old, from))) fs.copyFileSync(path.join(old, from), path.join(now, to));
+    if (!fs.existsSync(old)) return;
+    if (!fs.existsSync(path.join(now, 'session.json'))) {
+      fs.mkdirSync(now, { recursive: true });
+      for (const [from, to] of [['session.json', 'session.json'], ['flex-drafter.log', 'itachio.log']]) {
+        if (fs.existsSync(path.join(old, from))) fs.copyFileSync(path.join(old, from), path.join(now, to));
+      }
     }
+    fs.rmSync(old, { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.LOCALAPPDATA || '', 'flex-drafter-updater'), { recursive: true, force: true });
   } catch {
-    /* worst case the player signs in once more */
+    /* worst case the player signs in once more, or an old folder stays */
   }
 })();
 
