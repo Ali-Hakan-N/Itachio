@@ -1,41 +1,38 @@
-// Player analysis: fetches the Flex and Solo/Duo matches of every player in a team (their
-// Riot account is linked by the app), keeps them on this computer, and writes how each
-// player does on each champion (analyze.js) to player_champion_stats.
+// Player analysis from the team's own games: the Flex games all five team members played
+// together, recorded by the app (drafts with queue 440 and every ally pick linked to a
+// team member). Each is read once from Riot by its match id (server + game id) and kept
+// in data/players/team-games.jsonl. How each player does on each champion (analyze.js)
+// goes to player_champion_stats; games before a player's stats_reset_at (reset in the
+// app) do not count for them.
 //
-// The account id the app reads from the League client is not the one the Riot API
-// uses, so the player is looked up by Riot ID (name#tag, also linked by the app). Their
-// server is the region whose match list has their games. Matches go to
-// data/players/<hash of the account>.jsonl, so each match is downloaded once; later runs
-// only fetch what is new. Up to MAX_GAMES of each player's newest games from the last
-// LOOKBACK_DAYS are used.
+// Players are matched to the Riot data by their pick in the recorded draft (champion on
+// our side), so no account lookup is needed.
 
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { parseMatch } = require('../riot/parse');
 const { PLATFORMS } = require('../riot/crawl');
-const { toCompact, ROLE_INDEX } = require('../model/features');
+const { toCompact } = require('../model/features');
 const { analyzePlayers } = require('./analyze');
 const { RiotKeyError } = require('../riot/client');
 
-// Paused for now: no player matches are fetched and no stats are written. Set to true to
-// turn the analysis back on (the app reads player_champion_stats again with PLAYER_STATS).
-const ENABLED = false;
+// Set to false to pause the analysis (the app reads player_champion_stats with PLAYER_STATS)
+const ENABLED = true;
+const FLEX = 440;
+const TEAM_SIZE = 5;
 
 const DIR = path.join(__dirname, '..', '..', 'data', 'players');
-const QUEUES = [440, 420]; // Flex, Solo/Duo
-const MAX_GAMES = 300;
-const LOOKBACK_DAYS = 365;
-const PAGE = 100;
-const ROLE = { TOP: 'top', JUNGLE: 'jungle', MIDDLE: 'middle', BOTTOM: 'bottom', UTILITY: 'utility' };
-const REGIONS = [...new Set(Object.values(PLATFORMS))];
+const CACHE = path.join(DIR, 'team-games.jsonl');
 
-const fileFor = (puuid) => path.join(DIR, `${crypto.createHash('sha1').update(puuid).digest('hex').slice(0, 16)}.jsonl`);
+function check({ data, error }) {
+  if (error) throw new Error(error.message);
+  return data;
+}
 
-function loadCache(puuid) {
+function loadCache() {
   const out = new Map();
   try {
-    for (const line of fs.readFileSync(fileFor(puuid), 'utf8').split('\n')) {
+    for (const line of fs.readFileSync(CACHE, 'utf8').split('\n')) {
       if (!line) continue;
       try {
         const g = JSON.parse(line);
@@ -50,89 +47,109 @@ function loadCache(puuid) {
   return out;
 }
 
-/** One player's game from a raw match-v5 response, or { id, skip } when it does not count */
-function playerGame(raw, puuid) {
-  const id = raw?.metadata?.matchId;
+/** A team game from a raw match-v5 response: { id, start, m } or { id, skip } */
+function teamGame(raw, id) {
   const parsed = parseMatch(raw);
   const m = parsed && toCompact(parsed);
-  const me = raw?.info?.participants?.find((p) => p.puuid === puuid);
-  const role = me ? ROLE_INDEX[ROLE[me.teamPosition]] : undefined;
-  if (!m || !me || role === undefined) return { id, skip: true };
-  return { id, start: parsed.start, q: parsed.queue, m, side: me.teamId === 100 ? 'b' : 'r', role };
+  return m ? { id, start: parsed.start, m } : { id, skip: true };
 }
 
-/** The Riot API account (puuid) of a Riot ID "name#tag", and the region with their matches */
-async function resolveAccount(api, riotId) {
-  const [name, tag] = String(riotId || '').split('#');
-  if (!name || !tag) return null;
-  const account = await api.get('europe', `/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`);
-  if (!account?.puuid) return null;
-  for (const region of REGIONS) {
-    const ids = await api.get(region, `/lol/match/v5/matches/by-puuid/${account.puuid}/ids`, { count: 1 });
-    if (ids?.length) return { puuid: account.puuid, region };
+async function selectAll(query) {
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const page = check(await query().range(from, from + 999));
+    rows.push(...page);
+    if (page.length < 1000) return rows;
   }
-  return { puuid: account.puuid, region: null };
-}
-
-/** Fetches new matches of one player into the cache; returns their games, newest MAX_GAMES */
-async function syncPlayer(api, riotId, log) {
-  const account = await resolveAccount(api, riotId);
-  if (!account) {
-    log('players: a Riot ID was not found, skipped');
-    return [];
-  }
-  const { puuid, region } = account;
-  const cache = loadCache(puuid);
-  if (!region) return [...cache.values()].filter((g) => !g.skip);
-  const since = Math.floor((Date.now() - LOOKBACK_DAYS * 86_400_000) / 1000);
-  const ids = [];
-  for (const queue of QUEUES) {
-    for (let start = 0; start < MAX_GAMES; start += PAGE) {
-      const page = (await api.get(region, `/lol/match/v5/matches/by-puuid/${puuid}/ids`, { queue, start, count: PAGE, startTime: since })) || [];
-      ids.push(...page);
-      if (page.length < PAGE) break;
-    }
-  }
-  const fresh = ids.filter((id) => !cache.has(id));
-  if (fresh.length) {
-    fs.mkdirSync(DIR, { recursive: true });
-    for (const id of fresh) {
-      const g = playerGame(await api.get(region, `/lol/match/v5/matches/${id}`), puuid);
-      if (!g.id) continue;
-      cache.set(g.id, g);
-      fs.appendFileSync(fileFor(puuid), `${JSON.stringify(g)}\n`);
-    }
-  }
-  return [...cache.values()].filter((g) => !g.skip).sort((a, b) => b.start - a.start).slice(0, MAX_GAMES);
-}
-
-function check({ data, error }) {
-  if (error) throw new Error(error.message);
-  return data;
 }
 
 /**
- * Updates player_champion_stats for every player with a linked account.
+ * The qualifying games: [{ matchId, region, draft, picks: [{ playerId, championId }] }],
+ * drafts of finished Flex games with all five ally picks made by team members.
+ */
+async function teamDrafts(client, players) {
+  const team = new Map(players.map((p) => [p.id, p.team_id]));
+  const drafts = await selectAll(() =>
+    client.from('drafts').select('id,team_id,lcu_game_id,platform,our_side,started_at')
+      .eq('queue_id', FLEX).eq('status', 'finished').not('platform', 'is', null).not('lcu_game_id', 'is', null).order('id'),
+  );
+  if (!drafts.length) return [];
+  const actions = [];
+  for (let i = 0; i < drafts.length; i += 200) {
+    const ids = drafts.slice(i, i + 200).map((d) => d.id);
+    actions.push(...(await selectAll(() =>
+      client.from('draft_actions').select('id,draft_id,player_id,champion_id').in('draft_id', ids).eq('side', 'ally').eq('kind', 'pick').order('id'),
+    )));
+  }
+  const byDraft = new Map();
+  for (const a of actions) {
+    if (!byDraft.has(a.draft_id)) byDraft.set(a.draft_id, []);
+    byDraft.get(a.draft_id).push(a);
+  }
+  const out = [];
+  for (const d of drafts) {
+    const picks = byDraft.get(d.id) || [];
+    const own = picks.filter((p) => p.player_id && team.get(p.player_id) === d.team_id);
+    if (own.length !== TEAM_SIZE || new Set(own.map((p) => p.player_id)).size !== TEAM_SIZE) continue;
+    const region = PLATFORMS[String(d.platform).toLowerCase()];
+    if (!region) continue;
+    out.push({
+      matchId: `${String(d.platform).toUpperCase()}_${d.lcu_game_id}`,
+      region,
+      draft: d,
+      picks: own.map((p) => ({ playerId: p.player_id, championId: p.champion_id })),
+    });
+  }
+  return out;
+}
+
+/**
+ * Updates player_champion_stats for every team member, from the team's own games.
  * data: the exported model to compare against (newest snapshot when not given).
  */
 async function updatePlayers({ client, api, log, data = null }) {
   if (!ENABLED) return log('players: analysis is paused');
   const model = data || check(await client.from('model_snapshots').select('data').order('id', { ascending: false }).limit(1).maybeSingle())?.data;
   if (!model) return log('players: no model yet, skipped');
-  const players = check(await client.from('players').select('id,riot_id').not('riot_id', 'is', null).not('team_id', 'is', null));
-  if (!players.length) return log('players: no linked accounts');
+  const players = check(await client.from('players').select('id,team_id,stats_reset_at').not('team_id', 'is', null));
+  const games = await teamDrafts(client, players);
+  if (!games.length) return log('players: no Flex games of a full team recorded yet');
 
-  const byPlayer = new Map();
-  for (const p of players) {
+  // New games from Riot
+  const cache = loadCache();
+  let fetched = 0;
+  for (const g of games) {
+    if (cache.has(g.matchId)) continue;
     try {
-      const games = await syncPlayer(api, p.riot_id, log);
-      if (games.length) byPlayer.set(p.id, games);
+      const raw = await api.get(g.region, `/lol/match/v5/matches/${g.matchId}`);
+      if (!raw) continue; // not found yet: Riot publishes a match a little after it ends
+      const entry = teamGame(raw, g.matchId);
+      fs.mkdirSync(DIR, { recursive: true });
+      fs.appendFileSync(CACHE, `${JSON.stringify(entry)}\n`);
+      cache.set(g.matchId, entry);
+      fetched++;
     } catch (err) {
       if (err instanceof RiotKeyError) throw err;
-      log(`players: could not load a player's matches (${err.message}), skipped`);
+      log(`players: could not load a team game (${err.message}), skipped`);
     }
   }
-  if (!byPlayer.size) return log('players: no matches found');
+
+  // Every player's games: their role is where their champion sits on our side
+  const resetAt = new Map(players.map((p) => [p.id, p.stats_reset_at ? Date.parse(p.stats_reset_at) : 0]));
+  const byPlayer = new Map();
+  for (const g of games) {
+    const entry = cache.get(g.matchId);
+    if (!entry || entry.skip) continue;
+    const side = g.draft.our_side === 'red' ? 'r' : 'b';
+    const team = side === 'b' ? entry.m.b : entry.m.r;
+    for (const p of g.picks) {
+      const role = team.indexOf(p.championId);
+      if (role < 0 || entry.start < (resetAt.get(p.playerId) || 0)) continue;
+      if (!byPlayer.has(p.playerId)) byPlayer.set(p.playerId, []);
+      byPlayer.get(p.playerId).push({ id: g.matchId, start: entry.start, m: entry.m, side, role });
+    }
+  }
+  if (!byPlayer.size) return log(`players: ${games.length} team games, none usable yet`);
 
   const { rows, nE, familiarity } = analyzePlayers(model, byPlayer);
   const ids = [...byPlayer.keys()];
@@ -141,8 +158,8 @@ async function updatePlayers({ client, api, log, data = null }) {
   for (let i = 0; i < rows.length; i += 500) {
     check(await client.from('player_champion_stats').insert(rows.slice(i, i + 500).map((r) => ({ ...r, updated_at: stamp }))));
   }
-  const games = [...byPlayer.values()].reduce((a, g) => a + g.length, 0);
-  log(`players: ${byPlayer.size} players, ${games} games, ${rows.length} champion rows · early shrinkage ${nE.toFixed(1)} games · unplayed champions ${familiarity >= 0 ? '+' : ''}${familiarity.toFixed(3)} log-odds`);
+  const count = [...byPlayer.values()].reduce((a, g) => a + g.length, 0);
+  log(`players: ${games.length} team games (${fetched} new), ${byPlayer.size} players, ${count} player games, ${rows.length} champion rows · early shrinkage ${nE.toFixed(1)} games · unplayed champions ${familiarity >= 0 ? '+' : ''}${familiarity.toFixed(3)} log-odds`);
 }
 
-module.exports = { updatePlayers, playerGame };
+module.exports = { updatePlayers, teamGame, teamDrafts };

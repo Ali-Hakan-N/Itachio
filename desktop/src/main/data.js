@@ -30,9 +30,9 @@ function fileStorage(file) {
   };
 }
 
-// The personal layer (collector/src/players) is paused: player stats are not loaded, so
-// scores do not include them. Set to true to turn it back on.
-const PLAYER_STATS = false;
+// The personal layer (collector/src/players, from the team's full Flex games). Set to
+// false to leave it out of the scores.
+const PLAYER_STATS = true;
 
 function check({ data, error }) {
   if (error) throw new Error(error.message || String(error));
@@ -94,6 +94,10 @@ class DataStore {
   async leaveTeam() {
     check(await this.client.rpc('leave_team'));
   }
+  // Starts the caller's champion statistics over (earlier games stop counting for them)
+  async resetChampionStats() {
+    check(await this.client.rpc('reset_my_champion_stats'));
+  }
   // Only the team owner may do this; the database checks it
   async kickMember(playerId) {
     check(await this.client.rpc('kick_member', { p_player: playerId }));
@@ -112,13 +116,13 @@ class DataStore {
   }
 
   // How each player does on each champion (collector/src/players):
-  // { playerId: { byKey: { "<champ>:<role>": { delta, games } }, unplayed } }
+  // { playerId: { byKey: { "<champ>:<role>": { delta, games, wins, early, late } }, unplayed } }
   async loadPlayerStats(playerIds) {
     if (!playerIds.length) return {};
     const rows = [];
     for (let from = 0; ; from += 1000) {
       const page = check(
-        await this.client.from('player_champion_stats').select('player_id,champion_id,role,games,delta')
+        await this.client.from('player_champion_stats').select('player_id,champion_id,role,games,wins,early,late,delta')
           .in('player_id', playerIds).order('player_id').order('champion_id').order('role').range(from, from + 999),
       );
       rows.push(...page);
@@ -128,7 +132,11 @@ class DataStore {
     for (const r of rows) {
       const p = (out[r.player_id] ||= { byKey: {}, unplayed: 0 });
       if (r.champion_id === 0) p.unplayed = Number(r.delta);
-      else p.byKey[`${r.champion_id}:${r.role}`] = { delta: Number(r.delta), games: r.games };
+      else {
+        p.byKey[`${r.champion_id}:${r.role}`] = {
+          delta: Number(r.delta), games: r.games, wins: r.wins, early: Number(r.early), late: Number(r.late),
+        };
+      }
     }
     return out;
   }
@@ -191,13 +199,14 @@ class DataStore {
   }
 
   // ---------- Draft history ----------
-  async ensureDraft({ teamId, playerId, gameId, ourSide, patch, queueId }) {
+  async ensureDraft({ teamId, playerId, gameId, ourSide, patch, queueId, platform }) {
     const row = {
       team_id: teamId,
       lcu_game_id: gameId,
       our_side: ourSide,
       patch,
       queue_id: queueId ?? null,
+      platform: platform ?? null,
       source: 'lcu',
       created_by: playerId,
     };

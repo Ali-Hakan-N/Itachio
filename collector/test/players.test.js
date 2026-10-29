@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { analyzePlayers } = require('../src/players/analyze');
-const { playerGame } = require('../src/players');
+const { teamGame, teamDrafts } = require('../src/players');
 const { matchLogit } = require('../src/model/predict');
 
 // A flat model: every champion average, early state priced on CS by 10 minutes only
@@ -63,22 +63,58 @@ test('match logit from an exported model follows strength, pairs and matchups', 
   assert.ok(matchLogit({ ...data, syn: [[1, 0, 2, 1, 0.2]] })(m) > 0.1);
 });
 
-test('player game: found by puuid, remakes and missing roles are skipped', () => {
+test('team game: a recorded match read from Riot; remakes are skipped', () => {
   const roles = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY'];
   const raw = {
-    metadata: { matchId: 'EUW1_5' },
+    metadata: { matchId: 'TR1_5' },
     info: {
       queueId: 440, gameDuration: 1800, gameVersion: '16.21.1', gameStartTimestamp: 5,
       teams: [],
       participants: roles.flatMap((r, i) => [
-        { puuid: i === 2 ? 'me' : `b${i}`, championId: i + 1, teamPosition: r, teamId: 100, win: true },
-        { puuid: `r${i}`, championId: i + 11, teamPosition: r, teamId: 200, win: false },
+        { championId: i + 1, teamPosition: r, teamId: 100, win: true },
+        { championId: i + 11, teamPosition: r, teamId: 200, win: false },
       ]),
     },
   };
-  const g = playerGame(raw, 'me');
-  assert.equal(g.side, 'b');
-  assert.equal(g.role, 2);
-  assert.equal(g.m.b[2], 3);
-  assert.ok(playerGame({ ...raw, info: { ...raw.info, gameDuration: 100 } }, 'me').skip);
+  const g = teamGame(raw, 'TR1_5');
+  assert.deepEqual(g.m.b, [1, 2, 3, 4, 5]);
+  assert.equal(g.start, 5);
+  assert.ok(teamGame({ ...raw, info: { ...raw.info, gameDuration: 100 } }, 'TR1_5').skip);
+});
+
+// A tiny stand-in for the Supabase query builder: eq, in, not(... is null), order, range
+function fakeClient(tables) {
+  return {
+    from(name) {
+      const filters = [];
+      const q = {
+        select: () => q,
+        order: () => q,
+        eq: (col, v) => (filters.push((r) => r[col] === v), q),
+        in: (col, vs) => (filters.push((r) => vs.includes(r[col])), q),
+        not: (col) => (filters.push((r) => r[col] !== null && r[col] !== undefined), q),
+        range: async (from, to) => ({ data: tables[name].filter((r) => filters.every((f) => f(r))).slice(from, to + 1), error: null }),
+      };
+      return q;
+    },
+  };
+}
+
+test('team drafts: only finished Flex games where all five picks are team members', async () => {
+  const players = ['a', 'b', 'c', 'd', 'e', 'x'].map((id) => ({ id, team_id: id === 'x' ? 'other' : 't1' }));
+  const draft = (id, extra = {}) => ({ id, team_id: 't1', lcu_game_id: 100 + id, platform: 'TR1', our_side: 'blue', queue_id: 440, status: 'finished', ...extra });
+  const picks = (draftId, ids) => ids.map((p, i) => ({ id: `${draftId}-${i}`, draft_id: draftId, player_id: p, champion_id: i + 1, side: 'ally', kind: 'pick' }));
+  const client = fakeClient({
+    drafts: [draft(1), draft(2), draft(3, { queue_id: 420 }), draft(4, { status: 'dodged' })],
+    draft_actions: [
+      ...picks(1, ['a', 'b', 'c', 'd', 'e']),
+      ...picks(2, ['a', 'b', 'c', 'd', null]), // one player outside the team
+      ...picks(3, ['a', 'b', 'c', 'd', 'e']),
+      ...picks(4, ['a', 'b', 'c', 'd', 'e']),
+    ],
+  });
+  const games = await teamDrafts(client, players);
+  assert.deepEqual(games.map((g) => g.matchId), ['TR1_101']);
+  assert.equal(games[0].region, 'europe');
+  assert.equal(games[0].picks.length, 5);
 });

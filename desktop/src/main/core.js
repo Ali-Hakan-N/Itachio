@@ -241,12 +241,15 @@ class AppCore extends EventEmitter {
     if (!me?.team_id) return;
 
     if (!this.current || (draft.gameId && this.current.gameId !== draft.gameId)) {
+      const { queueId, platform } = await this.#gameInfo();
       const row = await this.data.ensureDraft({
         teamId: me.team_id,
         playerId: me.id,
         gameId: draft.gameId,
         ourSide: draft.ourSide,
         patch: this.state.patch,
+        queueId,
+        platform,
       });
       this.current = { rowId: row.id, gameId: draft.gameId, status: row.status || 'live' };
       this.savedKeys.clear();
@@ -276,6 +279,16 @@ class AppCore extends EventEmitter {
     if (!rows.length) return;
     await this.data.addDraftActions(rows);
     for (const r of rows) this.savedKeys.add(`${r.side}:${r.kind}:${r.seq}`);
+  }
+
+  // Queue (440 is Flex) and server ("TR1") of the game in champ select, from the client.
+  // The collector needs both to read the team's own games from Riot.
+  async #gameInfo() {
+    const [session, platform] = await Promise.all([
+      this.lcu.get('/lol-gameflow/v1/session').catch(() => null),
+      this.lcu.get('/lol-platform-config/v1/namespaces/LoginDataPacket/platformId').catch(() => null),
+    ]);
+    return { queueId: session?.gameData?.queue?.id ?? null, platform: typeof platform === 'string' ? platform : null };
   }
 
   // Score of a pick at the moment it was locked: against the picks locked before it

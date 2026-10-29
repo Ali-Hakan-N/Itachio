@@ -631,6 +631,8 @@
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),
     guessRoles: (args) => (has(args.model) && args.players.length === 5 ? guessRoles(args) : null),
+    // A change in log-odds as points around a typical pick (50), on the model's scale
+    points: (model, delta) => (has(model) ? Math.round(toScore(index(model), delta) - 50) : 0),
   };
 
   const api = { recommend, evaluate, recommendBans, guessRoles, Engine, ROLES };

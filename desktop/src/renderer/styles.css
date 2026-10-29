@@ -421,3 +421,22 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .badge.owner { color: var(--gold); border-color: rgba(216, 180, 106, 0.45); margin-left: 4px; }
 .member .kick { align-self: flex-start; font-size: 12px; }
 .member .kick:hover { color: var(--red); }
+
+/* ---------- Champion statistics ---------- */
+.btn.danger { color: var(--red); }
+.btn.danger:hover { background: var(--red-dim); }
+.champ-stats { max-width: 880px; }
+.champ-stats .toolbar { align-items: center; }
+.champ-stats h2 { font-size: 18px; }
+.champ-stats select { background: var(--bg-2); color: var(--ink); border: 1px solid var(--line-2); border-radius: var(--radius-s); padding: 6px 10px; }
+.stats-table { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.stats-row {
+  display: grid; grid-template-columns: 2.4fr 0.7fr 1.2fr 0.8fr 0.8fr 0.8fr; align-items: center; gap: 10px;
+  padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--panel);
+}
+.stats-row.head { background: none; border-color: transparent; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding-top: 0; padding-bottom: 0; }
+.stats-row .who { display: flex; align-items: center; gap: 10px; }
+.stats-row .who .champ { width: 32px; height: 32px; }
+.stats-row .who small, .stats-row small { display: block; color: var(--muted); font-size: 11px; }
+.stats-row b.up, .note b.up { color: var(--cue); }
+.stats-row b.down, .note b.down { color: var(--red); }

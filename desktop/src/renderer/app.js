@@ -27,7 +27,7 @@ let S = null; // state from the main process
 let tab = 'draft';
 let screen = 'loading'; // loading | config | login | profile | team | main
 let configError = null;
-const poolUi = { search: '', role: '', selected: null, editRole: '', editComfort: 3 };
+const statsUi = { player: null }; // whose champion statistics are shown (default: me)
 
 const $view = document.getElementById('view');
 const $status = document.getElementById('status');
@@ -172,7 +172,7 @@ api.onState((partial) => {
   if (screen !== 'main') return;
   if (tab === 'draft' && ('draft' in partial || 'pools' in partial || 'lcu' in partial || 'members' in partial || 'model' in partial)) renderMain();
   if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial)) renderMain();
-  if (tab === 'pool' && 'pools' in partial) renderPoolList();
+  if (tab === 'champions' && ('playerStats' in partial || 'members' in partial || 'model' in partial)) renderMain();
 });
 api.onSaved((info) => {
   if (info.type === 'match') toast('Match result and draft saved');
@@ -300,7 +300,7 @@ async function signOut() {
 
 function renderMain() {
   if (tab === 'draft') renderDraft();
-  if (tab === 'pool') renderPool();
+  if (tab === 'champions') renderChampions();
   if (tab === 'team') renderTeam();
   if (tab === 'history') renderHistory();
 }
@@ -675,134 +675,49 @@ function sideColumn(which, d) {
     </section>`;
 }
 
-// ---------- Pool ----------
-function renderPool() {
+// ---------- Champions ----------
+// How each player does on each champion, from the Flex games the whole team played
+// together (collector/src/players): games, record, and what they add to that player's
+// scores, split into the laning phase and the rest of the game
+function renderChampions() {
+  const members = S.members || [];
+  const id = statsUi.player && members.some((m) => m.id === statsUi.player) ? statsUi.player : S.me?.id;
+  const stats = (S.playerStats || {})[id];
+  const pts = (x) => Engine.points(S.model, x);
+  const signed = (n) => `<b class="${n > 0 ? 'up' : n < 0 ? 'down' : ''}">${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}</b>`;
+  const rows = stats
+    ? Object.entries(stats.byKey)
+        .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], ...v }))
+        .sort((x, y) => y.games - x.games || y.delta - x.delta)
+    : [];
   $view.innerHTML = `
-    <div class="pool-layout">
-      <section>
-        <div class="toolbar">
-          <input id="q" placeholder="Search champions" value="${esc(poolUi.search)}">
-        </div>
-        <div class="grid" id="grid"></div>
-        <div id="editor"></div>
-      </section>
-      <section>
-        <h2 class="sub">Pool</h2>
-        <div id="plist"></div>
-      </section>
+    <div class="champ-stats">
+      <div class="toolbar">
+        <h2>Champion statistics</h2>
+        <span class="grow"></span>
+        <select id="who">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}${m.id === S.me?.id ? ' (you)' : ''}</option>`).join('')}</select>
+      </div>
+      <p class="note">Only Flex games the whole team played together count. Each game is compared with what the model expected from the draft; champions with few games stay close to the player's usual level. These values add to the player's scores in champ select.</p>
+      ${rows.length
+        ? `<div class="stats-table">
+            <div class="stats-row head"><span>Champion</span><span>Games</span><span>Record</span><span title="Laning phase compared with an average player in the same matchup">Lane</span><span title="The rest of the game, beyond the draft and the lane">Rest</span><span title="What it adds to this player's score for the champion">Effect</span></div>
+            ${rows.map((r) => `
+              <div class="stats-row">
+                <span class="who">${champImg(r.championId)}<span><b>${esc(champName(r.championId))}</b><small>${esc(ROLE_NAME[r.role] || r.role)}</small></span></span>
+                <span>${r.games}</span>
+                <span>${r.wins}–${r.games - r.wins} <small>${Math.round((100 * r.wins) / r.games)}%</small></span>
+                <span>${signed(pts(r.early))}</span>
+                <span>${signed(pts(r.late))}</span>
+                <span>${signed(pts(r.delta))}</span>
+              </div>`).join('')}
+          </div>
+          <p class="note">Champions not played with the team: ${signed(pts(stats.unplayed))}</p>`
+        : '<p class="note">No full-team Flex games analyzed for this player yet. They show up a few hours after the games, once the collector has read them.</p>'}
     </div>`;
-  const q = document.getElementById('q');
-  q.oninput = () => {
-    poolUi.search = q.value;
-    renderGrid();
+  document.getElementById('who').onchange = (e) => {
+    statsUi.player = e.target.value;
+    renderChampions();
   };
-  if (!S.champions.length) {
-    document.getElementById('grid').outerHTML =
-      '<p class="note">The champion list is empty. Run the sync-ddragon function in Supabase once (see README).</p>';
-  } else renderGrid();
-  renderEditor();
-  renderPoolList();
-}
-
-function renderGrid() {
-  const grid = document.getElementById('grid');
-  if (!grid) return;
-  const term = poolUi.search.trim().toLocaleLowerCase();
-  const inPool = new Set(myPool().map((p) => p.champion_id));
-  const list = S.champions.filter((c) => !term || c.name.toLocaleLowerCase().includes(term));
-  grid.innerHTML = list
-    .map((c) => `
-      <button class="gcell ${inPool.has(c.id) ? 'inpool' : ''} ${poolUi.selected === c.id ? 'sel' : ''}" data-id="${c.id}">
-        ${champImg(c.id)}<span>${esc(c.name)}</span>
-      </button>`)
-    .join('');
-  grid.onclick = (e) => {
-    const b = e.target.closest('.gcell');
-    if (!b) return;
-    poolUi.selected = Number(b.dataset.id);
-    const existing = myPool().find((p) => p.champion_id === poolUi.selected);
-    poolUi.editRole = existing?.role || S.me.main_role || 'middle';
-    poolUi.editComfort = existing?.comfort || 3;
-    renderGrid();
-    renderEditor();
-  };
-}
-
-function starsHtml(value, attr) {
-  return `<div class="stars">${[1, 2, 3, 4, 5]
-    .map((n) => `<button type="button" class="${n <= value ? 'on' : ''}" ${attr}="${n}" aria-label="Comfort ${n}">★</button>`)
-    .join('')}</div>`;
-}
-
-function renderEditor() {
-  const box = document.getElementById('editor');
-  if (!box) return;
-  if (!poolUi.selected) return (box.innerHTML = '');
-  box.innerHTML = `
-    <div class="editor">
-      ${champImg(poolUi.selected)}
-      <b>${esc(champName(poolUi.selected))}</b>
-      <select id="erole">${roleOptions(poolUi.editRole)}</select>
-      ${starsHtml(poolUi.editComfort, 'data-c')}
-      <button class="btn primary" id="esave">Save to pool</button>
-      <button class="x" id="eclose" aria-label="Close">×</button>
-    </div>`;
-  box.querySelector('#erole').onchange = (e) => (poolUi.editRole = e.target.value);
-  box.querySelector('.stars').onclick = (e) => {
-    const c = e.target.closest('[data-c]');
-    if (!c) return;
-    poolUi.editComfort = Number(c.dataset.c);
-    renderEditor();
-  };
-  box.querySelector('#eclose').onclick = () => {
-    poolUi.selected = null;
-    renderGrid();
-    renderEditor();
-  };
-  box.querySelector('#esave').onclick = async () => {
-    await run(api.upsertPool({ championId: poolUi.selected, role: poolUi.editRole, comfort: poolUi.editComfort }));
-    toast(`${champName(poolUi.selected)} saved to pool`);
-    poolUi.selected = null;
-    renderGrid();
-    renderEditor();
-  };
-}
-
-function renderPoolList() {
-  const box = document.getElementById('plist');
-  if (!box) return;
-  const pool = myPool();
-  if (!pool.length) {
-    box.innerHTML = '<p class="note">No champions yet. Click a champion on the left, then pick its role and how comfortable you are on it.</p>';
-    renderGrid();
-    return;
-  }
-  box.innerHTML = ROLES.map(([role, name]) => {
-    const items = pool.filter((p) => p.role === role).sort((a, b) => b.comfort - a.comfort);
-    if (!items.length) return '';
-    return `
-      <div class="role-group"><h3>${name}</h3>
-        ${items.map((p) => `
-          <div class="pool-item">
-            ${champImg(p.champion_id, 's')}
-            <span class="nm">${esc(champName(p.champion_id))}</span>
-            ${starsHtml(p.comfort, `data-set="${p.champion_id}:${p.role}" data-v`)}
-            <button class="x" data-del="${p.champion_id}:${p.role}" aria-label="Remove from pool">×</button>
-          </div>`).join('')}
-      </div>`;
-  }).join('');
-  box.onclick = async (e) => {
-    const del = e.target.closest('[data-del]');
-    const star = e.target.closest('[data-set]');
-    if (del) {
-      const [championId, role] = del.dataset.del.split(':');
-      await run(api.removePool({ championId: Number(championId), role }));
-    } else if (star) {
-      const [championId, role] = star.dataset.set.split(':');
-      await run(api.upsertPool({ championId: Number(championId), role, comfort: Number(star.dataset.v) }));
-    }
-  };
-  renderGrid();
 }
 
 // ---------- Team ----------
@@ -816,6 +731,7 @@ function renderTeam() {
       <button class="btn ghost" id="copy">Copy code</button>
       <span class="grow"></span>
       <button class="btn ghost" id="prof">Edit profile</button>
+      <button class="btn ghost danger" id="reset">Reset my champion data</button>
       <button class="btn ghost" id="leave">Leave team</button>
       <button class="btn ghost" id="out">Sign out</button>
     </div>
@@ -845,6 +761,16 @@ function renderTeam() {
   document.getElementById('prof').onclick = () => {
     screen = 'profile';
     render();
+  };
+  document.getElementById('reset').onclick = async () => {
+    const ok = confirm(
+      'Reset your champion data?\n\nYour champion statistics are deleted and every game you played until now stops counting for you. ' +
+        'Only games from now on will build them up again. This cannot be undone.',
+    );
+    if (!ok) return;
+    S = await run(api.resetChampionStats());
+    toast('Your champion data was reset');
+    renderMain();
   };
   document.getElementById('leave').onclick = async () => {
     if (!confirm('Are you sure you want to leave the team?')) return;
