@@ -73,6 +73,8 @@ function loadMatches(patch) {
  *   ts/tv: { "<classA>:<classB>": weight }   classes sorted; tv is classA against classB
  *   fm:    { k, S, P, Q: { "<champ>:<role>": vector } } latent pairs, when that layer was kept:
  *          synergy <S_a, S_b>, a against b <P_a, Q_b> - <P_b, Q_a>
+ *   synT/vsT: [[a, ra, b, rb, weight, se, games]] temporary pairs: single pairs with clear
+ *          evidence from a pair layer that was not proven as a whole (empty once it is)
  * Layers the training left out are absent (no pair weights, no fm).
  */
 function exportModel(model, { share, games, tags, patch, matches }) {
@@ -106,6 +108,14 @@ function exportModel(model, { share, games, tags, patch, matches }) {
       for (const name of ['S', 'P', 'Q']) fm[name][key] = Array.from(model.fm[name].subarray(e * k, e * k + k), (v) => round(v, 4));
     });
   }
+  const temporary = (list) =>
+    (list || []).map(([key, w, s, n]) => {
+      const p = key.split(':').slice(1).map(Number);
+      return [...p, round(w, 5), round(s, 5), n];
+    });
+  const synT = temporary(model.provisional?.s);
+  const vsT = temporary(model.provisional?.v);
+
   // Scale: spread of champion strength (with the off-role term) among well-played picks
   const bases = [];
   for (const [key, [w, n, s]] of Object.entries(champ)) {
@@ -137,6 +147,8 @@ function exportModel(model, { share, games, tags, patch, matches }) {
     champ,
     syn,
     vs,
+    synT,
+    vsT,
     ts,
     tv,
     fm,
@@ -171,6 +183,18 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
       .sort((a, b) => b.score - a.score)
       .slice(0, 5);
   });
+  // Strongest temporary pairs, readable: "Ahri middle + Vi jungle", "Lissandra middle vs Zed middle"
+  // (a positive matchup weight favors the first champion)
+  const pairs = (list, sep) =>
+    [...(list || [])]
+      .sort((x, y) => Math.abs(y[4]) - Math.abs(x[4]))
+      .slice(0, 15)
+      .map(([a, ra, b, rb, w, se, games]) => ({
+        pair: `${champions.get(a) || a} ${ROLES[ra]}${sep}${champions.get(b) || b} ${ROLES[rb]}`,
+        weight: w,
+        se,
+        games,
+      }));
   const report = {
     trainedAt: data.trainedAt,
     patch: data.patch,
@@ -184,6 +208,7 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
     pointsPerLogit: data.pointsPerLogit,
     weights: { synergy: data.syn.length, matchup: data.vs.length, latent: data.fm ? Object.keys(data.fm.S).length : 0 },
     topByRole: top,
+    temporary: { synergy: pairs(data.synT, ' + '), matchup: pairs(data.vsT, ' vs ') },
   };
   try {
     fs.writeFileSync(REPORT_FILE, JSON.stringify(report, null, 2));
@@ -314,7 +339,7 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const ids = check(await client.from('model_snapshots').select('id').order('id', { ascending: false }));
   const old = ids.slice(KEEP_SNAPSHOTS).map((r) => r.id);
   if (old.length) check(await client.from('model_snapshots').delete().in('id', old));
-  log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights)`);
+  log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights, temporary ${data.synT.length} synergy and ${data.vsT.length} matchup)`);
   return m;
 }
 

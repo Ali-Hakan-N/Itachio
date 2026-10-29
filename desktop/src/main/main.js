@@ -107,8 +107,6 @@ app.whenReady().then(async () => {
   const updater = setupUpdater({
     log: fileLog,
     send: (state) => send('update', state),
-    // Don't restart in the middle of champ select or a game
-    isBusy: () => ['ChampSelect', 'GameStart', 'InProgress'].includes(core?.state.lcu.phase),
   });
   handle('update:get', () => updater.state());
   handle('update:install', () => updater.install());

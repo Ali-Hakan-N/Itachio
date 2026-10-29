@@ -1,8 +1,9 @@
 // Turns matches into features for the win model. Pure functions.
 //
-// A compact match: { id, q, w, b, r }
+// A compact match: { id, q, w, b, r, lb?, lr? }
 //   b / r: blue / red champion ids by role [top, jungle, middle, bottom, utility]
 //   w: 1 when blue won
+//   lb / lr: laning phase per role, as riot/parse.js laneOf() (newer matches only)
 //
 // Features, seen from blue (+1 for blue, -1 for red):
 //   c:<champ>:<role>                 champion strength in a role
@@ -22,6 +23,8 @@ const SHARE_FLOOR = 0.002;
 function toCompact(m) {
   const b = new Array(5).fill(0);
   const r = new Array(5).fill(0);
+  const lb = new Array(5).fill(null);
+  const lr = new Array(5).fill(null);
   let blueWon = null;
   for (const p of m.p) {
     const i = ROLE_INDEX[p.r];
@@ -29,10 +32,13 @@ function toCompact(m) {
     const team = p.t === 100 ? b : r;
     if (team[i]) return null; // two players in one role
     team[i] = p.c;
+    (p.t === 100 ? lb : lr)[i] = p.l || null;
     if (p.t === 100) blueWon = p.w;
   }
   if (b.includes(0) || r.includes(0) || blueWon === null) return null;
-  return { id: m.id, q: m.queue, w: blueWon ? 1 : 0, b, r };
+  const out = { id: m.id, q: m.queue, w: blueWon ? 1 : 0, b, r };
+  if (lb.some(Boolean) || lr.some(Boolean)) Object.assign(out, { lb, lr });
+  return out;
 }
 
 /** Share of each champion's games played in each role: Map "champ:role" -> share */

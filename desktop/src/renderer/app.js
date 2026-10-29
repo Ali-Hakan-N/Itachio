@@ -80,34 +80,28 @@ function myPool() {
 // ---------- Updates ----------
 let updateState = { state: 'idle' };
 
-// Full-screen while an update downloads or installs; a small box during champ select
+// Updates download quietly; once one is ready a blinking Update button shows in the top
+// bar. Clicking it restarts into the new version (full-screen while installing).
 function renderUpdate() {
   const box = document.getElementById('update');
+  const btn = document.getElementById('upbtn');
   const u = updateState;
-  const version = u.version ? `version ${esc(u.version)}` : 'the new version';
   const bar = (cls) => `<div class="progress ${cls}"><div data-w="${u.percent || 0}"></div></div>`;
-  const overlay = u.state === 'installing' || (u.state === 'downloading' && !S?.draft);
 
-  if (overlay) {
+  btn.hidden = u.state !== 'ready';
+  btn.title = u.version ? `Version ${u.version} is ready. Click to restart and update.` : 'Click to restart and update.';
+  btn.onclick = () => api.installUpdate();
+
+  if (u.state === 'installing') {
     box.innerHTML = `
       <div class="update-overlay">
         <div class="update-card">
           <span class="logo big" aria-hidden="true"></span>
-          <h2>${u.state === 'installing' ? 'Installing update' : 'Updating Flex Drafter'}</h2>
-          <p>${u.state === 'installing' ? 'The app restarts in a moment.' : `Downloading ${version}`}</p>
+          <h2>Installing update</h2>
+          <p>The app restarts in a moment.</p>
           ${bar('')}
-          <span class="pct">${u.state === 'installing' ? '' : `${u.percent || 0}%`}</span>
         </div>
       </div>`;
-  } else if (u.state === 'downloading') {
-    box.innerHTML = `<div class="update-pill"><span>Updating · ${u.percent || 0}%</span>${bar('mini')}</div>`;
-  } else if (u.state === 'ready') {
-    box.innerHTML = `
-      <div class="update-pill ready">
-        <span>Update ${esc(u.version || '')} is ready</span>
-        <button class="btn primary" id="upnow">Restart to update</button>
-      </div>`;
-    document.getElementById('upnow').onclick = () => api.installUpdate();
   } else {
     box.innerHTML = '';
   }
@@ -161,7 +155,6 @@ function decideScreen() {
 api.onState((partial) => {
   if (!S) S = {};
   Object.assign(S, partial);
-  if ('draft' in partial && updateState.state === 'downloading') renderUpdate();
   if (screen === 'main' && 'me' in partial && !partial.me?.team_id) return decideScreen();
   renderStatus();
   // Keep focus while typing on the pool screen: re-render only the affected parts

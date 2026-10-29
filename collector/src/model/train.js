@@ -10,7 +10,8 @@
 //
 // Each layer must prove itself: it is kept only if 5-fold cross-validated predictions
 // improve on the model without it by more than ACCEPT_SE standard errors (paired over
-// matches). A rejected layer is left out of the model entirely.
+// matches). A rejected layer is left out of the model, except for single pairs with
+// clear evidence, exported separately as temporary pairs (provisionalPairs).
 //
 // Regularization is set in pseudo-games (tau): a weight needs about tau matches of
 // evidence before it moves freely, so it shrinks less as data grows (the penalty per
@@ -23,7 +24,8 @@
 // fitted on all matches, and each explicit weight gets an approximate standard error
 // (Laplace).
 //
-// train() returns { keys, w, bias, lambdas, metrics } like before, plus se, groups and fm.
+// train() returns { keys, w, bias, lambdas, metrics } like before, plus se, groups, fm
+// and provisional.
 
 const { features, groupOf } = require('./features');
 
@@ -44,6 +46,14 @@ const ADAPTIVE_ROUNDS = 3; // reweighting passes, close to a sparse (L1-like) pr
 const NON_POSITIVE = new Set(['o']);
 const DEFAULTS = { folds: 5, latentDim: 6, tuneIters: 200, finalIters: 500, maxTuneRows: 60000, lr: 0.05 };
 const ACCEPT_SE = 2;
+// Temporary pairs: while a pair layer is not proven as a whole, single pairs whose
+// weight is away from zero (|w| > PAIR_SE × standard error, enough games) are still
+// exported, separately. The app phases them in by evidence (desktop model.js), so a
+// pair near the threshold has almost no effect and nothing jumps between trainings.
+// When the layer is proven they are no longer produced.
+const PAIR_SE = 1.5;
+const PAIR_MIN_GAMES = 30;
+const PAIR_GROUPS = { synergy: 's', matchup: 'v' };
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const clampP = (p) => Math.min(Math.max(p, 1e-9), 1 - 1e-9);
@@ -468,6 +478,7 @@ function train(matches, ctx, options = {}) {
   layers.push({ name: 'strength', ...summary(D, rows, zCurrent), ...vsBase, accepted: true });
   log(`model: strength      gain ${(vsBase.improvement * 1000).toFixed(2)} ± ${(vsBase.se * 1000).toFixed(2)} ×1e-3 over always-50%`);
 
+  const rejected = [];
   for (const layer of LAYERS.slice(1)) {
     const candidate = tuneLayer(current, layer);
     const zCand = outOfFold(D, candidate, o);
@@ -478,7 +489,7 @@ function train(matches, ctx, options = {}) {
     if (accepted) {
       current = candidate;
       zCurrent = zCand;
-    }
+    } else if (PAIR_GROUPS[layer.name]) rejected.push({ layer, candidate });
   }
 
   const cv = summary(D, rows, zCurrent);
@@ -498,6 +509,8 @@ function train(matches, ctx, options = {}) {
     for (const name of ['S', 'P', 'Q']) for (let i = 0; i < params.L[name].length; i++) params.L[name][i] *= sa;
     fm = { k: current.fm.k, entities: D.entities, ...params.L };
   }
+
+  const provisional = provisionalPairs(D, rows, current, rejected, cal.a, o, log);
 
   const n = rows.length;
   const accuracyCI = 1.96 * Math.sqrt((cv.accuracy * (1 - cv.accuracy)) / n);
@@ -528,7 +541,39 @@ function train(matches, ctx, options = {}) {
     se,
     groups: [...current.groups],
     fm,
+    provisional,
   };
+}
+
+/**
+ * Fits the proven layers plus the unproven pair layers (each with the penalty its own
+ * tuning chose) and keeps single pairs with clear evidence.
+ * Returns { s: [[key, w, se, games]], v: [...] }, empty lists for proven layers.
+ */
+function provisionalPairs(D, rows, current, rejected, calA, o, log) {
+  const out = { s: [], v: [] };
+  if (!rejected.length) return out;
+  const cfg = { groups: new Set(current.groups), tau: { ...current.tau }, fm: current.fm, adaptive: new Set(current.adaptive) };
+  for (const { layer, candidate } of rejected) {
+    for (const g of layer.groups) cfg.groups.add(g);
+    cfg.tau[layer.tune] = candidate.tau[layer.tune];
+    if (candidate.adaptive.has(layer.tune)) cfg.adaptive.add(layer.tune);
+  }
+  const params = fit(D, rows, cfg, { iters: o.finalIters });
+  const se = standardErrors(D, rows, params, cfg);
+  const games = new Uint32Array(D.keys.length);
+  for (const r of rows) for (let j = D.rowPtr[r]; j < D.rowPtr[r + 1]; j++) games[D.cols[j]]++;
+  for (const { layer } of rejected) {
+    const code = GROUP_CODE[PAIR_GROUPS[layer.name]];
+    const list = out[PAIR_GROUPS[layer.name]];
+    for (let i = 0; i < D.keys.length; i++) {
+      if (D.groups[i] !== code || games[i] < PAIR_MIN_GAMES || !se[i]) continue;
+      const w = params.w[i] * calA;
+      if (Math.abs(w) > PAIR_SE * se[i] * calA) list.push([D.keys[i], w, se[i] * calA, games[i]]);
+    }
+    log(`model: ${layer.name.padEnd(13)} temporary: ${list.length} single pairs with clear evidence`);
+  }
+  return out;
 }
 
 module.exports = { train, fit, design, predict, LAYERS };

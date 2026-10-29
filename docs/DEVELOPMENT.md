@@ -19,14 +19,15 @@ logit = strength(champion, role) + off-role(role) × -ln(share of the champion's
       + class pairs (Mage + Tank, Fighter vs Mage ...) so unseen pairs still count a little
 ```
 
-- The model is built in layers: strength, then synergy, matchups and latent pairs (a factorization machine that also estimates rarely seen pairs). A layer is kept only if 5-fold cross-validated predictions improve on the model without it by more than 2 standard errors, paired over matches. Rejected layers are left out entirely, so every effect in the app is backed by the data.
+- The model is built in layers: strength, then synergy, matchups and latent pairs (a factorization machine that also estimates rarely seen pairs). A layer is kept only if 5-fold cross-validated predictions improve on the model without it by more than 2 standard errors, paired over matches. Rejected layers are left out of the model.
+- Temporary pairs bridge the time until synergy or matchups are proven. While a pair layer is rejected, the training still exports single pairs (any roles, not only lane opponents) whose weight is more than 1.5 standard errors from zero with at least 30 games (`synT`/`vsT`). The app phases them in by evidence (no effect at 1.5 standard errors, full from 2.5) and caps them (about 9 points per pair, 20 in total). Once the training proves a layer, its temporary pairs are no longer produced and the learned layer takes over.
 - Regularization is in pseudo-games (tau), tuned per layer on two validation splits; pair layers also try adaptive shrinkage (iterative reweighting, close to a sparse prior), which keeps real effects and pushes noise to zero.
 - The chosen model is calibrated with Platt scaling on the cross-validated predictions; each explicit weight gets a standard error, and the app marks low-data picks.
 - Every training writes a report to the log and to `collector/data/model-report.json`: cross-validated accuracy with a 95% interval, log loss against an always-50% baseline, each layer's gain and whether it was kept, calibration before and after, and the top champions per role.
 - Scores use a fixed 0-100 scale: `50 + 50 × tanh(pointsPerLogit × (logit - center) / 50)`. 50 is an average champion; one standard deviation of champion strength is 15 points. The scale is the same for every draft.
 - Until a model exists (2,000 single matches), the app falls back to the older aggregate scores (`champion_meta`, `champion_synergy`, `champion_matchup`).
 
-Single matches live in `collector/data/matches/<patch>.jsonl` (about 70 bytes each, not committed). Only the model goes to Supabase (`model_snapshots`, newest 3 kept).
+Single matches live in `collector/data/matches/<patch>.jsonl` (not committed), with each player's laning phase (CS at 10 minutes, turret plates, gold+xp lead, solo kills) for later use. The training takes the newest 150,000 matches, current patch first; after a new patch the older ones fill the rest until the new patch replaces them. Only the model goes to Supabase (`model_snapshots`, newest 3 kept).
 
 ## Folders
 

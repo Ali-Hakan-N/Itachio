@@ -88,6 +88,9 @@ test('training keeps proven layers and finds the planted strength, synergy and m
   const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
   assert.ok(data.champ['1:0'][0] > 0.3 && data.champ['1:0'][3] > 0);
   assert.ok(data.vs.some(([a, ra, b, rb, wt]) => a === 4 && ra === 3 && b === 5 && rb === 3 && wt > 0.3));
+  // Proven layers produce no temporary pairs
+  assert.equal(data.synT.length, 0);
+  assert.equal(data.vsT.length, 0);
 });
 
 test('training leaves out pair layers when the pairs are only noise', () => {
@@ -100,6 +103,11 @@ test('training leaves out pair layers when the pairs are only noise', () => {
   const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
   assert.equal(data.syn.length, 0);
   assert.equal(data.vs.length, 0);
+  // Temporary pairs: only the few that pass by chance
+  const pairKeys = (g) => model.keys.filter((k) => k.startsWith(`${g}:`)).length;
+  assert.ok(data.synT.length <= 0.1 * pairKeys('s'), `temporary synergy ${data.synT.length} of ${pairKeys('s')}`);
+  assert.ok(data.vsT.length <= 0.1 * pairKeys('v'), `temporary matchup ${data.vsT.length} of ${pairKeys('v')}`);
+  for (const [, , , , w, se, games] of [...data.synT, ...data.vsT]) assert.ok(Math.abs(w) > 1.5 * se && games >= 30);
 });
 
 test('worker: trains in a background thread, and stops when asked', async () => {

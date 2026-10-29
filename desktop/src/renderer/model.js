@@ -6,6 +6,15 @@
 //                   + latent pair terms, when the training kept that layer
 // Only layers the training proved (cross-validated) are in the model.
 //
+// Temporary pairs (synT/vsT): while the synergy or matchup layer is not proven as a
+// whole, the training still exports single pairs with evidence (weight / standard error
+// above 1.5). They count with the learned weight, phased in by evidence: none at 1.5
+// standard errors, full from TEMP_FULL_Z, so pairs entering or leaving between trainings
+// never jump. Each pair is capped at TEMP_PAIR and all of them together at TEMP_TOTAL
+// standard deviations of strength (on the display scale about 9 and 20 points). Pairs
+// in any roles count, not only lane opponents. They disappear by themselves once the
+// training proves the layer.
+//
 // Display scale: logits are measured against the model's own spread of champion
 // strength (well-played champion:role pairs), so scores use the whole 0-100 range
 // however small the learned effects are:
@@ -25,6 +34,10 @@
   const SPREAD = 0.35; // how far one standard deviation of strength moves the score
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
+  const TEMP_FROM_Z = 1.5; // evidence (weight / standard error) where a temporary pair starts to count
+  const TEMP_FULL_Z = 2.5; // evidence from which it counts fully
+  const TEMP_PAIR = 0.5; // cap of one temporary pair, in standard deviations of strength
+  const TEMP_TOTAL = 1.2; // cap of all temporary synergy (and, separately, matchup) terms
 
   const cache = new WeakMap();
   function index(model) {
@@ -61,6 +74,8 @@
       bestRole,
       syn: pair(model.syn, false),
       vs: pair(model.vs, true),
+      synT: pair(model.synT, false),
+      vsT: pair(model.vsT, true),
       ts: classPair(model.ts, false),
       tv: classPair(model.tv, true),
       tags: new Map(Object.entries(model.tags || {}).map(([id, t]) => [Number(id), t])),
@@ -88,6 +103,16 @@
   // A player on the board: { championId, position? } or a bare champion id
   const asPick = (p) => (typeof p === 'number' ? { championId: p, position: '' } : p);
 
+  const clamp = (v, cap) => Math.max(-cap, Math.min(cap, v));
+  // Temporary pair weight, phased in by evidence and capped; 0 when the pair is not listed
+  const temp = (ix, map, key) => {
+    const t = map.get(key);
+    if (!t) return 0;
+    const z = t.se > 0 ? Math.abs(t.w) / t.se : TEMP_FULL_Z;
+    const phase = Math.max(0, Math.min(1, (z - TEMP_FROM_Z) / (TEMP_FULL_Z - TEMP_FROM_Z)));
+    return clamp(t.w * phase, TEMP_PAIR * ix.sd);
+  };
+
   const dot = (a, b) => {
     if (!a || !b) return 0;
     let s = 0;
@@ -105,6 +130,7 @@
     let variance = e ? e.se * e.se : 1;
 
     let syn = 0;
+    let synT = 0;
     const allyHits = [];
     for (const p of allies.map(asPick)) {
       if (p.championId === championId) continue;
@@ -112,12 +138,16 @@
       const explicit = ra === null ? null : ix.syn.get(`${championId}:${r}:${p.championId}:${ra}`);
       if (explicit) variance += explicit.se * explicit.se;
       const latent = ix.fm && ra !== null ? dot(ix.fm.S.get(self), ix.fm.S.get(`${p.championId}:${ra}`)) : 0;
+      const t = ra === null ? 0 : temp(ix, ix.synT, `${championId}:${r}:${p.championId}:${ra}`);
       const v = (explicit ? explicit.w : 0) + latent + (ix.ts.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
       syn += v;
-      if (v) allyHits.push({ championId: p.championId, value: v });
+      synT += t;
+      if (v + t) allyHits.push({ championId: p.championId, value: v + t });
     }
+    syn += clamp(synT, TEMP_TOTAL * ix.sd);
 
     let mu = 0;
+    let muT = 0;
     const enemyHits = [];
     for (const p of enemies.map(asPick)) {
       const re = roleIndex(ix, p.championId, p.position);
@@ -127,10 +157,13 @@
       const latent = ix.fm && re !== null
         ? dot(ix.fm.P.get(self), ix.fm.Q.get(other)) - dot(ix.fm.P.get(other), ix.fm.Q.get(self))
         : 0;
+      const t = re === null ? 0 : temp(ix, ix.vsT, `${championId}:${r}:${other}`);
       const v = (explicit ? explicit.w : 0) + latent + (ix.tv.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0);
       mu += v;
-      if (v) enemyHits.push({ championId: p.championId, value: v, lane: re === r });
+      muT += t;
+      if (v + t) enemyHits.push({ championId: p.championId, value: v + t, lane: re === r });
     }
+    mu += clamp(muT, TEMP_TOTAL * ix.sd);
 
     const score = toScore(ix, base + syn + mu);
     const baseScore = toScore(ix, base);

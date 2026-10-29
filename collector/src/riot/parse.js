@@ -3,6 +3,19 @@
 const QUEUES = new Set([420, 440]); // Solo/Duo, Flex
 const ROLE = { TOP: 'top', JUNGLE: 'jungle', MIDDLE: 'middle', BOTTOM: 'bottom', UTILITY: 'utility' };
 const MIN_DURATION_S = 300; // anything shorter is a remake
+const num = (v) => (Number.isFinite(v) ? Math.round(v) : null);
+
+/**
+ * Laning phase of one player, from match-v5 "challenges" (no extra request):
+ * [lane minions by 10 min, turret plates taken, gold+xp lead over the lane opponent at
+ * the end of the laning phase (1/0), solo kills]. Recorded for later use; the win
+ * model does not read it yet.
+ */
+function laneOf(p) {
+  const c = p.challenges;
+  if (!c) return null;
+  return [num(c.laneMinionsFirst10Minutes), num(p.turretPlatesTaken ?? c.turretPlatesTaken), num(c.laningPhaseGoldExpAdvantage), num(c.soloKills)];
+}
 
 /** "16.21.712.5555" or "16.21.1" -> "16.21" */
 function patchOf(version) {
@@ -29,7 +42,10 @@ function parseMatch(match) {
     queue: info.queueId,
     start: info.gameStartTimestamp ?? info.gameCreation ?? 0,
     b: (info.teams || []).flatMap((t) => (t.bans || []).map((b) => b.championId)).filter((c) => c > 0),
-    p: parts.map((p) => ({ c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win })),
+    p: parts.map((p) => {
+      const l = laneOf(p);
+      return { c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win, ...(l && { l }) };
+    }),
   };
 }
 
