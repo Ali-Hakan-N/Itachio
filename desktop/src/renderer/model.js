@@ -570,6 +570,89 @@
    * picks and pick intents, enemies the enemy's locked picks (both { championId, position }).
    * Returns [{ championId, score, role, pickChance, value }], best ban first.
    */
+  /**
+   * Probability that our team wins with this final draft: every champion's strength, every
+   * pair on each team once, every matchup between the teams and both compositions.
+   * allies / enemies: five { championId, position } each.
+   */
+  function winChance({ model, allies, enemies }) {
+    const ix = index(model);
+    const team = (list) => list.map(asPick).map((p) => ({ c: p.championId, r: roleIndex(ix, p.championId, p.position) })).filter((p) => p.r !== null);
+    const us = team(allies);
+    const them = team(enemies);
+    const side = (t) => {
+      let z = 0;
+      t.forEach((p, i) => {
+        const e = ix.champ.get(`${p.c}:${p.r}`);
+        z += (e ? e.w : 0) + ix.off[p.r] * -Math.log(Math.max(e ? e.share : 0, ix.floor));
+        for (let j = i + 1; j < t.length; j++) z += synergy(ix, p.c, p.r, t[j].c, t[j].r);
+      });
+      if (ix.comp) {
+        const T = styleOf(ix, t.map((p) => p.c));
+        for (let k = 0; k < T.length; k++) z += ix.comp.a[k] * Math.tanh(T[k] + ix.comp.c[k]);
+      }
+      return z;
+    };
+    let z = side(us) - side(them);
+    for (const a of us) for (const b of them) z += matchup(ix, a.c, a.r, b.c, b.r);
+    if (ix.comp) {
+      const A = styleOf(ix, us.map((p) => p.c));
+      const B = styleOf(ix, them.map((p) => p.c));
+      for (let k = 0; k < A.length; k++) for (let j = 0; j < A.length; j++) z += A[k] * ix.comp.M[k][j] * B[j];
+    }
+    return 1 / (1 + Math.exp(-z));
+  }
+
+  /**
+   * A game plan from the final draft, every part read off the model:
+   *   lanes   per role, our lane result minus theirs as an average player gets it with
+   *           these champions (laneMean of the early game model, log-odds): ahead, even, behind
+   *   early   our lanes added up against theirs: who is stronger in the first minutes
+   *   focus   the role whose lane we are most ahead in (where to play early)
+   *   damage  each team's magic share (Data Dragon ratings), when given
+   * Returns null without the early game model.
+   */
+  function gamePlan({ model, allies, enemies, damage = null }) {
+    const ix = index(model);
+    const lane = model.early?.laneMean;
+    if (!lane) return null;
+    const values = Object.values(lane);
+    const mean = values.reduce((a, v) => a + v, 0) / values.length;
+    const sd = Math.sqrt(values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length) || 0.05;
+    const roleOf = (p) => roleIndex(ix, asPick(p).championId, asPick(p).position);
+    const byRole = (list) => {
+      const out = new Array(5).fill(null);
+      for (const p of list.map(asPick)) {
+        const r = roleOf(p);
+        if (r !== null && !out[r]) out[r] = p.championId;
+      }
+      return out;
+    };
+    const us = byRole(allies);
+    const them = byRole(enemies);
+    const lanes = ROLES.map((role, r) => {
+      if (!us[r] || !them[r]) return null;
+      const diff = (lane[`${us[r]}:${r}`] ?? 0) - (lane[`${them[r]}:${r}`] ?? 0);
+      return { role, ours: us[r], theirs: them[r], diff, call: diff > sd / 2 ? 'ahead' : diff < -sd / 2 ? 'behind' : 'even' };
+    });
+    const known = lanes.filter(Boolean);
+    const total = known.reduce((a, l) => a + l.diff, 0);
+    const early = total > sd ? 'ours' : total < -sd ? 'theirs' : 'even';
+    const best = known.filter((l) => l.call === 'ahead').sort((a, b) => b.diff - a.diff)[0] || null;
+    const magic = (list) => {
+      if (!damage) return null;
+      const ids = list.map((p) => asPick(p).championId);
+      return ids.reduce((a, c) => a + (damage.magic[c] ?? 0.5), 0) / ids.length;
+    };
+    return {
+      winChance: winChance({ model, allies, enemies }),
+      lanes,
+      early,
+      focus: best ? best.role : null,
+      damage: damage ? { ours: magic(allies), theirs: magic(enemies) } : null,
+    };
+  }
+
   function recommendBans({ model, unavailable = new Set(), allies = [], enemies = [], limit = 10 }) {
     const ix = index(model);
     if (!ix.matches) return [];
@@ -657,9 +740,10 @@
     guessRoles: (args) => (has(args.model) && args.players.length === 5 ? guessRoles(args) : null),
     // A change in log-odds as points around a typical pick (50), on the model's scale
     points: (model, delta) => (has(model) ? Math.round(toScore(index(model), delta) - 50) : 0),
+    gamePlan: (args) => (has(args.model) ? gamePlan(args) : null),
   };
 
-  const api = { recommend, evaluate, recommendBans, guessRoles, Engine, ROLES };
+  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, Engine, ROLES };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Engine = Engine;
 })(typeof window !== 'undefined' ? window : globalThis);

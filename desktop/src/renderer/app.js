@@ -491,6 +491,36 @@ function pickOrderHtml(d, blocked) {
     </div>`;
 }
 
+// The game plan once every champion is locked (it stays through the game)
+function gamePlanHtml(d) {
+  const allies = d.ally.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
+  const enemies = d.enemy.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
+  if (allies.length < 5 || enemies.length < 5) return '';
+  const plan = Engine.gamePlan({ model: S.model, allies, enemies, damage: S.damage });
+  if (!plan) return '';
+  const name = (id) => esc(champName(id));
+  const call = { ahead: '<b class="up">Ahead</b>', even: '<b>Even</b>', behind: '<b class="down">Behind</b>' };
+  const lanes = plan.lanes.filter(Boolean).map((l) => `<li><span>${ROLE_NAME[l.role]}</span>${call[l.call]}<small>${name(l.ours)} vs ${name(l.theirs)}</small></li>`).join('');
+  const early = {
+    ours: 'Your team is stronger in the first minutes: build leads early and turn them into objectives before the enemy scales.',
+    theirs: 'The enemy is stronger in the first minutes: play safe, trade lanes when behind and fight once your items are in.',
+    even: 'The lanes are even overall: the game is decided by what each lane makes of its matchup.',
+  }[plan.early];
+  const focus = plan.focus ? `Play around <b>${ROLE_NAME[plan.focus]}</b> early: it is your strongest lane.` : '';
+  const dmg = (share) => (share >= 0.6 ? 'mostly magic' : share <= 0.4 ? 'mostly physical' : 'mixed');
+  const damage = plan.damage
+    ? `Enemy damage is <b>${dmg(plan.damage.theirs)}</b> (${Math.round(plan.damage.theirs * 100)}% magic)${plan.damage.theirs >= 0.6 ? ': magic resist pays off.' : plan.damage.theirs <= 0.4 ? ': armor pays off.' : '.'} Yours is ${dmg(plan.damage.ours)}.`
+    : '';
+  return `
+    <div class="game-plan">
+      <h3 class="sub head-row"><span>Game Plan</span><span class="hint">Draft win chance <b>${Math.round(plan.winChance * 100)}%</b></span></h3>
+      <ul class="lanes">${lanes}</ul>
+      <p>${early}</p>
+      ${focus ? `<p>${focus}</p>` : ''}
+      ${damage ? `<p>${damage}</p>` : ''}
+    </div>`;
+}
+
 // Runes, items and spells for our pick; sent to the client once every champion is locked
 const BUCKET_TEXT = { any: 'General', ap: 'vs Magic Damage', ad: 'vs Physical Damage', mixed: 'vs Mixed Damage' };
 function buildHtml() {
@@ -636,7 +666,7 @@ function renderDraft() {
     : '';
 
   // The build for our pick once every champion is locked (sent to the client automatically)
-  const buildBlock = local?.locked ? buildHtml() : '';
+  const buildBlock = local?.locked ? buildHtml() + gamePlanHtml(d) : '';
 
   // After locking: your pick with its live breakdown
   let pickRow = '';

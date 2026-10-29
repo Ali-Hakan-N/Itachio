@@ -479,3 +479,15 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .pick-order .risk b.down { color: var(--red); }
 .pick-order .trade { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 .pick-order .trade b { color: var(--ink); }
+
+/* ---------- Game plan ---------- */
+.game-plan { margin-top: 14px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); }
+.game-plan .hint b { color: var(--ink); }
+.game-plan .lanes { list-style: none; margin: 4px 0 10px; padding: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.game-plan .lanes li { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.game-plan .lanes li > span { color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; }
+.game-plan .lanes small { color: var(--muted); font-size: 11px; }
+.game-plan b.up { color: var(--cue); }
+.game-plan b.down { color: var(--red); }
+.game-plan p { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
+.game-plan p b { color: var(--ink); }

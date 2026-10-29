@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 global.Recommend = require('../src/renderer/recommend');
-const { recommend, evaluate, recommendBans, guessRoles, Engine } = require('../src/renderer/model');
+const { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, Engine } = require('../src/renderer/model');
 
 // Roles: 0 top, 1 jungle, 2 middle, 3 bottom, 4 utility
 // 1 strong top, 2 average top, 3 mid that is rarely played top, 4 bot, 5 support, 6 enemy mid
@@ -279,4 +279,20 @@ test('off-meta picks (picked by under 1% of teams in the role) are not recommend
   const m = { ...model, matches: 10000, champ: { ...model.champ, '8:0': [0.5, 150, 0.9, 0.02] } };
   assert.ok(!recommend({ model: m, role: 'top', limit: 20 }).some((x) => x.championId === 8));
   assert.ok(evaluate({ model: m, championId: 8, role: 'top' }).score > 0);
+});
+
+test('game plan: lanes from the early game model, win chance from the whole draft', () => {
+  const laneMean = { '1:0': 0.3, '2:0': -0.3, '4:3': 0, '5:4': 0, '6:2': 0, '3:2': 0 };
+  const m = { ...model, early: { laneMean } };
+  const allies = [{ championId: 1, position: 'top' }, { championId: 3, position: 'middle' }, { championId: 4, position: 'bottom' }];
+  const enemies = [{ championId: 2, position: 'top' }, { championId: 6, position: 'middle' }, { championId: 5, position: 'bottom' }];
+  const plan = gamePlan({ model: m, allies, enemies, damage: { magic: { 1: 0, 3: 1, 4: 0, 2: 1, 6: 1, 5: 0 } } });
+  assert.equal(plan.lanes[0].call, 'ahead');
+  assert.equal(plan.focus, 'top');
+  assert.equal(plan.early, 'ours');
+  assert.ok(plan.winChance > 0.5); // 1 top is the strongest champion
+  assert.ok(Math.abs(plan.damage.theirs - 2 / 3) < 1e-9);
+  // Seen from the other side the chance flips
+  assert.ok(Math.abs(winChance({ model: m, allies: enemies, enemies: allies }) - (1 - plan.winChance)) < 1e-9);
+  assert.equal(gamePlan({ model, allies, enemies }), null); // no early game model
 });
