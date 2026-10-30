@@ -530,12 +530,30 @@
     return { ...row, logit: final, score, counterRisk: Math.round(toScore(ix, withFuture)) - score };
   }
 
-  function orderPickSuggestions(rated) {
-    const roleBias = { jungle: 0, utility: 0, bottom: 1, middle: 3, top: 5 };
+  function orderPickSuggestions(rated, enemyPicks = [], model = null) {
+    const roleBias = { jungle: 0, utility: 0, bottom: 2, middle: 8, top: 10 };
+    const ix = has(model) ? index(model) : null;
+    const roleOf = (pick) => {
+      if (ROLE_INDEX[pick.position] !== undefined) return ROLE_INDEX[pick.position];
+      return ix && pick.championId ? ix.bestRole.get(pick.championId)?.r ?? null : null;
+    };
+    const enemyRoles = new Set(enemyPicks.map(roleOf).filter((r) => r !== null));
+    const botRoles = new Set([ROLE_INDEX.bottom, ROLE_INDEX.utility]);
     return [...rated].sort((a, b) => {
-      const riskA = (a.risk ?? 0) + (roleBias[a.p.position] ?? 0);
-      const riskB = (b.risk ?? 0) + (roleBias[b.p.position] ?? 0);
-      return riskA - riskB;
+      const priority = (pick) => {
+        const role = ROLE_INDEX[pick.p.position];
+        const matchup = Math.min(8, Math.max(0, pick.matchup || 0));
+        const hasCounterTarget = role === ROLE_INDEX.jungle
+          ? enemyRoles.size > 0
+          : role === ROLE_INDEX.bottom || role === ROLE_INDEX.utility
+            ? [...botRoles].some((r) => enemyRoles.has(r))
+            : enemyRoles.has(role);
+        const counterBonus = hasCounterTarget
+          ? role === ROLE_INDEX.jungle ? 4 + Math.min(6, matchup) : 12 + matchup
+          : 0;
+        return (pick.risk ?? 0) + (roleBias[pick.p.position] ?? 0) - counterBonus;
+      };
+      return priority(a) - priority(b);
     });
   }
 

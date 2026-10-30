@@ -308,8 +308,17 @@ class AppCore extends EventEmitter {
       bucket = share >= dmg.thresholds[1] ? 'ap' : share <= dmg.thresholds[0] ? 'ad' : 'mixed';
     }
     const b = this.state.builds;
-    const build = b[`${me.championId}:${role}:${bucket}`] || b[`${me.championId}:${role}:any`];
-    if (!build) return null;
+    const general = b[`${me.championId}:${role}:any`];
+    const selected = b[`${me.championId}:${role}:${bucket}`] || general;
+    if (!selected) return null;
+    const build = {
+      ...selected,
+      items: {
+        ...selected.items,
+        start: selected.items.start?.length ? selected.items.start : general?.items?.start,
+        boots: selected.items.boots || general?.items?.boots,
+      },
+    };
     return { build, bucket: build.bucket, championId: me.championId, role, situational: situationalItems(build, enemies, this.state.situations) };
   }
 

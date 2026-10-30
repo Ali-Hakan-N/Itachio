@@ -264,7 +264,7 @@ async function buildCore(settings) {
   };
   lcu.request = async (method, path, body) => sent.push([method, path, body]);
   const data = fakeData();
-  const build = { bucket: 'any', runes: { primary: 8100, sub: 8200, perks: [8112, 8139, 8138, 8135, 8226, 8237, 5008, 5008, 5001] }, items: { core: [6655, 3157], more: [3089], boots: 3020 }, spells: [4, 14] };
+  const build = { bucket: 'any', runes: { primary: 8100, sub: 8200, perks: [8112, 8139, 8138, 8135, 8226, 8237, 5008, 5008, 5001] }, items: { core: [6655, 3157], more: [3089], boots: 3020, start: [1055, 2003] }, spells: [4, 14] };
   data.loadBuilds = async () => ({ '103:middle:any': build });
   data.loadDamage = async () => null;
   data.loadGameData = async () => null;
@@ -284,7 +284,10 @@ test('build: with both auto options on, once all ten picks are locked, runes, it
   assert.deepEqual(post[2].selectedPerkIds, build.runes.perks);
   const sets = sent.find((x) => x[1] === '/lol-item-sets/v1/item-sets/42/sets');
   assert.ok(sets[2].itemSets.some((x) => x.uid === 'mine'), 'other item sets kept');
-  assert.ok(sets[2].itemSets.some((x) => x.associatedChampions?.[0] === 103 && x.blocks[0].items[0].id === '6655'));
+  const itemSet = sets[2].itemSets.find((x) => x.associatedChampions?.[0] === 103);
+  assert.ok(itemSet.blocks.some((x) => x.type === 'Starting Items' && x.items.map((i) => i.id).join(',') === '1055,2003'));
+  assert.ok(itemSet.blocks.some((x) => x.type === 'Boots' && x.items[0].id === '3020'));
+  assert.ok(itemSet.blocks.some((x) => x.type === 'Core' && x.items[0].id === '6655'));
   const spells = sent.find((x) => x[1] === '/lol-champ-select/v1/session/my-selection');
   assert.deepEqual(spells[2], { spell1Id: 14, spell2Id: 4 }, 'Flash stays on its key');
   const count = sent.length;
@@ -301,6 +304,22 @@ test('build: nothing goes to the client on its own unless the options ask for it
   const items = await buildCore({ autoItems: true });
   assert.ok(items.sent.some((x) => x[1].startsWith('/lol-item-sets/')));
   assert.ok(!items.sent.some((x) => x[1].startsWith('/lol-perks/') || x[1].endsWith('/my-selection')));
+});
+
+test('build: starting items and boots fall back from the general build when a damage bucket lacks them', async () => {
+  const { core, build } = await buildCore({});
+  core.state.damage = { magic: {}, thresholds: [0.3, 0.4] };
+  core.state.builds['103:middle:ap'] = {
+    ...build,
+    bucket: 'ap',
+    items: { ...build.items, start: null, boots: null },
+  };
+
+  const result = core.buildFor();
+
+  assert.equal(result.bucket, 'ap');
+  assert.deepEqual(result.build.items.start, [1055, 2003]);
+  assert.equal(result.build.items.boots, 3020);
 });
 
 test('last game: the summary keeps the final draft and every player\'s numbers until the next champ select', async () => {

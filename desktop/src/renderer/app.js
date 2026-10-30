@@ -498,16 +498,17 @@ function pickOrderHtml(d, blocked) {
     const ev = championId
       ? Engine.evaluate({ stats: S.stats, model: S.model, championId, role: p.position, ...draftContext(d, p.cellId), lookAhead: true, unavailable: blocked })
       : null;
-    return { p, championId, risk: ev?.counterRisk ?? 0 };
+    return { p, championId, risk: ev?.counterRisk ?? 0, matchup: ev?.matchup ?? 0 };
   });
-  const suggested = Engine.orderPickSuggestions(rated);
+  const enemyPicks = d.enemy.filter((p) => p.locked && p.championId);
+  const suggested = Engine.orderPickSuggestions(rated, enemyPicks, S.model);
   const simultaneous = d.turn?.side === 'ally' && d.turn.kind === 'pick' ? d.turn.cellIds : [];
   const trades = Engine.pickOrderTrades(rated, suggested, simultaneous);
   const riskText = (n) => (n > 0 ? `<b class="down">−${n}</b>` : n < 0 ? `<b class="up">+${-n}</b>` : '<b>0</b>');
   return `
     <div class="pick-order">
       <h3 class="sub">Pick Order</h3>
-      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk of the likely champion; role blind-pick priority also affects this order">${riskText(r.risk)}</span></li>`).join('')}</ol>
+      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk shown; order also saves solo lanes for CT opportunities">${riskText(r.risk)}</span></li>`).join('')}</ol>
       ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
     </div>`;
 }
@@ -629,7 +630,7 @@ function buildHtml() {
       <div class="build-row">
         <div class="build-part runes">${perkImg(keystone)}<span>${esc(perks[keystone]?.name || '')}<small>${esc(perks[build.runes.primary]?.name || '')} · ${esc(perks[build.runes.sub]?.name || '')}</small></span>${state('runes')}<button class="btn ghost" data-apply="runes">Apply Runes</button></div>
         <div class="build-part items">
-          ${group('Start', build.items.start)}
+          ${group('Starting Items', build.items.start)}
           ${group('Core', build.items.core)}
           ${group('Boots', build.items.boots ? [build.items.boots] : [])}
           ${group('Situational', situational.map((x) => x.id), (id) => why.get(id))}

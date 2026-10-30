@@ -354,17 +354,30 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
 
 test('pick order delays top and mid when counter risk is tied, but respects a strong counter risk', () => {
   const picks = [
-    { p: { position: 'top' }, risk: 0 },
-    { p: { position: 'middle' }, risk: 0 },
-    { p: { position: 'bottom' }, risk: 0 },
-    { p: { position: 'utility' }, risk: 0 },
-    { p: { position: 'jungle' }, risk: 0 },
+    { p: { position: 'top' }, risk: 0, matchup: 0 },
+    { p: { position: 'middle' }, risk: 0, matchup: 0 },
+    { p: { position: 'bottom' }, risk: 0, matchup: 0 },
+    { p: { position: 'utility' }, risk: 0, matchup: 0 },
+    { p: { position: 'jungle' }, risk: 0, matchup: 0 },
   ];
   assert.deepEqual(Engine.orderPickSuggestions(picks).map((x) => x.p.position), ['utility', 'jungle', 'bottom', 'middle', 'top']);
 
-  const riskyBlindPick = picks.map((x) => x.p.position === 'utility' ? { ...x, risk: 8 } : x);
+  const riskyBlindPick = picks.map((x) => x.p.position === 'utility' ? { ...x, risk: 12 } : x);
   const withRisk = Engine.orderPickSuggestions(riskyBlindPick).map((x) => x.p.position);
   assert.ok(withRisk.indexOf('top') < withRisk.indexOf('utility'));
+});
+
+test('pick order saves solo lanes until the opponent reveals that lane, then favors the counterpick', () => {
+  const picks = [
+    { p: { position: 'top' }, risk: 0, matchup: 4 },
+    { p: { position: 'middle' }, risk: 0, matchup: 0 },
+    { p: { position: 'bottom' }, risk: 0, matchup: 0 },
+    { p: { position: 'utility' }, risk: 0, matchup: 0 },
+    { p: { position: 'jungle' }, risk: 0, matchup: 0 },
+  ];
+  const enemyPicks = [{ championId: 6, position: 'top' }];
+
+  assert.equal(Engine.orderPickSuggestions(picks, enemyPicks, model)[0].p.position, 'top');
 });
 
 test('pick order does not suggest a trade between simultaneous picks', () => {
