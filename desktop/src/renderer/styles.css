@@ -422,7 +422,9 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .champ-stats { max-width: 880px; }
 .champ-stats .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
 .champ-stats h2 { font-size: 18px; white-space: nowrap; }
-.champ-stats select { background: var(--bg-2); color: var(--ink); border: 1px solid var(--line-2); border-radius: var(--radius-s); padding: 6px 10px; }
+.champ-stats select { color-scheme: dark; background: var(--bg-2); color: var(--ink); border: 1px solid var(--line-2); border-radius: var(--radius-s); padding: 6px 10px; }
+.champ-stats select option { background: var(--panel); color: var(--ink); }
+.champ-stats select option:checked { background: var(--gold); color: var(--bg); }
 .toolbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .lineup-select {
   max-width: 220px;
@@ -431,16 +433,16 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
-  background: rgba(47, 211, 192, 0.08) !important;
-  border: 1px solid rgba(47, 211, 192, 0.35) !important;
+  background: linear-gradient(135deg, rgba(216, 180, 106, 0.11), rgba(47, 211, 192, 0.06)) !important;
+  border: 1px solid rgba(216, 180, 106, 0.42) !important;
   color: var(--ink) !important;
   border-radius: var(--radius-s);
   padding: 6px 10px;
   transition: all 0.18s ease;
 }
 .lineup-select:hover, .lineup-select:focus {
-  border-color: var(--cue) !important;
-  background: rgba(47, 211, 192, 0.16) !important;
+  border-color: var(--gold) !important;
+  background: linear-gradient(135deg, rgba(216, 180, 106, 0.18), rgba(47, 211, 192, 0.1)) !important;
 }
 .who-select { min-width: 100px; }
 .stats-table { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
