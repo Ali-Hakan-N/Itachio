@@ -48,6 +48,45 @@ function gearOf(p) {
   ];
 }
 
+// Items bought before this time are the starting items (players leave the base by then)
+const START_MS = 60_000;
+
+/**
+ * Starting items of every player from a match-v5 timeline: Map participantId -> sorted
+ * item ids. Purchases in the first minute, minus those undone. Trinkets are left in;
+ * builds.js keeps only items from the shop.
+ */
+function startingItems(timeline) {
+  const out = new Map();
+  for (const frame of timeline?.info?.frames || []) {
+    for (const e of frame.events || []) {
+      if (e.timestamp >= START_MS) continue;
+      const list = out.get(e.participantId) || [];
+      if (e.type === 'ITEM_PURCHASED') list.push(e.itemId);
+      else if (e.type === 'ITEM_UNDO' && e.beforeId) {
+        const i = list.lastIndexOf(e.beforeId);
+        if (i >= 0) list.splice(i, 1);
+      } else if (e.type === 'ITEM_SOLD') {
+        const i = list.lastIndexOf(e.itemId);
+        if (i >= 0) list.splice(i, 1);
+      } else continue;
+      out.set(e.participantId, list);
+    }
+  }
+  for (const [id, list] of out) out.set(id, list.sort((a, b) => a - b));
+  return out;
+}
+
+/**
+ * What a player did to the other team (ITEM_FACTS in model/builds.js names the entries):
+ * magic and physical damage to champions, healing done, seconds of crowd control on others.
+ * Champions' profiles (who heals, who locks you down) come from these.
+ */
+function factsOf(p) {
+  if (!Number.isFinite(p.magicDamageDealtToChampions)) return null;
+  return [num(p.magicDamageDealtToChampions), num(p.physicalDamageDealtToChampions), num(p.totalHeal), num(p.timeCCingOthers)];
+}
+
 /** Team that took each first objective (OBJECTIVES order): 100, 200 or 0 */
 function firstsOf(teams) {
   return OBJECTIVES.map((o) => (teams || []).find((t) => t.objectives?.[o]?.first)?.teamId || 0);
@@ -59,8 +98,11 @@ function patchOf(version) {
   return m ? `${m[1]}.${m[2]}` : null;
 }
 
-/** Returns null for matches that should not count (other queue, remake, missing players) */
-function parseMatch(match) {
+/**
+ * Returns null for matches that should not count (other queue, remake, missing players).
+ * timeline (optional, a separate request): adds every player's starting items.
+ */
+function parseMatch(match, timeline = null) {
   const info = match?.info;
   const id = match?.metadata?.matchId;
   if (!info || !id) return null;
@@ -70,6 +112,7 @@ function parseMatch(match) {
   if (parts.length !== 10 || parts.some((p) => p.gameEndedInEarlySurrender)) return null;
   const patch = patchOf(info.gameVersion);
   if (!patch) return null;
+  const start = timeline ? startingItems(timeline) : null;
 
   return {
     id,
@@ -77,14 +120,17 @@ function parseMatch(match) {
     patch,
     queue: info.queueId,
     start: info.gameStartTimestamp ?? info.gameCreation ?? 0,
+    dur: info.gameDuration,
     first: firstsOf(info.teams),
     b: (info.teams || []).flatMap((t) => (t.bans || []).map((b) => b.championId)).filter((c) => c > 0),
     p: parts.map((p) => {
       const l = laneOf(p);
       const g = gearOf(p);
-      return { c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win, ...(l && { l }), ...(g && { g }) };
+      const s = start?.get(p.participantId);
+      const x = factsOf(p);
+      return { c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win, ...(x && { x }), ...(l && { l }), ...(g && { g }), ...(s?.length && { s }) };
     }),
   };
 }
 
-module.exports = { parseMatch, patchOf };
+module.exports = { parseMatch, patchOf, startingItems };

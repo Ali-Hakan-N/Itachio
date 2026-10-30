@@ -19,11 +19,13 @@
 // Order and strategy are the model's; only the presentation is stretched. The scale
 // is fixed per model, not per draft. Picks with few games in the data are marked unsure.
 //
-// Personal layer: how the player does on the champion (collector/src/players), from two
-// sources: personal = { history, team }, each { byKey: { "<champ>:<role name>": { delta,
-// games } }, unplayed } (champions not played there get unplayed). delta is in log-odds,
+// Personal layer: how the player does on the champion (collector/src/players), from three
+// sources: personal = { season, history, team }, each { byKey: { "<champ>:<role name>":
+// { delta, games } }, unplayed } (champions not played there get unplayed). season is
+// their ranked games of the season, history those of the patch, team those with exactly
+// the team-mates of this draft (personalFor picks the line-up). delta is in log-odds,
 // already shrunk hard toward the player's own level for champions with few games. The
-// two add up, count PERSONAL_WEIGHT of that, and are capped at PERSONAL_CAP standard
+// sources add up, count PERSONAL_WEIGHT of that, and are capped at PERSONAL_CAP standard
 // deviations of strength (about 7 points): a nudge, never what makes a pick.
 //
 // Composition (comp): every champion has learned style numbers u (collector comp.js); a
@@ -464,7 +466,7 @@
     if (!personal) return row;
     let sum = 0;
     let games = 0;
-    for (const src of [personal.history, personal.team]) {
+    for (const src of [personal.season, personal.history, personal.team]) {
       if (!src) continue;
       const own = src.byKey?.[`${row.championId}:${row.role}`];
       sum += own ? own.delta : src.unplayed || 0;
@@ -737,6 +739,18 @@
     };
   }
 
+  /**
+   * The personal layer of a player for this draft: their season and patch statistics, and
+   * those with the team members on their side now (lineup: their player ids, the player
+   * included). playerStats: { playerId: { season, history, team: { "<sorted ids>": stats } } }
+   */
+  function personalFor(playerStats, playerId, lineup = []) {
+    const own = playerId && playerStats?.[playerId];
+    if (!own) return null;
+    const ids = [...new Set([playerId, ...lineup.filter(Boolean)])].sort();
+    return { season: own.season, history: own.history, team: ids.length > 1 ? own.team?.[ids.join(',')] : undefined };
+  }
+
   // Older engine (recommend.js) takes allies as champion ids
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
@@ -749,9 +763,10 @@
     // A change in log-odds as points around a typical pick (50), on the model's scale
     points: (model, delta) => (has(model) ? Math.round(toScore(index(model), delta) - 50) : 0),
     gamePlan: (args) => (has(args.model) ? gamePlan(args) : null),
+    personalFor,
   };
 
-  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, Engine, ROLES };
+  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, personalFor, Engine, ROLES };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Engine = Engine;
 })(typeof window !== 'undefined' ? window : globalThis);

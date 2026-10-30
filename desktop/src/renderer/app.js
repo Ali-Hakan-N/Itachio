@@ -27,12 +27,16 @@ let S = null; // state from the main process
 let tab = 'draft';
 let screen = 'loading'; // loading | config | login | profile | team | main
 let configError = null;
-// Whose champion statistics are shown (default: me), and from which games
-const statsUi = { player: null, source: 'history' };
+// Whose champion statistics are shown (default: me), from which games, and for the team
+// games which line-up of team members
+const statsUi = { player: null, source: 'season', lineup: null };
 const STAT_SOURCES = [
-  ['history', 'This Patch'], // the player's Solo/Duo and Flex games of the patch
-  ['team', 'With the Team'], // the Flex games the whole team played together
+  ['season', 'This Season'], // the player's ranked games of the season
+  ['history', 'This Patch'], // the same, of the current patch
+  ['team', 'With the Team'], // their games with team members on their side, per line-up
 ];
+// Whose games the History tab shows (default: me)
+const historyUi = { player: null };
 
 const $view = document.getElementById('view');
 const $status = document.getElementById('status');
@@ -171,7 +175,7 @@ api.onState((partial) => {
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
   if (tab === 'draft' && ['draft', 'pools', 'lcu', 'members', 'model', 'currentBuild', 'applied', 'gameData', 'lastGame'].some((k) => k in partial)) renderMain();
-  if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial)) renderMain();
+  if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial || 'me' in partial)) renderMain();
   if (tab === 'champions' && ('playerStats' in partial || 'members' in partial || 'model' in partial)) renderMain();
 });
 api.onSaved((info) => {
@@ -342,8 +346,11 @@ function enemyContext(d, exceptCell) {
 const COUNTER_RISK_BADGE = 3;
 // The player's own layer (their games on the champion) is shown from this many points
 const PERSONAL_BADGE = 2;
-// Personal layer of a player on the board, when they are in the team and analyzed
-const personalOf = (playerId) => (playerId && S.playerStats?.[playerId]) || null;
+// Team members on our side of the draft (their player ids, me included)
+const draftLineup = (d) => (d?.ally || []).map((p) => (p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id)).filter(Boolean);
+// Personal layer of a player on the board, when they are in the team and analyzed: their
+// season and patch statistics, and those with the team members on our side now
+const personalOf = (playerId, d) => Engine.personalFor(S.playerStats, playerId, draftLineup(d));
 const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
 
 // Notes on a recommendation, shown together in one icon's tooltip: [{ kind, title, text }]
@@ -366,7 +373,7 @@ function recNotes(r) {
       kind: r.personal > 0 ? 'good' : 'warn',
       title: `You ${r.personal > 0 ? '+' : '−'}${Math.abs(r.personal)}`,
       text: r.personalGames
-        ? `From your ${r.personalGames} games on it, compared with how you usually play.`
+        ? `From your ${r.personalGames} games on it (season, patch and with these team-mates), compared with how you usually play.`
         : 'You have not played it: champions you rarely play go worse for you.',
     });
   }
@@ -429,18 +436,23 @@ function banRow(r, i, { canHover, hoverId }) {
     </button>`;
 }
 
+// A player's games per champion and role: the season's, else the patch's
+function playedEntries(playerId) {
+  const own = S.playerStats?.[playerId] || {};
+  const byKey = (own.season || own.history)?.byKey || {};
+  return Object.entries(byKey).map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }));
+}
+
 // Our side for ban suggestions: picks and pick intents, and for a teammate who has not
-// shown one yet, the champion they play most in their role this patch (their history
-// statistics), so bans go to what beats the champions our players actually play
+// shown one yet, the champion they play most in their role (their season statistics),
+// so bans go to what beats the champions our players actually play
 function banAllies(d, blocked) {
   const out = draftContext(d).allies;
   const taken = new Set(out.map((p) => p.championId));
   for (const p of d.ally) {
     if (shownChamp(p) || !p.position) continue;
     const id = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
-    const byKey = (S.playerStats?.[id] || {}).history?.byKey || {};
-    const usual = Object.entries(byKey)
-      .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }))
+    const usual = playedEntries(id)
       .filter((x) => x.role === p.position && !blocked.has(x.championId) && !taken.has(x.championId))
       .sort((a, b) => b.games - a.games)[0];
     if (usual) {
@@ -453,12 +465,10 @@ function banAllies(d, blocked) {
 
 // Who should pick first: teammates still to pick, ordered by how easily the enemy can
 // answer their likely champion (their hover, else what they play most in that role this
-// patch). Low counter risk picks early, high risk last; trades where the lobby order differs.
+// season). Low counter risk picks early, high risk last; trades where the lobby order differs.
 function usualChampion(p, blocked) {
   const id = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
-  const byKey = (S.playerStats?.[id] || {}).history?.byKey || {};
-  const best = Object.entries(byKey)
-    .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }))
+  const best = playedEntries(id)
     .filter((x) => x.role === p.position && !blocked.has(x.championId))
     .sort((a, b) => b.games - a.games)[0];
   return best ? best.championId : 0;
@@ -523,7 +533,8 @@ function gamePlanHtml(d) {
     </div>`;
 }
 
-// Runes, items and spells for our pick; sent to the client once every champion is locked
+// Runes, items and spells for our pick, once every champion is locked; sent to the client
+// on their own when the options say so, else with the Apply buttons
 const BUCKET_TEXT = { any: 'General', ap: 'vs Magic Damage', ad: 'vs Physical Damage', mixed: 'vs Mixed Damage' };
 function buildHtml() {
   const pick = S.currentBuild;
@@ -532,19 +543,29 @@ function buildHtml() {
   const perks = S.gameData?.perks || {};
   const spells = S.gameData?.summoner || {};
   const perkImg = (id) => (perks[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/img/${perks[id].icon}" alt="" title="${esc(perks[id].name)}">` : '');
-  const itemImg = (id) => `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/item/${id}.png" alt="">`;
+  const itemImg = (id, title) => `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/item/${id}.png" alt="" title="${esc(title || S.gameData?.items?.[id] || '')}">`;
   const spellImg = (id) => (spells[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/spell/${spells[id].image}" alt="" title="${esc(spells[id].name)}">` : '');
   const applied = S.applied?.gameId === S.draft?.gameId ? S.applied.parts || {} : {};
   const state = (part) => (applied[part] === true ? '<span class="ok">Applied</span>' : applied[part] === false ? '<span class="fail">Failed</span>' : '');
   const keystone = build.runes.perks[0];
+  const group = (label, ids, title) => (ids?.length ? `<span class="item-group"><small>${label}</small><span>${ids.map((id) => itemImg(id, title?.(id))).join('')}</span></span>` : '');
+  const situational = pick.situational || [];
+  const why = new Map(situational.map((x) => [x.id, `+${(x.value * 100).toFixed(1)}% win chance vs ${x.reasons.join(', ')}`]));
   return `
     <div class="build">
       <h3 class="sub head-row"><span>Build · ${BUCKET_TEXT[pick.bucket] || ''}</span><span class="hint">${build.games} games</span></h3>
       <div class="build-row">
         <div class="build-part runes">${perkImg(keystone)}<span>${esc(perks[keystone]?.name || '')}<small>${esc(perks[build.runes.primary]?.name || '')} · ${esc(perks[build.runes.sub]?.name || '')}</small></span>${state('runes')}<button class="btn ghost" data-apply="runes">Apply Runes</button></div>
-        <div class="build-part items">${build.items.core.map(itemImg).join('')}${build.items.boots ? itemImg(build.items.boots) : ''}${state('items')}<button class="btn ghost" data-apply="items">Apply Items</button></div>
+        <div class="build-part items">
+          ${group('Start', build.items.start)}
+          ${group('Core', build.items.core)}
+          ${group('Boots', build.items.boots ? [build.items.boots] : [])}
+          ${group('Situational', situational.map((x) => x.id), (id) => why.get(id))}
+          ${state('items')}<button class="btn ghost" data-apply="items">Apply Items</button>
+        </div>
         <div class="build-part spells">${build.spells.map(spellImg).join('')}${state('spells')}<button class="btn ghost" data-apply="spells">Apply Spells</button></div>
       </div>
+      ${situational.length ? `<p class="note sit-note">${situational.map((x) => `<b>${esc(S.gameData?.items?.[x.id] || '')}</b>${S.gameData?.items?.[x.id] ? ' ' : ''}vs ${esc(x.reasons.join(', '))}`).join(' · ')}</p>` : ''}
     </div>`;
 }
 
@@ -563,7 +584,7 @@ function slotScore(d, which, p, championId, sink) {
     // A hover on our side is scored like the recommendations: after the enemy's answers
     lookAhead: isAlly && !p.locked,
     unavailable: unavailable(d),
-    personal: isAlly ? personalOf(p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id) : null,
+    personal: isAlly ? personalOf(p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id, d) : null,
   });
   if (!ev) return '';
   sink.push(ev.score);
@@ -651,12 +672,19 @@ function renderDraft() {
   if (!d) {
     const connected = S.lcu?.connected;
     $view.innerHTML = `
-      <div class="empty-state">
-        <h2>${connected ? 'Waiting for Champ Select' : 'League Client Is Closed'}</h2>
-        <p>${connected
-          ? 'Queue up. When champ select starts, the draft shows up here live with your recommendations.'
-          : 'Open the League of Legends client. The app finds it and connects on its own.'}</p>
-        ${S.stats?.meta?.length ? '' : '<p>No meta data yet. Recommendations appear after the collector runs for the first time.</p>'}
+      <div class="waiting ${connected ? 'on' : ''}">
+        <div class="orb" aria-hidden="true">
+          <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span>
+          <span class="sweep"></span>
+          <img class="orb-seal" src="logo.png" alt="">
+        </div>
+        <p class="kicker">${connected ? 'Connected' : 'Itachio is watching'}</p>
+        <h2 class="waiting-title">${connected ? 'Waiting for Champ Select' : 'League Client Is Closed'}</h2>
+        <p class="waiting-text">${connected
+          ? 'Queue up. When champ select starts, the draft shows up here live with your picks, bans and build.'
+          : 'Open the League of Legends client. Itachio finds it and connects on its own.'}</p>
+        <div class="scan"><span class="scan-dot"></span>${connected ? esc(PHASE_TEXT[S.lcu?.phase] || 'Idle') : 'Searching for the client'}</div>
+        ${S.stats?.meta?.length ? '' : '<p class="waiting-text small">No meta data yet. Recommendations appear after the collector runs for the first time.</p>'}
       </div>`;
     return;
   }
@@ -686,7 +714,7 @@ function renderDraft() {
         ...draftContext(d, local?.cellId),
         pool: myPool().map((p) => p.champion_id),
         limit: 10,
-        personal: personalOf(S.me?.id),
+        personal: personalOf(S.me?.id, d),
       });
 
   // Our ban is still open: what to ban, against our picks and intents and their locks
@@ -717,7 +745,7 @@ function renderDraft() {
   // After locking: your pick with its live breakdown
   let pickRow = '';
   if (local?.locked) {
-    const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: local.championId, role, ...draftContext(d, local.cellId), personal: personalOf(S.me?.id) });
+    const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: local.championId, role, ...draftContext(d, local.cellId), personal: personalOf(S.me?.id, d) });
     if (ev) pickRow = `<div class="recs pinned">${recRow({ ...ev, inPool: false }, 0, { canHover: false, rank: '✓' })}</div>`;
   }
 
@@ -726,7 +754,7 @@ function renderDraft() {
   if (local && !local.locked && local.hoverId && !recs.some((r) => r.championId === local.hoverId)) {
     const ev = Engine.evaluate({
       stats: S.stats, model: S.model, championId: local.hoverId, role, ...draftContext(d, local.cellId),
-      lookAhead: true, unavailable: blocked, personal: personalOf(S.me?.id),
+      lookAhead: true, unavailable: blocked, personal: personalOf(S.me?.id, d),
     });
     if (ev) {
       const row = { ...ev, inPool: myPool().some((p) => p.champion_id === local.hoverId) };
@@ -860,47 +888,69 @@ function sideColumn(which, d) {
 }
 
 // ---------- Champions ----------
-// How each player does on each champion (collector/src/players), from two kinds of games:
-// their own games of the patch, and the team's full Flex games. Games, record, and the
-// effect split into the laning phase and the rest of the game
-// Champions worth learning for a player: in their main role (most games this patch), the
-// best scored with the champions their teammates usually play, leaving out what they
-// already play there
+// How each player does on each champion (collector/src/players), from three kinds of games:
+// their ranked games of the season, those of the patch, and those with team members on
+// their side (per line-up). Games, record, and the effect split into the laning phase and
+// the rest of the game.
+// Champions worth learning for a player: in each role they play (chosen in the Team tab,
+// else the role they play most), the best scored with the champions their teammates
+// usually play, leaving out what they already play there
 const LEARN_COUNT = 5;
 function learnHtml(playerId) {
-  const mine = (S.playerStats?.[playerId] || {}).history?.byKey || {};
-  const entries = Object.entries(mine).map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }));
-  const roleGames = {};
-  for (const e of entries) roleGames[e.role] = (roleGames[e.role] || 0) + e.games;
-  const role = Object.entries(roleGames).sort((a, b) => b[1] - a[1])[0]?.[0];
-  if (!role || !S.model) return '';
-  const played = new Set(entries.filter((e) => e.role === role).map((e) => e.championId));
-  // Teammates' usual champion in each other role
-  const allies = [];
-  for (const m of S.members || []) {
-    if (m.id === playerId) continue;
-    const theirs = Object.entries((S.playerStats?.[m.id] || {}).history?.byKey || {})
-      .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }))
-      .filter((x) => x.role !== role && !allies.some((a) => a.position === x.role))
-      .sort((a, b) => b.games - a.games)[0];
-    if (theirs) allies.push({ championId: theirs.championId, position: theirs.role });
+  if (!S.model) return '';
+  const entries = playedEntries(playerId);
+  const member = (S.members || []).find((m) => m.id === playerId);
+  let roles = (member?.roles || []).filter((r) => ROLE_NAME[r]);
+  if (!roles.length) {
+    const roleGames = {};
+    for (const e of entries) roleGames[e.role] = (roleGames[e.role] || 0) + e.games;
+    const main = Object.entries(roleGames).sort((a, b) => b[1] - a[1])[0]?.[0];
+    roles = main ? [main] : [];
   }
-  const picks = Engine.recommend({ stats: S.stats, model: S.model, role, allies, limit: 40 })
-    .filter((r) => !played.has(r.championId))
-    .slice(0, LEARN_COUNT);
-  if (!picks.length) return '';
+  roles = ROLES.map(([r]) => r).filter((r) => roles.includes(r));
+  const rows = roles.map((role) => {
+    const played = new Set(entries.filter((e) => e.role === role).map((e) => e.championId));
+    // Teammates' usual champion in each other role
+    const allies = [];
+    for (const m of S.members || []) {
+      if (m.id === playerId) continue;
+      const theirs = playedEntries(m.id)
+        .filter((x) => x.role !== role && !allies.some((a) => a.position === x.role))
+        .sort((a, b) => b.games - a.games)[0];
+      if (theirs) allies.push({ championId: theirs.championId, position: theirs.role });
+    }
+    const picks = Engine.recommend({ stats: S.stats, model: S.model, role, allies, limit: 40 })
+      .filter((r) => !played.has(r.championId))
+      .slice(0, LEARN_COUNT);
+    if (!picks.length) return '';
+    return `
+      <div class="learn-line">
+        <span class="learn-role">${ROLE_NAME[role]}</span>
+        <div class="learn-row">${picks.map((r) => `<span class="learn-pick">${champImg(r.championId)}<span>${esc(champName(r.championId))}</span><b class="sc sc-${tierOf(r.score)}">${r.score}</b></span>`).join('')}</div>
+      </div>`;
+  }).join('');
+  if (!rows) return '';
   return `
     <div class="learn">
-      <h3 class="sub">Champions to Learn · ${ROLE_NAME[role]}</h3>
-      <div class="learn-row">${picks.map((r) => `<span class="learn-pick">${champImg(r.championId)}<span>${esc(champName(r.championId))}</span><b class="sc sc-${tierOf(r.score)}">${r.score}</b></span>`).join('')}</div>
+      <h3 class="sub">Champions to Learn</h3>
+      ${rows}
     </div>`;
 }
+
+const nickOf = (id) => (S.members || []).find((m) => m.id === id)?.nickname || '?';
+// A line-up's name from one player's side: the team members they played with
+const lineupName = (lineup, playerId) => `with ${lineup.split(',').filter((id) => id !== playerId).map(nickOf).join(', ')}`;
+const gamesOf = (stats) => Object.values(stats?.byKey || {}).reduce((a, v) => a + v.games, 0);
 
 function renderChampions() {
   const members = S.members || [];
   const id = statsUi.player && members.some((m) => m.id === statsUi.player) ? statsUi.player : S.me?.id;
   const source = STAT_SOURCES.find(([k]) => k === statsUi.source) || STAT_SOURCES[0];
-  const stats = ((S.playerStats || {})[id] || {})[source[0]];
+  const own = (S.playerStats || {})[id] || {};
+  // With the team: one line-up at a time, the one with the most games first
+  const lineups = Object.entries(own.team || {}).sort((a, b) => gamesOf(b[1]) - gamesOf(a[1]));
+  const lineup = source[0] === 'team' ? (lineups.find(([k]) => k === statsUi.lineup) || lineups[0])?.[0] : null;
+  const stats = source[0] === 'team' ? (lineup ? own.team[lineup] : null) : own[source[0]];
   const pts = (x) => Engine.points(S.model, x);
   const signed = (n) => `<b class="${n > 0 ? 'up' : n < 0 ? 'down' : ''}">${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}</b>`;
   const rows = stats
@@ -908,14 +958,25 @@ function renderChampions() {
         .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], ...v }))
         .sort((x, y) => y.games - x.games || y.delta - x.delta)
     : [];
+  const empty = {
+    season: 'No ranked games this season yet.',
+    history: 'No ranked games this patch yet.',
+    team: 'No ranked games with team members yet. Games where another team member was on your side count here, per group of team-mates.',
+  }[source[0]];
   $view.innerHTML = `
     <div class="champ-stats">
       <div class="toolbar">
         <h2>Champion Statistics</h2>
         <div class="seg" id="src">${STAT_SOURCES.map(([k, label]) => `<button data-src="${k}" class="${k === source[0] ? 'active' : ''}">${label}</button>`).join('')}</div>
         <span class="grow"></span>
+        ${lineups.length && source[0] === 'team' ? `<select id="lineup">${lineups.map(([k, v]) => `<option value="${esc(k)}" ${k === lineup ? 'selected' : ''}>${esc(lineupName(k, id))} · ${gamesOf(v)} games</option>`).join('')}</select>` : ''}
         <select id="who">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
       </div>
+      <p class="note source-note">${{
+        season: 'How well each champion goes for this player, from all their ranked games of the season. It feeds their scores in the draft.',
+        history: 'The same from this patch only: fewer games, but how each champion does for them right now. It feeds their scores too.',
+        team: 'Their games with exactly these team-mates on their side. In the draft it counts when the same team-mates are on your side.',
+      }[source[0]]}</p>
       ${rows.length
         ? `<div class="stats-table">
             <div class="stats-row head"><span>Champion</span><span>Games</span><span>Record</span><span title="Laning phase compared with an average player in the same matchup">Lane</span><span title="The rest of the game, beyond the draft and the lane">Rest</span><span title="What it adds to this player's score for the champion">Effect</span></div>
@@ -930,7 +991,7 @@ function renderChampions() {
               </div>`).join('')}
           </div>
           <p class="note">Champions not played here: ${signed(pts(stats.unplayed))}</p>`
-        : '<p class="note">No games yet.</p>'}
+        : `<p class="note">${empty}</p>`}
       ${learnHtml(id)}
     </div>`;
   document.getElementById('src').onclick = (e) => {
@@ -941,8 +1002,16 @@ function renderChampions() {
   };
   document.getElementById('who').onchange = (e) => {
     statsUi.player = e.target.value;
+    statsUi.lineup = null;
     renderChampions();
   };
+  const sel = document.getElementById('lineup');
+  if (sel) {
+    sel.onchange = (e) => {
+      statsUi.lineup = e.target.value;
+      renderChampions();
+    };
+  }
 }
 
 // ---------- Team ----------
@@ -962,17 +1031,33 @@ function renderTeam() {
     <div class="members">
       ${S.members.map((m) => {
         const owner = t?.owner_id === m.id;
+        const mine = m.id === S.me?.id;
+        const roles = new Set(m.roles || []);
+        // Any number of roles: the team is not a fixed five, and a player can play several
+        const chips = ROLES.map(([r, name]) => (mine
+          ? `<button type="button" class="role-chip ${roles.has(r) ? 'on' : ''}" data-role="${r}" aria-pressed="${roles.has(r)}">${name}</button>`
+          : roles.has(r) ? `<span class="role-chip on">${name}</span>` : '')).join('');
         return `
-          <div class="member">
+          <div class="member ${mine ? 'mine' : ''}">
             <div class="top">
               <span class="nick">${esc(m.nickname)}${owner ? ' <span class="badge owner">Owner</span>' : ''}</span>
             </div>
             <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
+            <div class="roles" ${mine ? 'title="Roles you play: pick any number"' : ''}>${chips || '<span class="muted small">No roles chosen</span>'}</div>
             ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove From Team</button>` : ''}
           </div>`;
       }).join('')}
     </div>`;
   $view.querySelector('.members').onclick = async (e) => {
+    const chip = e.target.closest('[data-role]');
+    if (chip) {
+      const roles = new Set(S.me?.roles || []);
+      if (roles.has(chip.dataset.role)) roles.delete(chip.dataset.role);
+      else roles.add(chip.dataset.role);
+      chip.disabled = true;
+      S = await run(api.saveRoles(ROLES.map(([r]) => r).filter((r) => roles.has(r))));
+      return renderMain();
+    }
     const b = e.target.closest('[data-kick]');
     if (!b || !confirm(`Remove ${b.dataset.name} from the team?`)) return;
     S = await run(api.kickMember(b.dataset.kick));
@@ -993,59 +1078,126 @@ function renderTeam() {
 }
 
 // ---------- History ----------
+// A player's ranked games of the season from Riot (the collector reads them), newest first:
+// both teams in role order with every champion's score on the final board. Only for
+// looking back; the champion statistics are in the Champions tab.
+const QUEUE_NAME = { 420: 'Solo/Duo', 440: 'Flex' };
 async function renderHistory() {
+  const members = S.members || [];
+  const id = historyUi.player && members.some((m) => m.id === historyUi.player) ? historyUi.player : S.me?.id;
+  const mine = id === S.me?.id;
   $view.innerHTML = '<p class="note">Loading…</p>';
-  const rows = await run(api.listHistory());
+  const rows = await run(api.listHistory(id));
   if (tab !== 'history') return;
-  if (!rows.length) {
-    $view.innerHTML = '<div class="empty-state"><h2>No Games Yet</h2></div>';
-    return;
-  }
-  // A side's picks with their roles: each champion once (drafts recorded before 0.1.22 can
-  // hold a pick twice), roles guessed where the draft does not have them
-  const side = (r, which) => {
-    const seen = new Set();
-    const list = r.draft_actions
-      .filter((a) => a.side === which && a.kind === 'pick' && !seen.has(a.champion_id) && seen.add(a.champion_id))
-      .sort((a, b) => a.seq - b.seq)
-      .map((a) => ({ championId: a.champion_id, position: a.role || '' }));
-    const guess = list.length === 5 ? Engine.guessRoles({ model: S.model, players: list }) : null;
-    return guess ? list.map((p, i) => ({ ...p, position: guess.roles[i] })) : list;
-  };
+  const roleList = ROLES.map(([r]) => r);
+  const team = (ids) => ids.map((championId, i) => ({ championId, position: roleList[i] }));
   // Every champion scored on the final board, from its own team's side, and the team's average
-  const scored = (team, other) => {
-    const picks = team.map((p) => {
-      const ev = Engine.evaluate({
-        stats: S.stats, model: S.model, championId: p.championId, role: p.position,
-        allies: team.filter((x) => x !== p), enemies: other,
-      });
+  const scored = (list, other) => {
+    const picks = list.map((p) => {
+      const ev = Engine.evaluate({ stats: S.stats, model: S.model, championId: p.championId, role: p.position, allies: list.filter((x) => x !== p), enemies: other });
       return { ...p, score: ev ? ev.score : null };
     });
     const known = picks.filter((p) => p.score !== null);
     return { picks, avg: known.length ? Math.round(known.reduce((a, p) => a + p.score, 0) / known.length) : null };
   };
-  const teamHtml = (t) => `<div class="hteam">${t.picks.map((p) => `
-      <span class="hpick">${champImg(p.championId, 's')}${p.score === null ? '' : `<b class="sc sc-${tierOf(p.score)}">${p.score}</b>`}</span>`).join('')}</div>`;
+  const teamHtml = (t, own) => `<div class="hteam">${t.picks.map((p) => `
+      <span class="hpick ${p.championId === own ? 'own' : ''}">${champImg(p.championId, 's')}${p.score === null ? '<b></b>' : `<b class="sc sc-${tierOf(p.score)}">${p.score}</b>`}</span>`).join('')}</div>`;
   const avgHtml = (t) => (t.avg === null ? '<span class="havg"></span>' : `<span class="havg sc sc-${tierOf(t.avg)}">${t.avg}</span>`);
-  const statusText = { live: 'In Progress', played: 'Played', dodged: 'Dodged', finished: '' };
-  $view.innerHTML = `
-    <div class="hist">
-      ${rows.map((r) => {
-        const us = side(r, 'ally');
-        const them = side(r, 'enemy');
-        const ours = scored(us, them);
-        const theirs = scored(them, us);
-        return `
-        <div class="hrow">
-          <span class="muted">${new Date(r.started_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</span>
-          <span class="tag ${r.our_side || ''}">${r.our_side === 'red' ? 'Red' : 'Blue'}</span>
-          <span class="${r.result || 'muted'}">${r.result === 'win' ? 'Win' : r.result === 'loss' ? 'Loss' : statusText[r.status] || ''}</span>
-          ${teamHtml(ours)}
-          <div class="hscore">${avgHtml(ours)}<span class="hvs">vs</span>${avgHtml(theirs)}</div>
-          ${teamHtml(theirs)}
-        </div>`;
-      }).join('')}
+  const toolbar = `
+    <div class="toolbar hist-bar">
+      <h2>Ranked Games</h2>
+      <span class="grow"></span>
+      <select id="hwho">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
+      ${mine && rows.length ? '<button class="btn ghost danger" id="hclear">Clear History</button>' : ''}
     </div>`;
+  const body = rows.length
+    ? `<div class="hist">${rows.map((r) => {
+        const ours = r.side === 'red' ? r.red : r.blue;
+        const theirs = r.side === 'red' ? r.blue : r.red;
+        const us = scored(team(ours), team(theirs));
+        const them = scored(team(theirs), team(ours));
+        const kda = r.kills === null ? '' : `${r.kills}/${r.deaths}/${r.assists}`;
+        const time = r.duration_s ? `${Math.floor(r.duration_s / 60)}:${String(r.duration_s % 60).padStart(2, '0')}` : '';
+        return `
+        <div class="hrow ${r.win ? 'won' : 'lost'}">
+          <span class="hwhen"><b>${new Date(r.started_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</b><small>${QUEUE_NAME[r.queue_id] || ''}${time ? ` · ${time}` : ''}</small></span>
+          <span class="hres ${r.win ? 'win' : 'loss'}">${r.win ? 'Win' : 'Loss'}<small class="tag ${r.side}">${r.side === 'red' ? 'Red' : 'Blue'}</small></span>
+          <span class="hme">${champImg(r.champion_id)}<span><b>${esc(champName(r.champion_id))}</b><small>${ROLE_NAME[r.role] || ''}${kda ? ` · ${kda}` : ''}${r.cs !== null ? ` · ${r.cs} cs` : ''}</small>${r.lineup ? `<small class="hwith">${esc(lineupName(r.lineup, id))}</small>` : ''}</span></span>
+          ${teamHtml(us, r.champion_id)}
+          <div class="hscore">${avgHtml(us)}<span class="hvs">vs</span>${avgHtml(them)}</div>
+          ${teamHtml(them, null)}
+        </div>`;
+      }).join('')}</div>`
+    : `<div class="empty-state"><h2>No Games Yet</h2><p>${mine ? 'Your ranked games of the season show up here once the collector reads them from Riot.' : 'No ranked games to show.'}</p></div>`;
+  $view.innerHTML = toolbar + body;
+  document.getElementById('hwho').onchange = (e) => {
+    historyUi.player = e.target.value;
+    renderHistory();
+  };
+  const clear = document.getElementById('hclear');
+  if (clear) {
+    clear.onclick = async () => {
+      if (!confirm('Clear your history? Games so far are hidden from this list. Champion statistics stay as they are.')) return;
+      S = await run(api.clearHistory());
+      toast('History cleared');
+      renderHistory();
+    };
+  }
 }
+
+// ---------- Options ----------
+// Kept on this computer. General: start with Windows. Drafting: send runes (with summoner
+// spells) and the item build to the client on their own once every champion is locked.
+const OPTION_TABS = [
+  ['general', 'General', [['openAtLogin', 'Start with Windows', 'Opens Itachio when you sign in to your computer, so it is ready before you open League.']]],
+  ['drafting', 'Drafting', [
+    ['autoRunes', 'Auto push runes', 'Sends the recommended rune page and summoner spells to the client as soon as every champion is locked. Off: use the Apply buttons.'],
+    ['autoItems', 'Auto push item build', 'Sends the item set (starting items, core, boots, situational items) to the client as soon as every champion is locked.'],
+  ]],
+];
+let optionsTab = 'general';
+async function openOptions() {
+  const settings = await run(api.getSettings());
+  const $m = document.getElementById('modal');
+  const draw = () => {
+    const [, title, items] = OPTION_TABS.find(([k]) => k === optionsTab);
+    $m.innerHTML = `
+      <div class="modal-overlay" id="mclose-bg">
+        <div class="options" role="dialog" aria-modal="true" aria-label="Options">
+          <nav class="options-nav">
+            <h2>Options</h2>
+            ${OPTION_TABS.map(([k, label]) => `<button data-otab="${k}" class="${k === optionsTab ? 'active' : ''}">${label}</button>`).join('')}
+          </nav>
+          <section class="options-body">
+            <div class="options-head"><h3>${title}</h3><button class="x" id="mclose" aria-label="Close">×</button></div>
+            ${items.map(([key, label, text]) => `
+              <label class="option">
+                <span><b>${label}</b><small>${text}</small></span>
+                <input type="checkbox" class="switch" data-key="${key}" ${settings[key] ? 'checked' : ''}>
+              </label>`).join('')}
+          </section>
+        </div>
+      </div>`;
+    const close = () => ($m.innerHTML = '');
+    document.getElementById('mclose').onclick = close;
+    document.getElementById('mclose-bg').onclick = (e) => e.target.id === 'mclose-bg' && close();
+    for (const b of $m.querySelectorAll('[data-otab]')) {
+      b.onclick = () => {
+        optionsTab = b.dataset.otab;
+        draw();
+      };
+    }
+    for (const box of $m.querySelectorAll('[data-key]')) {
+      box.onchange = async () => {
+        Object.assign(settings, await run(api.setSettings({ [box.dataset.key]: box.checked })));
+      };
+    }
+  };
+  draw();
+}
+document.getElementById('optbtn').onclick = openOptions;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.getElementById('modal').innerHTML = '';
+});
 
 boot();

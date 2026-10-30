@@ -13,13 +13,51 @@ const PRE_GAME_PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck']);
 // The draft stays on screen while the game is played and goes when it is over
 const AFTER_GAME_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
 const MODEL_CHECK_MS = 10 * 60 * 1000; // how often to look for a newer model
+const SITUATIONAL_MIN = 0.01; // win chance an item must add against this enemy team
+const SITUATIONAL_COUNT = 3;
+const REASON_MIN = 0.003; // a part of the enemy profile must add this much to be named
+const REASONS = { magic: ['magic damage', 'physical damage'], heal: ['healing'], cc: ['crowd control'], assassin: ['assassins'] };
+
+/**
+ * Situational items for a build against an enemy team (collector/src/model/builds.js
+ * analyzeSituations): the champion's item choices (build.items.pool) worth at least
+ * SITUATIONAL_MIN more win chance against these enemies than against an average team,
+ * best first, with the parts of the enemy profile that make them worth it.
+ * Returns [{ id, value, reasons: ['healing', ...] }].
+ */
+function situationalItems(build, enemies, sit) {
+  if (!sit?.items || !build?.items) return [];
+  const zero = sit.features.map(() => 0);
+  const team = enemies.reduce((t, e) => t.map((v, f) => v + (sit.profile[e] || zero)[f]), zero);
+  const d = team.map((v, f) => v - (sit.center[f] || 0));
+  const core = new Set(build.items.core);
+  const pool = (build.items.pool || build.items.more || []).filter((id) => !core.has(id) && sit.items[id]);
+  return pool
+    .map((id) => {
+      const parts = sit.items[id].map((w, f) => w * d[f]);
+      const reasons = parts
+        .map((v, f) => ({ v, f }))
+        .filter((x) => x.v >= REASON_MIN)
+        .sort((a, b) => b.v - a.v)
+        .map(({ f }) => {
+          const names = REASONS[sit.features[f]] || [sit.features[f]];
+          return d[f] < 0 && names[1] ? names[1] : names[0];
+        });
+      return { id, value: parts.reduce((a, v) => a + v, 0), reasons };
+    })
+    .filter((x) => x.value >= SITUATIONAL_MIN && x.reasons.length)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, SITUATIONAL_COUNT);
+}
 
 class AppCore extends EventEmitter {
-  constructor({ lcu, data, log = console }) {
+  constructor({ lcu, data, log = console, settings = {} }) {
     super();
     this.lcu = lcu;
     this.data = data;
     this.log = log;
+    // Options: send runes (with spells) and the item set to the client on their own
+    this.settings = { autoRunes: false, autoItems: false, ...settings };
     this.state = {
       me: null,
       team: null,
@@ -34,6 +72,7 @@ class AppCore extends EventEmitter {
       playerStats: {}, // how each player does on each champion
       builds: {}, // runes, items and spells per champion, role and enemy damage
       damage: null, // champions' magic share, to choose the build for the enemy team
+      situations: null, // what items are worth against kinds of enemy teams (situationalItems)
       gameData: null, // rune and summoner spell names and icons
       applied: null, // { gameId, championId, bucket, parts: { runes, items, spells } } what was sent to the client
       currentBuild: null, // buildFor() of the current draft, for the UI
@@ -82,12 +121,13 @@ class AppCore extends EventEmitter {
 
   // Builds and rune/spell names; refreshed with the model when champ select starts
   async #loadBuilds(version) {
-    const [builds, damage, gameData] = await Promise.all([
+    const [builds, damage, situations, gameData] = await Promise.all([
       this.data.loadBuilds?.().catch((err) => (this.log.error('[builds]', err.message), {})) ?? {},
       this.data.loadDamage?.().catch(() => null) ?? null,
+      this.data.loadSituations?.().catch(() => null) ?? null,
       this.state.gameData ? this.state.gameData : this.data.loadGameData?.(version).catch(() => null) ?? null,
     ]);
-    this.#emit({ builds: builds || {}, damage, gameData });
+    this.#emit({ builds: builds || {}, damage, situations, gameData });
   }
 
   // The collector uploads a new model after each training. Take it when it appears, but
@@ -248,8 +288,9 @@ class AppCore extends EventEmitter {
 
   // ---------- Runes, items, spells ----------
   // The build for our champion: the one made against this enemy team's kind of damage
-  // when there is one, else the general one. Needs every pick locked (the build depends
-  // on both teams). Returns { build, bucket, championId, role } or null.
+  // when there is one, else the general one, and the situational items for this enemy
+  // team. Needs every pick locked (the build depends on both teams).
+  // Returns { build, bucket, championId, role, situational } or null.
   buildFor(draft = this.state.draft) {
     if (!draft) return null;
     const me = draft.ally.find((p) => p.isLocal);
@@ -269,15 +310,21 @@ class AppCore extends EventEmitter {
     const b = this.state.builds;
     const build = b[`${me.championId}:${role}:${bucket}`] || b[`${me.championId}:${role}:any`];
     if (!build) return null;
-    return { build, bucket: build.bucket, championId: me.championId, role };
+    return { build, bucket: build.bucket, championId: me.championId, role, situational: situationalItems(build, enemies, this.state.situations) };
   }
 
-  // Once per game, as soon as all ten picks are locked: send the build to the client
+  setSettings(settings) {
+    Object.assign(this.settings, settings);
+  }
+
+  // Once per game, as soon as all ten picks are locked: send the parts of the build the
+  // options ask for to the client (the others wait for the Apply buttons)
   #autoApply(draft) {
     if (!draft.gameId || this.state.applied?.gameId === draft.gameId) return;
-    if (!this.buildFor(draft)) return;
+    const parts = [...(this.settings.autoRunes ? ['runes', 'spells'] : []), ...(this.settings.autoItems ? ['items'] : [])];
+    if (!parts.length || !this.buildFor(draft)) return;
     this.state.applied = { gameId: draft.gameId };
-    this.applyBuild(['runes', 'items', 'spells']).catch((err) => this.log.error('[build]', err.message));
+    this.applyBuild(parts).catch((err) => this.log.error('[build]', err.message));
   }
 
   /** Sends parts of the build (runes, items, spells) to the client; returns what was applied */
@@ -326,16 +373,20 @@ class AppCore extends EventEmitter {
   }
 
   // An item set for the champion, shown in the in-game shop: replaces our earlier one
-  async #applyItems({ build, championId }) {
+  async #applyItems({ build, championId, situational = [] }) {
     const summoner = await this.lcu.get('/lol-summoner/v1/current-summoner');
     if (!summoner?.summonerId) throw new Error('No summoner');
     const path = `/lol-item-sets/v1/item-sets/${summoner.summonerId}/sets`;
     const current = (await this.lcu.get(path)) || { itemSets: [] };
     const items = (ids) => ids.filter(Boolean).map((id) => ({ id: String(id), count: 1 }));
+    const reasons = [...new Set(situational.flatMap((x) => x.reasons))];
+    const shown = new Set([...build.items.core, build.items.boots, ...situational.map((x) => x.id)]);
     const blocks = [
+      { type: 'Starting Items', items: items(build.items.start || []) },
       { type: 'Core', items: items(build.items.core) },
       ...(build.items.boots ? [{ type: 'Boots', items: items([build.items.boots]) }] : []),
-      { type: 'Also built', items: items(build.items.more) },
+      { type: `Situational${reasons.length ? `: vs ${reasons.join(', ')}` : ''}`, items: items(situational.map((x) => x.id)) },
+      { type: 'Also built', items: items((build.items.more || []).filter((id) => !shown.has(id))) },
     ].filter((b) => b.items.length);
     const set = {
       title: `Itachio ${this.state.champions.find((c) => c.id === championId)?.name || ''}`.trim(),
@@ -447,7 +498,7 @@ class AppCore extends EventEmitter {
         role: (cellInfo.get(a.actorCellId) || {}).position || '',
         allies: before.filter((x) => x.side === a.side).map(asPick),
         enemies: before.filter((x) => x.side !== a.side).map(asPick),
-        personal: this.state.playerStats[(cellInfo.get(a.actorCellId) || {}).playerId] || null,
+        personal: Engine.personalFor(this.state.playerStats, (cellInfo.get(a.actorCellId) || {}).playerId, draft.ally.map((p) => cellInfo.get(p.cellId)?.playerId)),
       });
       return ev ? ev.score : null;
     } catch (err) {
@@ -500,4 +551,4 @@ class AppCore extends EventEmitter {
   }
 }
 
-module.exports = { AppCore };
+module.exports = { AppCore, situationalItems };

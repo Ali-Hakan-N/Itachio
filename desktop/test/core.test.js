@@ -250,7 +250,8 @@ test('the draft stays on screen during the game and goes when it ends', async ()
   assert.equal(core.state.draft, null);
 });
 
-test('build: once all ten picks are locked, runes, items and spells go to the client once', async () => {
+// A core in champ select with a build for our champion; sent: what went to the client
+async function buildCore(settings) {
   const lcu = new (require('node:events').EventEmitter)();
   const sent = [];
   lcu.get = async (path) => {
@@ -267,12 +268,17 @@ test('build: once all ten picks are locked, runes, items and spells go to the cl
   data.loadBuilds = async () => ({ '103:middle:any': build });
   data.loadDamage = async () => null;
   data.loadGameData = async () => null;
-  const core = new AppCore({ lcu, data, log: { error: () => {}, info: () => {} } });
+  const core = new AppCore({ lcu, data, log: { error: () => {}, info: () => {} }, settings });
   await core.loadUserData();
   await new Promise((r) => setTimeout(r, 20)); // builds load in the background
   const { buildSession } = require('./mock-lcu');
   lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
   await new Promise((r) => setTimeout(r, 50));
+  return { lcu, core, sent, build, buildSession };
+}
+
+test('build: with both auto options on, once all ten picks are locked, runes, items and spells go to the client once', async () => {
+  const { lcu, core, sent, build, buildSession } = await buildCore({ autoRunes: true, autoItems: true });
   const post = sent.find((x) => x[1] === '/lol-perks/v1/pages' && x[0] === 'POST');
   assert.ok(post, 'a new rune page (a free page is left)');
   assert.deepEqual(post[2].selectedPerkIds, build.runes.perks);
@@ -286,6 +292,15 @@ test('build: once all ten picks are locked, runes, items and spells go to the cl
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(sent.length, count, 'only once per game');
   assert.deepEqual(core.state.applied.parts, { runes: true, items: true, spells: true });
+});
+
+test('build: nothing goes to the client on its own unless the options ask for it', async () => {
+  const off = await buildCore({});
+  assert.equal(off.sent.length, 0);
+  assert.ok(off.core.state.currentBuild, 'the build is still shown, to apply by hand');
+  const items = await buildCore({ autoItems: true });
+  assert.ok(items.sent.some((x) => x[1].startsWith('/lol-item-sets/')));
+  assert.ok(!items.sent.some((x) => x[1].startsWith('/lol-perks/') || x[1].endsWith('/my-selection')));
 });
 
 test('last game: the summary keeps the final draft and every player\'s numbers until the next champ select', async () => {
@@ -310,4 +325,21 @@ test('last game: the summary keeps the final draft and every player\'s numbers u
   assert.deepEqual(g.players.find((p) => p.championId === 103), { side: 'ally', championId: 103, kills: 9, deaths: 2, assists: 11, cs: 200, gold: null, damage: null });
   lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: { ...buildSession(1), gameId: 99 }, eventType: 'Update' });
   assert.equal(core.state.lastGame, null);
+});
+
+test('situational items: picked from the champion\'s choices by what they add against this enemy team', () => {
+  const { situationalItems } = require('../src/main/core');
+  const sit = {
+    features: ['magic', 'heal', 'cc', 'assassin'],
+    center: [0, 0, 0, 0],
+    // 10 and 11 (healers, one magic), 20 and 21 (physical)
+    profile: { 10: [1, 2, 0, 0], 11: [-1, 2, 0, 0], 20: [-1, 0, 0, 0], 21: [-1, 0, 0, 0] },
+    items: { 3165: [0, 0.01, 0, 0], 3075: [-0.01, 0.005, 0, 0], 4401: [0.012, 0, 0, 0], 3031: [0, 0.05, 0, 0] },
+  };
+  const build = { items: { core: [3031], pool: [3031, 3165, 3075, 4401] } };
+  const healers = situationalItems(build, [10, 11, 20, 21, 20], sit);
+  assert.deepEqual(healers.map((x) => x.id), [3075, 3165], 'core items are not repeated; magic resist is not worth it');
+  assert.deepEqual(healers[0].reasons, ['physical damage', 'healing']);
+  assert.deepEqual(situationalItems(build, [20, 21, 20, 21, 20], sit).map((x) => x.id), [3075]);
+  assert.deepEqual(situationalItems(build, [20], null), []);
 });

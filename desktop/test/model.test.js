@@ -296,3 +296,15 @@ test('game plan: lanes from the early game model, win chance from the whole draf
   assert.ok(Math.abs(winChance({ model: m, allies: enemies, enemies: allies }) - (1 - plan.winChance)) < 1e-9);
   assert.equal(gamePlan({ model, allies, enemies }), null); // no early game model
 });
+
+test('personal layer for a draft: season and patch always, team only with the same line-up', () => {
+  const { personalFor } = require('../src/renderer/model');
+  const st = { season: { byKey: {} }, history: { byKey: {} }, team: { 'a,b': { byKey: { x: 1 } }, 'a,b,c': { byKey: { x: 2 } } } };
+  const stats = { a: st };
+  assert.equal(personalFor(stats, 'a', ['b', 'a', null]).team, st.team['a,b']);
+  assert.equal(personalFor(stats, 'a', ['c', 'b']).team, st.team['a,b,c']);
+  assert.equal(personalFor(stats, 'a', []).team, undefined);
+  assert.equal(personalFor(stats, 'a', ['b', 'd']).team, undefined);
+  assert.equal(personalFor(stats, 'a').season, st.season);
+  assert.equal(personalFor(stats, 'z'), null);
+});

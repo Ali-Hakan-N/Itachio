@@ -14,8 +14,9 @@ Pick better in champ select. Itachio watches your League of Legends draft live a
 ## First launch
 
 1. Create an account with your email and a password.
-2. Pick a nickname and your main role.
+2. Pick a nickname.
 3. Join your team with the invite code from a friend, or create the team and share its code from the **Team** tab.
+4. In the **Team** tab, click the roles you play on your own card. Pick as many as you like.
 
 ## In champ select
 
@@ -26,12 +27,16 @@ Pick better in champ select. Itachio watches your League of Legends draft live a
 5. Every champion on the board has a live score. It changes as new picks come in, and a locked pick shows the score it had when it was locked.
 6. Each team's average score is shown at the top of its side.
 7. **Pick Order** suggests who on your team should pick next, and which pick trades are worth making.
-8. Once every champion is locked, the **Build** panel shows runes, items and summoner spells for your champion against this enemy team. They are sent to the client by themselves; the **Apply** buttons send them again.
+8. Once every champion is locked, the **Build** panel shows runes, summoner spells and items for your champion against this enemy team. Items cover starting items, core items, boots, and situational items picked for this enemy team, with the reason (for example "vs healing" or "vs magic damage"). Click **Apply** to send them to the client, or turn on auto push in **Options** so they're sent by themselves.
 9. The **Game Plan** under the build shows the draft's win chance, which lanes are ahead or behind, where to play early and what damage the enemy deals.
 
 After the game, the **Draft** tab shows a summary: the result, the draft's win chance, and every player's score and numbers.
 
-The **Champions** tab shows each teammate's champion statistics for this patch and for games with the team, and the champions most worth learning for their main role.
+The **Champions** tab shows each teammate's champion statistics for this season, for this patch, and for games played with team members. It also shows the champions most worth learning in each role they play.
+
+The **History** tab lists your ranked games of the season with both teams in role order. Use the menu to see a teammate's games. **Clear History** hides your games so far from the list; your champion statistics stay as they are.
+
+**Options** (the gear at the top right) has two tabs. **General** lets you start Itachio with Windows. **Drafting** lets you turn on auto push for runes and for the item build.
 
 Scores look ahead: a pick that is easy to counter while the enemy can still answer scores lower, one that holds up well blind scores higher. Hover the small icon next to a champion to see what moved its score (off-role, low data, counter risk, safe blind).
 
@@ -45,7 +50,7 @@ Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), b
 
 **How do I update?** Updates are automatic. When you open the app it installs a new version by itself and restarts. If one comes out while the app is open, a blinking **Update** button shows at the top right; click it to restart into the new version, or just close the app and it installs then.
 
-**What is the Champions tab?** How each of you plays each champion, from the Flex games your whole team played together. It counts in your scores in champ select.
+**What is the Champions tab?** How each of you plays each champion, from your ranked games (Solo/Duo and Flex). **This Season** covers all of the season's games, **This Patch** only the current patch's. **With the Team** covers games where other team members were on your side, kept separately for each group of team-mates. All three count in your scores in champ select. The team part only counts when the same team-mates are on your side.
 
 **Is this allowed?** Itachio only reads champ select and sets a hover when you click. It never locks in or plays for you.
 

@@ -30,7 +30,7 @@ function fileStorage(file) {
   };
 }
 
-// The personal layer (collector/src/players, from the team's full Flex games). Set to
+// The personal layer (collector/src/players, from the players' ranked games). Set to
 // false to leave it out of the scores.
 const PLAYER_STATS = true;
 
@@ -79,6 +79,14 @@ class DataStore {
     }
     return check(await this.client.from('players').insert({ ...fields, user_id: user.id }).select().single());
   }
+  // Roles the player plays: any number of them
+  async saveRoles(me, roles) {
+    return check(await this.client.from('players').update({ roles }).eq('id', me.id).select().single());
+  }
+  // Hides the player's games so far from their History tab
+  async clearHistory(me) {
+    return check(await this.client.from('players').update({ history_cleared_at: new Date().toISOString() }).eq('id', me.id).select().single());
+  }
   async linkRiotAccount(me, { puuid, riotId }) {
     if (!me || !puuid || (me.puuid === puuid && me.riot_id === riotId)) return me;
     return check(
@@ -102,7 +110,7 @@ class DataStore {
     if (!teamId) return { team: null, members: [], pools: [] };
     const team = check(await this.client.from('teams').select('*').eq('id', teamId).maybeSingle());
     const members = check(
-      await this.client.from('players').select('id,nickname,puuid,riot_id').eq('team_id', teamId).order('created_at'),
+      await this.client.from('players').select('id,nickname,puuid,riot_id,roles,history_cleared_at').eq('team_id', teamId).order('created_at'),
     );
     const ids = members.map((m) => m.id);
     const pools = ids.length
@@ -111,23 +119,28 @@ class DataStore {
     return { team, members, pools, playerStats: PLAYER_STATS ? await this.loadPlayerStats(ids) : {} };
   }
 
-  // How each player does on each champion (collector/src/players), per source (history:
-  // their games of the patch, team: the team's full Flex games):
-  // { playerId: { history|team: { byKey: { "<champ>:<role>": { delta, games, wins, early, late } }, unplayed } } }
+  // How each player does on each champion (collector/src/players), per source (season:
+  // their ranked games of the season, history: those of the patch, team: those with
+  // team-mates, per line-up of team members on their side):
+  // { playerId: { season|history: stats, team: { "<sorted player ids>": stats } } }
+  // stats: { byKey: { "<champ>:<role>": { delta, games, wins, early, late } }, unplayed }
   async loadPlayerStats(playerIds) {
     if (!playerIds.length) return {};
     const rows = [];
     for (let from = 0; ; from += 1000) {
       const page = check(
-        await this.client.from('player_champion_stats').select('player_id,champion_id,role,source,games,wins,early,late,delta')
-          .in('player_id', playerIds).order('player_id').order('champion_id').order('role').order('source').range(from, from + 999),
+        await this.client.from('player_champion_stats').select('player_id,champion_id,role,source,lineup,games,wins,early,late,delta')
+          .in('player_id', playerIds).order('player_id').order('champion_id').order('role').order('source').order('lineup').range(from, from + 999),
       );
       rows.push(...page);
       if (page.length < 1000) break;
     }
     const out = {};
     for (const r of rows) {
-      const p = ((out[r.player_id] ||= {})[r.source] ||= { byKey: {}, unplayed: 0 });
+      const own = (out[r.player_id] ||= {});
+      const p = r.source === 'team'
+        ? ((own.team ||= {})[r.lineup] ||= { byKey: {}, unplayed: 0 })
+        : (own[r.source] ||= { byKey: {}, unplayed: 0 });
       if (r.champion_id === 0) p.unplayed = Number(r.delta);
       else {
         p.byKey[`${r.champion_id}:${r.role}`] = {
@@ -184,7 +197,12 @@ class DataStore {
     const row = check(await this.client.from('app_meta').select('value').eq('key', 'champion_damage').maybeSingle());
     return row ? JSON.parse(row.value) : null;
   }
-  // Names and icons of runes and summoner spells, from Data Dragon
+  // What items are worth against kinds of enemy teams (collector/src/model/builds.js)
+  async loadSituations() {
+    const row = check(await this.client.from('app_meta').select('value').eq('key', 'item_situations').maybeSingle());
+    return row ? JSON.parse(row.value) : null;
+  }
+  // Names and icons of runes and summoner spells, and item names, from Data Dragon
   async loadGameData(version) {
     if (!version) return null;
     const get = async (file) => {
@@ -192,7 +210,7 @@ class DataStore {
       if (!res.ok) throw new Error(`Data Dragon ${file}: HTTP ${res.status}`);
       return res.json();
     };
-    const [trees, spells] = await Promise.all([get('runesReforged.json'), get('summoner.json')]);
+    const [trees, spells, itemData] = await Promise.all([get('runesReforged.json'), get('summoner.json'), get('item.json')]);
     const perks = {};
     for (const t of trees) {
       perks[t.id] = { name: t.name, icon: t.icon };
@@ -200,7 +218,8 @@ class DataStore {
     }
     const summoner = {};
     for (const sp of Object.values(spells.data)) summoner[sp.key] = { name: sp.name, image: sp.image.full };
-    return { perks, summoner };
+    const items = Object.fromEntries(Object.entries(itemData.data).map(([id, it]) => [id, it.name]));
+    return { perks, summoner, items };
   }
 
   // Newest learned win model (collector/src/model), one JSON document, tagged with its snapshot id
@@ -273,26 +292,15 @@ class DataStore {
   async saveMatchResult(row) {
     check(await this.client.from('match_results').upsert(row, { onConflict: 'game_id,player_id', ignoreDuplicates: true }));
   }
-  // The team's finished Flex games where all five picks on our side were team members
-  async listHistory(teamId, limit = 30) {
-    const members = new Set(
-      check(await this.client.from('players').select('id').eq('team_id', teamId)).map((p) => p.id),
-    );
-    const drafts = check(
-      await this.client
-        .from('drafts')
-        .select('id,started_at,our_side,status,result,patch,draft_actions(side,kind,seq,champion_id,role,player_id)')
-        .eq('team_id', teamId)
-        .eq('queue_id', 440)
-        .eq('status', 'finished')
-        .order('started_at', { ascending: false })
-        .limit(limit * 4),
-    );
-    const fullTeam = (d) => {
-      const ours = d.draft_actions.filter((a) => a.side === 'ally' && a.kind === 'pick' && members.has(a.player_id));
-      return new Set(ours.map((a) => a.player_id)).size === 5;
-    };
-    return drafts.filter(fullTeam).slice(0, limit);
+  // A player's ranked games (collector/src/players), newest first, after they last cleared
+  // their history
+  async listHistory(player, limit = 100) {
+    let q = this.client
+      .from('player_games')
+      .select('match_id,started_at,queue_id,duration_s,side,role,champion_id,win,kills,deaths,assists,cs,blue,red,lineup')
+      .eq('player_id', player.id);
+    if (player.history_cleared_at) q = q.gt('started_at', player.history_cleared_at);
+    return check(await q.order('started_at', { ascending: false }).limit(limit));
   }
 
   // ---------- Live updates ----------

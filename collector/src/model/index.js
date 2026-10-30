@@ -16,7 +16,7 @@ const { Worker } = require('node:worker_threads');
 const idle = require('./idle');
 const { counterpickTendency } = require('./choice');
 const { exportComp } = require('./comp');
-const { analyzeBuilds, loadDdragon } = require('./builds');
+const { analyzeBuilds, analyzeSituations, loadDdragon } = require('./builds');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
@@ -453,7 +453,8 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
 /**
  * Runes, items and spells per champion and role (builds.js) to champion_builds, and the
  * champions' magic share with the damage thresholds to app_meta 'champion_damage', so the
- * app can tell which build fits the enemy team.
+ * app can tell which build fits the enemy team, and the situational items (what each item
+ * is worth against each enemy champion) to app_meta 'item_situations'.
  */
 async function publishBuilds(client, matches, patch, log) {
   const meta = check(await client.from('app_meta').select('value').eq('key', 'current_patch').maybeSingle());
@@ -467,8 +468,11 @@ async function publishBuilds(client, matches, patch, log) {
   }
   const damage = { magic: Object.fromEntries(Object.entries(facts.magic).map(([c, v]) => [c, round(v, 3)])), thresholds: thresholds.map((t) => round(t, 3)) };
   check(await client.from('app_meta').upsert({ key: 'champion_damage', value: JSON.stringify(damage), updated_at: stamp }));
+  const situations = analyzeSituations(matches, facts);
+  check(await client.from('app_meta').upsert({ key: 'item_situations', value: JSON.stringify(situations), updated_at: stamp }));
   const general = rows.filter((r) => r.bucket === 'any').length;
-  log(`builds: ${general} champion builds, ${rows.length - general} against one kind of damage`);
+  const learned = situations.features.map((f, j) => `${f} ${Object.values(situations.items).filter((w) => w[j]).length}`).join(', ');
+  log(`builds: ${general} champion builds, ${rows.length - general} against one kind of damage, ${rows.filter((r) => r.items.start).length} with starting items · situational items: ${Object.keys(situations.items).length} items (by part: ${learned})`);
 }
 
 module.exports = { banRates, publishBuilds, pickTraining, storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };

@@ -32,6 +32,20 @@ const fileLog = {
   info: (...args) => writeLog('INFO', args),
 };
 
+// Options, kept on this computer: { autoRunes, autoItems }. Starting with Windows is the
+// system's own setting (login items), read from there.
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+function loadSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+function settingsView(saved) {
+  return { autoRunes: !!saved.autoRunes, autoItems: !!saved.autoItems, openAtLogin: app.getLoginItemSettings().openAtLogin };
+}
+
 function loadConfig() {
   const candidates = [
     path.join(app.getAppPath(), 'config.json'),
@@ -145,7 +159,7 @@ app.whenReady().then(async () => {
       storageFile: path.join(app.getPath('userData'), 'session.json'),
     });
     const lcu = new LcuConnector({ installPath: config.leagueInstallPath });
-    core = new AppCore({ lcu, data, log: fileLog });
+    core = new AppCore({ lcu, data, log: fileLog, settings: settingsView(loadSettings()) });
     // The app comes to the front when champ select starts and whenever our ban or pick
     // turn starts; a hover from the app hands the focus back to the client (focusClient)
     let inChampSelect = false;
@@ -162,6 +176,17 @@ app.whenReady().then(async () => {
     core.on('saved', (info) => send('saved', info));
     lcu.start();
   }
+
+  handle('settings:get', () => settingsView(loadSettings()));
+  handle('settings:set', (changes) => {
+    const saved = { ...loadSettings() };
+    for (const key of ['autoRunes', 'autoItems']) if (key in changes) saved[key] = !!changes[key];
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    fs.writeFileSync(settingsFile(), JSON.stringify(saved));
+    if ('openAtLogin' in changes) app.setLoginItemSettings({ openAtLogin: !!changes.openAtLogin });
+    core?.setSettings(saved);
+    return settingsView(saved);
+  });
 
   handle('state:get', () => core.snapshot());
   handle('data:load', async () => {
@@ -197,6 +222,11 @@ app.whenReady().then(async () => {
     return core.snapshot();
   });
   handle('build:apply', async (parts) => core.applyBuild(parts));
+  handle('profile:roles', async (roles) => {
+    await data.saveRoles(requireTeamMember(), roles);
+    await core.refreshTeam();
+    return core.snapshot();
+  });
   handle('team:leave', async () => {
     await data.leaveTeam();
     await core.refreshTeam();
@@ -226,9 +256,16 @@ app.whenReady().then(async () => {
     }
   });
 
-  handle('history:list', async () => {
+  // A team member's ranked games (default: mine)
+  handle('history:list', async (playerId) => {
     const me = core.state.me;
-    return me?.team_id ? data.listHistory(me.team_id) : [];
+    const player = core.state.members.find((m) => m.id === playerId) || me;
+    return player ? data.listHistory(player) : [];
+  });
+  handle('history:clear', async () => {
+    await data.clearHistory(requireTeamMember());
+    await core.refreshTeam();
+    return core.snapshot();
   });
 
   app.on('activate', () => {

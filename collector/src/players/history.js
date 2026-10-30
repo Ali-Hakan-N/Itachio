@@ -1,12 +1,12 @@
-// A player's own Solo/Duo and Flex games of the current patch, from Riot. Used for the
-// "history" champion statistics (index.js); the "team" statistics come from the team's
-// recorded games instead.
+// A player's own Solo/Duo and Flex games of the season, from Riot. index.js turns them
+// into the three kinds of champion statistics (season, this patch, with team-mates) and
+// the games of the History tab.
 //
 // The account id the app reads from the League client is not the one the Riot API uses,
 // so the player is looked up by Riot ID (name#tag, linked by the app); their region is
 // the one whose match list has their games. Matches go to
-// data/players/history-<hash of the account>.jsonl, so each is downloaded once; matches
-// of older patches are remembered as such and not downloaded again.
+// data/players/history-<hash of the account>.jsonl, so each is downloaded once. The season
+// is the first number of the patch (16.x); a match of an older season ends the list.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -17,9 +17,10 @@ const { toCompact, ROLE_INDEX } = require('../model/features');
 
 const DIR = path.join(__dirname, '..', '..', 'data', 'players');
 const QUEUES = [440, 420]; // Flex, Solo/Duo
-const MAX_GAMES = 300; // per queue, newest first
-const LOOKBACK_DAYS = 28; // a patch is shorter; older matches are of older patches
+const MAX_GAMES = 500; // per queue, newest first
 const PAGE = 100;
+// Entries of an older format lack team-mates and the player's numbers: downloaded again
+const VERSION = 2;
 const ROLE = { TOP: 'top', JUNGLE: 'jungle', MIDDLE: 'middle', BOTTOM: 'bottom', UTILITY: 'utility' };
 const REGIONS = [...new Set(Object.values(PLATFORMS))];
 
@@ -32,7 +33,7 @@ function loadCache(puuid) {
       if (!line) continue;
       try {
         const g = JSON.parse(line);
-        out.set(g.id, g);
+        if (g.v === VERSION) out.set(g.id, g);
       } catch {
         /* a line cut off by a crash */
       }
@@ -43,15 +44,35 @@ function loadCache(puuid) {
   return out;
 }
 
-/** One player's game from a raw match-v5 response: { id, start, patch, m, side, role } or { id, patch, skip } */
+/**
+ * One player's game from a raw match-v5 response:
+ * { v, id, start, patch, q, dur, m, side, role, mates, k, d, a, cs } or { v, id, patch, skip }.
+ * mates: Riot accounts (puuid) of the others on the player's side.
+ */
 function historyGame(raw, puuid) {
   const id = raw?.metadata?.matchId;
   const parsed = parseMatch(raw);
   const m = parsed && toCompact(parsed);
-  const me = raw?.info?.participants?.find((p) => p.puuid === puuid);
+  const parts = raw?.info?.participants || [];
+  const me = parts.find((p) => p.puuid === puuid);
   const role = me ? ROLE_INDEX[ROLE[me.teamPosition]] : undefined;
-  if (!m || !me || role === undefined) return { id, patch: parsed?.patch || null, skip: true };
-  return { id, start: parsed.start, patch: parsed.patch, m, side: me.teamId === 100 ? 'b' : 'r', role };
+  if (!m || !me || role === undefined) return { v: VERSION, id, patch: parsed?.patch || null, skip: true };
+  return {
+    v: VERSION,
+    id,
+    start: parsed.start,
+    patch: parsed.patch,
+    q: parsed.queue,
+    dur: raw.info.gameDuration ?? null,
+    m,
+    side: me.teamId === 100 ? 'b' : 'r',
+    role,
+    mates: parts.filter((p) => p.teamId === me.teamId && p.puuid !== puuid).map((p) => p.puuid),
+    k: me.kills ?? null,
+    d: me.deaths ?? null,
+    a: me.assists ?? null,
+    cs: (me.totalMinionsKilled ?? 0) + (me.neutralMinionsKilled ?? 0),
+  };
 }
 
 /** The Riot API account (puuid) of a Riot ID "name#tag", and the region with their matches */
@@ -67,28 +88,28 @@ async function resolveAccount(api, riotId) {
   return { puuid: account.puuid, region: null };
 }
 
-// "16.9" < "16.21"
-const olderPatch = (a, b) => {
-  const [x, y] = [a, b].map((p) => String(p).split('.').map(Number));
-  return x[0] < y[0] || (x[0] === y[0] && x[1] < y[1]);
-};
+/** "16.21" -> 16 */
+const seasonOf = (patch) => Number(String(patch).split('.')[0]);
 
-/** A player's games of this patch (new ones fetched), or [] when the account is not found */
-async function patchGames(api, riotId, patch, log) {
+/**
+ * A player's games of the season (new ones fetched): { puuid, games }, or null when the
+ * account is not found. patch: the current patch, which names the season.
+ */
+async function seasonGames(api, riotId, patch, log) {
   const account = await resolveAccount(api, riotId);
   if (!account) {
     log('players: a Riot ID was not found, skipped');
-    return [];
+    return null;
   }
   const { puuid, region } = account;
+  const season = seasonOf(patch);
   const cache = loadCache(puuid);
   if (region) {
-    const since = Math.floor((Date.now() - LOOKBACK_DAYS * 86_400_000) / 1000);
     fs.mkdirSync(DIR, { recursive: true });
     for (const queue of QUEUES) {
       let older = false;
       for (let start = 0; start < MAX_GAMES && !older; start += PAGE) {
-        const ids = (await api.get(region, `/lol/match/v5/matches/by-puuid/${puuid}/ids`, { queue, start, count: PAGE, startTime: since })) || [];
+        const ids = (await api.get(region, `/lol/match/v5/matches/by-puuid/${puuid}/ids`, { queue, start, count: PAGE })) || [];
         for (const id of ids) {
           let g = cache.get(id);
           if (!g) {
@@ -97,8 +118,8 @@ async function patchGames(api, riotId, patch, log) {
             cache.set(g.id, g);
             fs.appendFileSync(fileFor(puuid), `${JSON.stringify(g)}\n`);
           }
-          // Newest first: once a match of an older patch shows up, the rest are older too
-          if (g.patch && olderPatch(g.patch, patch)) {
+          // Newest first: once a match of an older season shows up, the rest are older too
+          if (g.patch && seasonOf(g.patch) < season) {
             older = true;
             break;
           }
@@ -107,7 +128,7 @@ async function patchGames(api, riotId, patch, log) {
       }
     }
   }
-  return [...cache.values()].filter((g) => !g.skip && g.patch === patch);
+  return { puuid, games: [...cache.values()].filter((g) => !g.skip && seasonOf(g.patch) === season) };
 }
 
-module.exports = { patchGames, historyGame, resolveAccount };
+module.exports = { seasonGames, historyGame, resolveAccount };

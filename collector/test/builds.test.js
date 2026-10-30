@@ -33,3 +33,53 @@ test('builds: enemy damage buckets by magic share', () => {
   assert.equal(bucketOf([1, 1, 1, 1, 1], magic, [0.3, 0.6]), 'ad');
   assert.equal(bucketOf([1, 1, 1, 2, 2], magic, [0.3, 0.6]), 'mixed');
 });
+
+test('situational items: an item whose buyers win more against magic damage learns it from the enemy profile', () => {
+  const { analyzeSituations, profiles } = require('../src/model/builds');
+  // Champion 1 top ends with item 3036 or 3072 (same item count). Against an all-magic
+  // team (champion 2) the 3036 buyers win 3 games in 4; otherwise everyone wins half.
+  const ms = Array.from({ length: 2400 }, (_, i) => {
+    const buys = i % 2 === 0;
+    const enemy = Math.floor(i / 2) % 2 === 0 ? 2 : 3;
+    const win = buys && enemy === 2 ? (i % 16 !== 0 ? 1 : 0) : Math.floor(i / 4) % 2;
+    const g = gear(8010, [3031, buys ? 3036 : 3072, 0, 0, 0, 0]);
+    return { w: win, b: [1, 4, 4, 4, 4], r: [enemy, enemy, enemy, enemy, enemy], gb: [g, null, null, null, null], gr: [null, null, null, null, null] };
+  });
+  const sit = analyzeSituations(ms, facts);
+  assert.deepEqual(sit.features, ['magic', 'heal', 'cc', 'assassin']);
+  assert.ok(sit.profile[2][0] > sit.profile[3][0], 'champion 2 deals more magic damage');
+  assert.ok(sit.items[3036][0] > 0, `3036 magic weight ${sit.items[3036]?.[0]}`);
+  assert.ok(!sit.items[3072] || sit.items[3072][0] < sit.items[3036][0]);
+  // Profiles are measured from players' numbers once there are enough games
+  const measured = Array.from({ length: 30 }, () => ({
+    b: [1, 4, 4, 4, 4], r: [2, 3, 3, 3, 3], d: 1800,
+    xb: [[0, 1000, 9000, 5], null, null, null, null], xr: [[100, 0, 0, 60], null, null, null, null],
+  }));
+  const prof = profiles(measured, facts);
+  assert.ok(prof[1][1] > prof[2][1], 'champion 1 heals');
+  assert.ok(prof[2][2] > prof[1][2], 'champion 2 locks down');
+});
+
+test('builds: starting items from the games read with a timeline; item pool of real choices', () => {
+  const ms = matches(60, (i) => ({ gear: gear(8010, [3031, i < 30 ? 3072 : 6672, 0, 0, 0, 0]), win: i % 2 }));
+  ms.forEach((m, i) => (m.sb = [i % 3 ? [1055, 2003] : [1054, 2003], null, null, null, null]));
+  const { rows } = analyzeBuilds(ms, { ...facts, shop: new Set([1054, 1055, 2003]) });
+  const any = rows.find((r) => r.champion_id === 1 && r.bucket === 'any');
+  assert.deepEqual(any.items.start, [1055, 2003]);
+  assert.deepEqual([...any.items.pool].sort(), [3031, 3072, 6672]);
+});
+
+test('starting items: purchases of the first minute, minus undone ones', () => {
+  const { startingItems } = require('../src/riot/parse');
+  const ev = (type, participantId, timestamp, extra) => ({ type, participantId, timestamp, ...extra });
+  const timeline = { info: { frames: [{ events: [
+    ev('ITEM_PURCHASED', 1, 1000, { itemId: 1055 }),
+    ev('ITEM_PURCHASED', 1, 2000, { itemId: 1054 }),
+    ev('ITEM_UNDO', 1, 3000, { beforeId: 1054, afterId: 0 }),
+    ev('ITEM_PURCHASED', 1, 4000, { itemId: 2003 }),
+    ev('ITEM_PURCHASED', 2, 1000, { itemId: 1056 }),
+  ] }, { events: [ev('ITEM_PURCHASED', 1, 300000, { itemId: 3006 })] }] } };
+  const s = startingItems(timeline);
+  assert.deepEqual(s.get(1), [1055, 2003]);
+  assert.deepEqual(s.get(2), [1056]);
+});
