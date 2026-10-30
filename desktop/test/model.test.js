@@ -77,6 +77,20 @@ test('unknown flex roles use the role-share distribution for matchup score', () 
   assert.ok(flex.matchup > mid.matchup);
 });
 
+test('team synergy nudges a flex champion toward compatible roles without fixing the role', () => {
+  const flexModel = {
+    ...model,
+    champ: { ...model.champ, '70:0': [0, 100, 0.2], '70:2': [0, 400, 0.8], '71:1': [0, 300, 1] },
+  };
+  const picks = [{ championId: 70 }, { championId: 71, position: 'jungle' }];
+  const plain = Engine.roleDistribution({ model: flexModel, picks })[0].roles;
+  const synergy = Engine.roleDistribution({ model: { ...flexModel, syn: [[70, 0, 71, 1, 1]] }, picks })[0].roles;
+
+  assert.ok(synergy.top > plain.top);
+  assert.ok(synergy.middle > 0);
+  assert.ok(synergy.top < 1);
+});
+
 test('class pairs give unseen pairs a small effect', () => {
   // no direct weight for 2 top against 3 mid, but Fighter vs Mage has one
   const vs = evaluate({ model, championId: 2, role: 'top', enemies: [{ championId: 3, position: 'middle' }] });
@@ -224,6 +238,25 @@ test('personal layer: the player\'s own results on a champion move its score', (
   const both = evaluate({ model, championId: 2, role: 'top', personal: { history: personal.history, team: personal.history } });
   assert.ok(both.personal >= mine.personal);
   assert.equal(top(null)[0], 1);
+});
+
+test('unseen champions inherit a shrinkage-weighted class and role comfort prior', () => {
+  const personal = Engine.personalFor({
+    player: {
+      season: {
+        unplayed: 0,
+        byKey: {
+          '100:top': { delta: 0.2, games: 20 },
+          '101:top': { delta: 0.1, games: 20 },
+        },
+      },
+    },
+  }, 'player', [], () => 'Fighter');
+
+  assert.ok(Math.abs(personal.season.byClass['Fighter:top'].delta - 0.075) < 1e-12);
+  const score = evaluate({ model, championId: 2, role: 'top', personal });
+  assert.ok(score.personal > 0);
+  assert.equal(score.personalGames, 40);
 });
 
 test('roles: known roles kept, the others guessed from where champions are played', () => {

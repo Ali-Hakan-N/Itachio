@@ -55,12 +55,14 @@ test('composition pillars are side-symmetric and capture damage balance, frontli
   const forward = new Map(features(blue, { share: new Map(), tagOf }));
   const reverse = new Map(features({ b: blue.r, r: blue.b }, { share: new Map(), tagOf }));
 
-  for (const key of ['a:damageImbalance', 'a:frontline', 'a:control']) {
+  for (const key of ['a:damageImbalance', 'a:frontline', 'a:control', 'a:highDamageLowControl', 'a:frontlineMarksman']) {
     assert.ok(forward.has(key));
     assert.equal(reverse.get(key), -forward.get(key));
   }
   assert.ok(forward.get('a:frontline') > 0);
   assert.ok(forward.get('a:control') > 0);
+  assert.notEqual(forward.get('a:highDamageLowControl'), 0);
+  assert.notEqual(forward.get('a:frontlineMarksman'), 0);
 });
 
 test('out-of-time model prediction includes composition styles and learned pillars', () => {
@@ -72,7 +74,7 @@ test('out-of-time model prediction includes composition styles and learned pilla
   const match = { b: [1, 3, 5, 7, 9], r: [2, 4, 6, 8, 10] };
   const enriched = {
     ...base,
-    pillars: { damageImbalance: 0.3, frontline: 0.5, control: 0.2 },
+    pillars: { damageImbalance: 0.3, frontline: 0.5, control: 0.2, highDamageLowControl: 0.1, frontlineMarksman: 0.4 },
     comp: { k: 1, U: Object.fromEntries([...match.b.map((c) => [c, [0.2]]), ...match.r.map((c) => [c, [-0.2]])]), a: [0.4], c: [0], m: [] },
   };
   const baseline = matchLogit(base)(match);
@@ -143,7 +145,7 @@ test('training proves the planted strength, synergy and matchup', () => {
   const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
   assert.ok(data.champ['1:0'][0] > 0.3 && data.champ['1:0'][3] > 0);
   assert.ok(data.vs.some(([a, ra, b, rb, wt]) => a === 4 && ra === 3 && b === 5 && rb === 3 && wt > 0.3));
-  assert.deepEqual(Object.keys(data.pillars).sort(), ['control', 'damageImbalance', 'frontline']);
+  assert.deepEqual(Object.keys(data.pillars).sort(), ['control', 'damageImbalance', 'frontline', 'frontlineMarksman', 'highDamageLowControl']);
 });
 
 test('every layer is kept by default; noise pairs stay small', () => {

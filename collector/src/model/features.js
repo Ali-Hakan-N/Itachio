@@ -19,7 +19,7 @@
 //   v:<a>:<ra>:<b>:<rb>              a against b on the enemy team (matchup), +1 when blue is a
 //   ts:<classA>:<classB>             class pair on the same team (Mage + Tank ...)
 //   tv:<classA>:<classB>             class against class
-//   a:<pillar>                       blue-vs-red damage-balance/frontline/control class proxies
+//   a:<pillar>                       blue-vs-red damage/frontline/control and interaction proxies
 // The composition pillars use primary class tags; they are learned features, not rules.
 // Pair keys are canonical (lower champion:role first), so each pair has one weight.
 // Matchups and class matchups are antisymmetric: b against a is minus a against b.
@@ -95,56 +95,77 @@ const before = (a, ra, b, rb) => a * 5 + ra < b * 5 + rb;
  * @param {{ share: Map<string, number>, tagOf: (id:number)=>string }} ctx
  * @returns {Array<[string, number]>}
  */
-function features(m, { share, tagOf }) {
-  const out = [];
-  const teams = [[m.b, 1], [m.r, -1]];
-  for (const [team, sign] of teams) {
+function forEachFeature(m, { share, tagOf }, emit) {
+  const teamFeatures = (team, sign) => {
     for (let i = 0; i < 5; i++) {
-      out.push([`c:${team[i]}:${i}`, sign]);
-      out.push([`o:${i}`, sign * offRole(share, team[i], i)]);
+      emit(`c:${team[i]}:${i}`, sign);
+      emit(`o:${i}`, sign * offRole(share, team[i], i));
       for (let j = i + 1; j < 5; j++) {
-        const [a, ra, b, rb] = before(team[i], i, team[j], j) ? [team[i], i, team[j], j] : [team[j], j, team[i], i];
-        out.push([`s:${a}:${ra}:${b}:${rb}`, sign]);
-        const [ta, tb] = [tagOf(team[i]), tagOf(team[j])].sort();
-        out.push([`ts:${ta}:${tb}`, sign]);
+        const firstBefore = before(team[i], i, team[j], j);
+        const a = firstBefore ? team[i] : team[j];
+        const ra = firstBefore ? i : j;
+        const b = firstBefore ? team[j] : team[i];
+        const rb = firstBefore ? j : i;
+        emit(`s:${a}:${ra}:${b}:${rb}`, sign);
+        const ta = tagOf(team[i]);
+        const tb = tagOf(team[j]);
+        emit(ta < tb ? `ts:${ta}:${tb}` : `ts:${tb}:${ta}`, sign);
       }
     }
-  }
+  };
+  teamFeatures(m.b, 1);
+  teamFeatures(m.r, -1);
+
   const pillars = (team) => {
     let ap = 0;
     let ad = 0;
     let frontline = 0;
     let control = 0;
+    let marksman = 0;
     for (const champion of team) {
       const tag = tagOf(champion);
       if (tag === 'Mage') ap += 1;
       if (tag === 'Support') ap += 0.5;
       if (tag === 'Marksman' || tag === 'Assassin' || tag === 'Fighter') ad += 1;
+      if (tag === 'Marksman') marksman += 1;
       if (tag === 'Tank') frontline += 1;
       if (tag === 'Fighter') frontline += 0.5;
       if (tag === 'Tank' || tag === 'Support') control += 1;
       if (tag === 'Mage') control += 0.5;
     }
-    return [Math.abs(Math.log((ap + 0.5) / (ad + 0.5))), frontline / 5, control / 5];
+    const controlShare = control / 5;
+    const damageLoad = (ap + ad) / 5;
+    const frontlineShare = frontline / 5;
+    return {
+      damageImbalance: Math.abs(Math.log((ap + 0.5) / (ad + 0.5))),
+      frontline: frontlineShare,
+      control: controlShare,
+      highDamageLowControl: damageLoad * (1 - controlShare),
+      frontlineMarksman: frontlineShare * (marksman / 5),
+    };
   };
   const bluePillars = pillars(m.b);
   const redPillars = pillars(m.r);
-  out.push(['a:damageImbalance', bluePillars[0] - redPillars[0]]);
-  out.push(['a:frontline', bluePillars[1] - redPillars[1]]);
-  out.push(['a:control', bluePillars[2] - redPillars[2]]);
+  for (const pillar of Object.keys(bluePillars)) emit(`a:${pillar}`, bluePillars[pillar] - redPillars[pillar]);
   for (let i = 0; i < 5; i++) {
     for (let j = 0; j < 5; j++) {
       const [x, y] = [m.b[i], m.r[j]];
-      if (before(x, i, y, j)) out.push([`v:${x}:${i}:${y}:${j}`, 1]);
-      else out.push([`v:${y}:${j}:${x}:${i}`, -1]);
-      const [tx, ty] = [tagOf(x), tagOf(y)];
-      if (tx < ty) out.push([`tv:${tx}:${ty}`, 1]);
-      else if (tx > ty) out.push([`tv:${ty}:${tx}`, -1]);
+      if (before(x, i, y, j)) emit(`v:${x}:${i}:${y}:${j}`, 1);
+      else emit(`v:${y}:${j}:${x}:${i}`, -1);
+      const tx = tagOf(x);
+      const ty = tagOf(y);
+      if (tx < ty) emit(`tv:${tx}:${ty}`, 1);
+      else if (tx > ty) emit(`tv:${ty}:${tx}`, -1);
     }
   }
+}
+
+function features(m, ctx) {
+  const out = [];
+  forEachFeature(m, ctx, (key, value) => out.push([key, value]));
   return out;
 }
 
 const groupOf = (key) => key.slice(0, key.indexOf(':'));
 
-module.exports = { ROLES, ROLE_INDEX, SHARE_FLOOR, toCompact, roleShares, features, groupOf };
+module.exports = { ROLES, ROLE_INDEX, SHARE_FLOOR, toCompact, roleShares, features, forEachFeature, groupOf };

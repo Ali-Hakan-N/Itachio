@@ -98,6 +98,7 @@
   const EDGE_PCT = 1; // game plan: an edge counts from this many percentage points of win chance
   const PERSONAL_WEIGHT = 0.5;
   const PERSONAL_CAP = 0.4; // in standard deviations of strength
+  const PERSONAL_CLASS_PRIOR = 40; // pseudo-games before class-level comfort transfers to an unseen champion
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
@@ -271,6 +272,10 @@
     if (against.length) {
       const opposingAssignments = roleAssignments(ix, against);
       for (const assignment of assignments) {
+        let teamSynergy = 0;
+        for (let i = 0; i < team.length; i++) for (let j = i + 1; j < team.length; j++) {
+          teamSynergy += synergy(ix, team[i].championId, assignment.roles[i], team[j].championId, assignment.roles[j]);
+        }
         let expectedCounter = 0;
         for (const opposing of opposingAssignments) {
           let counter = 0;
@@ -281,7 +286,15 @@
           }
           expectedCounter += opposing.probability * counter;
         }
-        assignment.rawProbability *= Math.exp(Math.max(-30, Math.min(30, ix.lambda * expectedCounter)));
+        assignment.rawProbability *= Math.exp(Math.max(-30, Math.min(30, ix.lambda * expectedCounter + 0.5 * teamSynergy)));
+      }
+    } else {
+      for (const assignment of assignments) {
+        let teamSynergy = 0;
+        for (let i = 0; i < team.length; i++) for (let j = i + 1; j < team.length; j++) {
+          teamSynergy += synergy(ix, team[i].championId, assignment.roles[i], team[j].championId, assignment.roles[j]);
+        }
+        assignment.rawProbability *= Math.exp(Math.max(-30, Math.min(30, 0.5 * teamSynergy)));
       }
     }
     const sum = assignments.reduce((total, assignment) => total + assignment.rawProbability, 0) || 1;
@@ -292,6 +305,19 @@
     if (ix.roleAssignmentCache.size > 200) ix.roleAssignmentCache.clear();
     ix.roleAssignmentCache.set(key, assignments);
     return assignments;
+  }
+
+  function roleDistribution({ model, picks, against = [] }) {
+    if (!has(model)) return [];
+    const assignments = roleAssignments(index(model), picks, against);
+    return picks.map((pick, i) => {
+      const roles = new Map();
+      for (const assignment of assignments) {
+        const role = ROLES[assignment.roles[i]];
+        roles.set(role, (roles.get(role) || 0) + assignment.probability);
+      }
+      return { championId: asPick(pick).championId, roles: Object.fromEntries(roles) };
+    });
   }
 
   const dot = (a, b) => {
@@ -347,17 +373,28 @@
     let ad = 0;
     let frontline = 0;
     let control = 0;
+    let marksman = 0;
     for (const id of team) {
       const tag = ix.tags.get(id) || 'None';
       if (tag === 'Mage') ap += 1;
       if (tag === 'Support') ap += 0.5;
       if (tag === 'Marksman' || tag === 'Assassin' || tag === 'Fighter') ad += 1;
+      if (tag === 'Marksman') marksman += 1;
       if (tag === 'Tank') frontline += 1;
       if (tag === 'Fighter') frontline += 0.5;
       if (tag === 'Tank' || tag === 'Support') control += 1;
       if (tag === 'Mage') control += 0.5;
     }
-    return { damageImbalance: Math.abs(Math.log((ap + 0.5) / (ad + 0.5))), frontline: frontline / 5, control: control / 5 };
+    const controlShare = control / 5;
+    const damageLoad = (ap + ad) / 5;
+    const frontlineShare = frontline / 5;
+    return {
+      damageImbalance: Math.abs(Math.log((ap + 0.5) / (ad + 0.5))),
+      frontline: frontlineShare,
+      control: controlShare,
+      highDamageLowControl: damageLoad * (1 - controlShare),
+      frontlineMarksman: frontlineShare * (marksman / 5),
+    };
   }
 
   function pillarValue(ix, ourTeam, enemyTeam) {
@@ -366,7 +403,9 @@
     const theirs = pillarProfile(ix, enemyTeam);
     return (ix.pillars.damageImbalance || 0) * (ours.damageImbalance - theirs.damageImbalance)
       + (ix.pillars.frontline || 0) * (ours.frontline - theirs.frontline)
-      + (ix.pillars.control || 0) * (ours.control - theirs.control);
+      + (ix.pillars.control || 0) * (ours.control - theirs.control)
+      + (ix.pillars.highDamageLowControl || 0) * (ours.highDamageLowControl - theirs.highDamageLowControl)
+      + (ix.pillars.frontlineMarksman || 0) * (ours.frontlineMarksman - theirs.frontlineMarksman);
   }
 
   // future: { allyStyle, enemyStyle } expected styles of the picks still to come (or null)
@@ -576,11 +615,13 @@
     if (!personal) return row;
     let sum = 0;
     let games = 0;
+    const tag = ix.tags.get(row.championId) || 'None';
     for (const src of [personal.season, personal.history, personal.team]) {
       if (!src) continue;
       const own = src.byKey?.[`${row.championId}:${row.role}`];
-      sum += own ? own.delta : src.unplayed || 0;
-      games += own?.games || 0;
+      const classFit = src.byClass?.[`${tag}:${row.role}`];
+      sum += own ? own.delta : classFit?.delta ?? src.unplayed ?? 0;
+      games += own?.games || classFit?.games || 0;
     }
     const cap = PERSONAL_CAP * ix.sd;
     const delta = Math.max(-cap, Math.min(cap, PERSONAL_WEIGHT * sum));
@@ -958,11 +999,38 @@
    * those with the team members on their side now (lineup: their player ids, the player
    * included). playerStats: { playerId: { season, history, team: { "<sorted ids>": stats } } }
    */
-  function personalFor(playerStats, playerId, lineup = []) {
+  function personalFor(playerStats, playerId, lineup = [], classOf = () => 'None') {
     const own = playerId && playerStats?.[playerId];
     if (!own) return null;
     const ids = [...new Set([playerId, ...lineup.filter(Boolean)])].sort();
-    return { season: own.season, history: own.history, team: ids.length > 1 ? own.team?.[ids.join(',')] : undefined };
+    const shrinkClasses = (source) => {
+      if (!source) return source;
+      const pooled = new Map();
+      for (const [key, value] of Object.entries(source.byKey || {})) {
+        const [champion, role] = key.split(':');
+        const tag = classOf(Number(champion)) || 'None';
+        if (tag === 'None' || !role) continue;
+        const groupKey = `${tag}:${role}`;
+        const group = pooled.get(groupKey) || { weightedDelta: 0, games: 0 };
+        const games = Math.max(0, Number(value.games) || 0);
+        group.weightedDelta += (Number(value.delta) || 0) * games;
+        group.games += games;
+        pooled.set(groupKey, group);
+      }
+      if (!pooled.size) return source;
+      return {
+        ...source,
+        byClass: Object.fromEntries([...pooled].map(([key, group]) => [key, {
+          delta: group.weightedDelta / (group.games + PERSONAL_CLASS_PRIOR),
+          games: group.games,
+        }])),
+      };
+    };
+    return {
+      season: shrinkClasses(own.season),
+      history: shrinkClasses(own.history),
+      team: ids.length > 1 ? shrinkClasses(own.team?.[ids.join(',')]) : undefined,
+    };
   }
 
   // Older engine (recommend.js) takes allies as champion ids
@@ -1190,6 +1258,7 @@
     recommend: hybridRecommend,
     evaluate: hybridEvaluate,
     orderPickSuggestions,
+    roleDistribution,
     pickOrderImprovement,
     pickOrderTrades,
     shouldUpdatePickOrder,

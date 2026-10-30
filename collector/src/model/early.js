@@ -51,6 +51,7 @@ const DRAFT_GROUPS = ['c', 'o', 's', 'v'];
 const LANE_VS_MIN = 15;
 const LANE_VS_PRIOR = 20;
 const MAX_EARLY_FIT_MATCHES = 100000;
+const stateAt = (states, row) => states.subarray(row * DIM, (row + 1) * DIM);
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const clampP = (p) => Math.min(Math.max(p, 1e-9), 1 - 1e-9);
@@ -110,7 +111,7 @@ function fitSurrogate(S, y, rows, effectiveRows = rows.length) {
     const H = Array.from({ length: n }, () => new Array(n).fill(0));
     const g = new Array(n).fill(0);
     for (const r of rows) {
-      const x = S[r];
+      const x = stateAt(S, r);
       let z = w[DIM];
       for (let i = 0; i < DIM; i++) z += w[i] * x[i];
       const p = sigmoid(z);
@@ -225,7 +226,7 @@ function fitEarly(D, S, rows, on, lambdas, effectiveRows = rows.length) {
   const sur = fitSurrogate(S, D.y, rows, effectiveRows);
   const A = Array.from({ length: COMPONENTS }, () => new Float64Array(D.y.length));
   for (const r of rows) {
-    const a = components(sur.beta, S[r]);
+    const a = components(sur.beta, stateAt(S, r));
     for (let k = 0; k < COMPONENTS; k++) A[k][r] = a[k];
   }
   const w = new Float64Array(D.keys.length);
@@ -241,7 +242,7 @@ function tune(D, S, train, valid, on, effectiveRows, log) {
   const sur = fitSurrogate(S, D.y, train, effectiveRows);
   const A = Array.from({ length: COMPONENTS }, () => new Float64Array(D.y.length));
   for (const r of [...train, ...valid]) {
-    const a = components(sur.beta, S[r]);
+    const a = components(sur.beta, stateAt(S, r));
     for (let k = 0; k < COMPONENTS; k++) A[k][r] = a[k];
   }
   const lambdas = [];
@@ -278,7 +279,8 @@ function surrogateQuality(D, S, rows, folds) {
     const { beta, bias } = fitSurrogate(S, D.y, train, allTrain.length);
     for (const r of test) {
       let z = bias;
-      for (let i = 0; i < DIM; i++) z += beta[i] * S[r][i];
+      const state = stateAt(S, r);
+      for (let i = 0; i < DIM; i++) z += beta[i] * state[i];
       const p = clampP(sigmoid(z));
       loss -= D.y[r] ? Math.log(p) : Math.log(1 - p);
       if ((p > 0.5) === (D.y[r] === 1)) right++;
@@ -296,9 +298,14 @@ function surrogateQuality(D, S, rows, folds) {
  *     weights: { c, s, v } per column (early log-odds, from all early matches) }
  */
 function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
-  const S = matches.map(earlyState);
+  const S = new Float32Array(matches.length * DIM);
   const allRows = [];
-  S.forEach((s, r) => s && allRows.push(r));
+  for (let r = 0; r < matches.length; r++) {
+    const state = earlyState(matches[r]);
+    if (!state) continue;
+    S.set(state, r * DIM);
+    allRows.push(r);
+  }
   if (allRows.length < minMatches) {
     log(`model: early game   ${allRows.length} matches with early data, ${minMatches} needed`);
     return null;
@@ -348,7 +355,7 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
     map.set(key, e);
   };
   for (const r of allRows) {
-    const a = components(full.sur.beta, S[r]);
+    const a = components(full.sur.beta, stateAt(S, r));
     const m = matches[r];
     for (let k = 0; k < 5; k++) {
       add(laneSum, `${m.b[k]}:${k}`, a[k]);

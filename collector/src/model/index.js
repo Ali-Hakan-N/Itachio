@@ -140,7 +140,7 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
   const vs = [];
   const ts = {};
   const tv = {};
-  const pillars = { damageImbalance: 0, frontline: 0, control: 0 };
+  const pillars = { damageImbalance: 0, frontline: 0, control: 0, highDamageLowControl: 0, frontlineMarksman: 0 };
   const se = (i) => (model.se ? round(model.se[i], 5) : null);
   const on = new Set(model.groups || ['c', 'o', 's', 'ts', 'v', 'tv']);
   model.keys.forEach((key, i) => {

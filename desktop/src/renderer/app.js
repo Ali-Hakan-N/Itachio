@@ -412,7 +412,12 @@ function enemyContext(d, exceptCell) {
 const draftLineup = (d) => (d?.ally || []).map((p) => (p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id)).filter(Boolean);
 // Personal layer of a player on the board, when they are in the team and analyzed: their
 // season and patch statistics, and those with the team members on our side now
-const personalOf = (playerId, d) => Engine.personalFor(S.playerStats, playerId, draftLineup(d));
+const personalOf = (playerId, d) => Engine.personalFor(
+  S.playerStats,
+  playerId,
+  draftLineup(d),
+  (championId) => S.champions?.find((champion) => champion.id === championId)?.tags?.[0] || S.model?.tags?.[championId] || 'None',
+);
 const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
 
 function recRow(r, i, { canHover, hoverId, rank }) {

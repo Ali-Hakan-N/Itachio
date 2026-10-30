@@ -56,18 +56,28 @@ function matchLogit(data) {
     return z;
   };
   const pillarProfile = (team) => {
-    let ap = 0, ad = 0, frontline = 0, control = 0;
+    let ap = 0, ad = 0, frontline = 0, control = 0, marksman = 0;
     for (const champion of team) {
       const type = tag(champion);
       if (type === 'Mage') ap += 1;
       if (type === 'Support') ap += 0.5;
       if (type === 'Marksman' || type === 'Assassin' || type === 'Fighter') ad += 1;
+      if (type === 'Marksman') marksman += 1;
       if (type === 'Tank') frontline += 1;
       if (type === 'Fighter') frontline += 0.5;
       if (type === 'Tank' || type === 'Support') control += 1;
       if (type === 'Mage') control += 0.5;
     }
-    return { damageImbalance: Math.abs(Math.log((ap + 0.5) / (ad + 0.5))), frontline: frontline / 5, control: control / 5 };
+    const controlShare = control / 5;
+    const damageLoad = (ap + ad) / 5;
+    const frontlineShare = frontline / 5;
+    return {
+      damageImbalance: Math.abs(Math.log((ap + 0.5) / (ad + 0.5))),
+      frontline: frontlineShare,
+      control: controlShare,
+      highDamageLowControl: damageLoad * (1 - controlShare),
+      frontlineMarksman: frontlineShare * (marksman / 5),
+    };
   };
   const pillarsTerm = (blue, red) => {
     const weights = data.pillars;
@@ -76,7 +86,9 @@ function matchLogit(data) {
     const r = pillarProfile(red);
     return (weights.damageImbalance || 0) * (b.damageImbalance - r.damageImbalance)
       + (weights.frontline || 0) * (b.frontline - r.frontline)
-      + (weights.control || 0) * (b.control - r.control);
+      + (weights.control || 0) * (b.control - r.control)
+      + (weights.highDamageLowControl || 0) * (b.highDamageLowControl - r.highDamageLowControl)
+      + (weights.frontlineMarksman || 0) * (b.frontlineMarksman - r.frontlineMarksman);
   };
   const strength = (c, r) => {
     const e = data.champ[`${c}:${r}`];

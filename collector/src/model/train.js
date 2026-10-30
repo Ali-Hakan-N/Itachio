@@ -35,7 +35,7 @@
 // train() returns { keys, w, bias, lambdas, metrics } like before, plus se, groups, fm
 // and early.
 
-const { features, groupOf } = require('./features');
+const { forEachFeature, groupOf } = require('./features');
 const { earlyModel } = require('./early');
 const { compLayer } = require('./comp');
 
@@ -121,7 +121,7 @@ function design(matches, ctx, folds = DEFAULTS.folds) {
     return e;
   };
   matches.forEach((m, r) => {
-    for (const [key] of features(m, ctx)) {
+    forEachFeature(m, ctx, (key) => {
       let col = index.get(key);
       if (col === undefined) {
         col = keys.length;
@@ -130,7 +130,7 @@ function design(matches, ctx, folds = DEFAULTS.folds) {
         groups.push(GROUP_CODE[groupOf(key)]);
       }
       nnz++;
-    }
+    });
     rowPtr[r + 1] = nnz;
     y[r] = m.w;
     for (let i = 0; i < 5; i++) {
@@ -142,11 +142,11 @@ function design(matches, ctx, folds = DEFAULTS.folds) {
   const vals = new Float32Array(nnz);
   matches.forEach((m, r) => {
     let at = rowPtr[r];
-    for (const [key, value] of features(m, ctx)) {
+    forEachFeature(m, ctx, (key, value) => {
       cols[at] = index.get(key);
       vals[at] = value;
       at++;
-    }
+    });
   });
   return {
     keys, groups: Uint8Array.from(groups), rowPtr, cols, vals, y,
