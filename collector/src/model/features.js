@@ -19,6 +19,8 @@
 //   v:<a>:<ra>:<b>:<rb>              a against b on the enemy team (matchup), +1 when blue is a
 //   ts:<classA>:<classB>             class pair on the same team (Mage + Tank ...)
 //   tv:<classA>:<classB>             class against class
+//   a:<pillar>                       blue-vs-red damage-balance/frontline/control class proxies
+// The composition pillars use primary class tags; they are learned features, not rules.
 // Pair keys are canonical (lower champion:role first), so each pair has one weight.
 // Matchups and class matchups are antisymmetric: b against a is minus a against b.
 
@@ -108,6 +110,28 @@ function features(m, { share, tagOf }) {
       }
     }
   }
+  const pillars = (team) => {
+    let ap = 0;
+    let ad = 0;
+    let frontline = 0;
+    let control = 0;
+    for (const champion of team) {
+      const tag = tagOf(champion);
+      if (tag === 'Mage') ap += 1;
+      if (tag === 'Support') ap += 0.5;
+      if (tag === 'Marksman' || tag === 'Assassin' || tag === 'Fighter') ad += 1;
+      if (tag === 'Tank') frontline += 1;
+      if (tag === 'Fighter') frontline += 0.5;
+      if (tag === 'Tank' || tag === 'Support') control += 1;
+      if (tag === 'Mage') control += 0.5;
+    }
+    return [Math.abs(Math.log((ap + 0.5) / (ad + 0.5))), frontline / 5, control / 5];
+  };
+  const bluePillars = pillars(m.b);
+  const redPillars = pillars(m.r);
+  out.push(['a:damageImbalance', bluePillars[0] - redPillars[0]]);
+  out.push(['a:frontline', bluePillars[1] - redPillars[1]]);
+  out.push(['a:control', bluePillars[2] - redPillars[2]]);
   for (let i = 0; i < 5; i++) {
     for (let j = 0; j < 5; j++) {
       const [x, y] = [m.b[i], m.r[j]];

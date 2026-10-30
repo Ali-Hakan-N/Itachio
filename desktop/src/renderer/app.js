@@ -361,6 +361,10 @@ async function signOut() {
 }
 
 function renderMain() {
+  if (tab !== 'champions') {
+    lineupPickerCleanup?.();
+    lineupPickerCleanup = null;
+  }
   if (tab === 'draft') renderDraft();
   if (tab === 'champions') renderChampions();
   if (tab === 'team') renderTeam();
@@ -488,16 +492,20 @@ function usualChampion(p, blocked) {
   return best ? best.championId : 0;
 }
 
-const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null };
+const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null };
 const PICK_ORDER_STABILITY_MS = 1500;
+const PICK_ORDER_HYSTERESIS = 2.5;
 
-function stabilizedPickOrder(d, rated, suggested) {
+function stabilizedPickOrder(d, rated, suggested, teammateHoverChanged) {
   if (pickOrderUi.gameId !== d.gameId) {
     clearTimeout(pickOrderUi.timer);
-    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null });
+    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null });
   }
   const desired = suggested.map((r) => r.p.cellId);
-  const result = Engine.stabilizePickOrder(pickOrderUi.order, pickOrderUi.pending, desired, Date.now(), PICK_ORDER_STABILITY_MS);
+  const canChange = Engine.shouldUpdatePickOrder(Boolean(pickOrderUi.order), d.turn)
+    || Engine.shouldUpdatePickOrderForHover(d.turn, teammateHoverChanged);
+  const improvement = Engine.pickOrderImprovement(pickOrderUi.order, desired, suggested);
+  const result = Engine.stabilizePickOrder(pickOrderUi.order, pickOrderUi.pending, desired, Date.now(), PICK_ORDER_STABILITY_MS, canChange, improvement, PICK_ORDER_HYSTERESIS);
   pickOrderUi.order = result.order;
   pickOrderUi.pending = result.pending;
   const pendingKey = result.pending?.order.join(',') || null;
@@ -521,21 +529,29 @@ function pickOrderHtml(d, blocked) {
   const byCell = new Map(d.ally.map((p) => [p.cellId, p]));
   const remaining = (d.allyPickOrder || []).map((c) => byCell.get(c)).filter((p) => p && !p.locked && p.position);
   if (remaining.length < 2) return '';
+  if (pickOrderUi.gameId !== d.gameId) {
+    clearTimeout(pickOrderUi.timer);
+    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null });
+  }
+  const hoverSignature = remaining.filter((p) => !p.isLocal).map((p) => `${p.cellId}:${p.hoverId || 0}`).join(',');
+  const teammateHoverChanged = pickOrderUi.hoverSignature !== null && pickOrderUi.hoverSignature !== hoverSignature;
+  pickOrderUi.hoverSignature = hoverSignature;
   const nameOf = (p) => (p.isLocal ? S.me?.nickname : memberByPuuid(p.puuid)?.nickname) || ROLE_NAME[p.position];
   const rated = remaining.map((p) => {
-    const championId = p.hoverId || usualChampion(p, blocked);
+    const championId = !p.isLocal && p.hoverId ? p.hoverId : usualChampion(p, blocked);
+    const playerId = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
     const ev = championId
-      ? Engine.evaluate({ stats: S.stats, model: S.model, championId, role: p.position, ...draftContext(d, p.cellId), lookAhead: true, unavailable: blocked })
+      ? Engine.evaluate({ stats: S.stats, model: S.model, championId, role: p.position, ...draftContext(d, p.cellId), lookAhead: true, unavailable: blocked, personal: personalOf(playerId, d) })
       : null;
-    return { p, championId, risk: ev?.counterRisk ?? 0, matchup: ev?.matchup ?? 0 };
+    return { p, championId, risk: ev?.counterRisk ?? 0, matchup: ev?.matchup ?? 0, personal: ev?.personal ?? 0 };
   });
   const enemyPicks = d.enemy.filter((p) => p.locked && p.championId);
-  const suggested = stabilizedPickOrder(d, rated, Engine.orderPickSuggestions(rated, enemyPicks, S.model));
+  const suggested = stabilizedPickOrder(d, rated, Engine.orderPickSuggestions(rated, enemyPicks, S.model, draftContext(d).allies), teammateHoverChanged);
   const trades = Engine.pickOrderTrades(rated, suggested, d.allyPickGroups || []);
   const riskText = (n) => (n > 0 ? `<b class="down">−${n}</b>` : n < 0 ? `<b class="up">+${-n}</b>` : '<b>0</b>');
   return `
     <div class="pick-order">
-      <h3 class="sub" title="Champion icon shows the player's hover, or most-played champion in that role">Pick Order</h3>
+      <h3 class="sub" title="Champion icon is the player's most-played pick in that role; hovering another champion does not change order">Pick Order</h3>
       <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk shown; order also saves solo lanes for CT opportunities">${riskText(r.risk)}</span></li>`).join('')}</ol>
       ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
     </div>`;
@@ -1046,9 +1062,84 @@ const lineupCompact = (lineup, playerId) => {
   if (others.length <= 2) return `with ${others.join(', ')}`;
   return `with ${others[0]}, ${others[1]} +${others.length - 2}`;
 };
+const lineupPeople = (lineup, playerId) => lineup.split(',').filter((id) => id !== playerId).map(nickOf);
 const gamesOf = (stats) => Object.values(stats?.byKey || {}).reduce((a, v) => a + v.games, 0);
+const recordOf = (stats) => {
+  const games = gamesOf(stats);
+  const wins = Object.values(stats?.byKey || {}).reduce((sum, value) => sum + value.wins, 0);
+  return { games, wins, losses: games - wins, winRate: games ? Math.round((wins / games) * 100) : 0 };
+};
+
+let lineupPickerCleanup = null;
+function renderLineupPicker(lineups, selected, playerId) {
+  const selectedStats = lineups.find(([key]) => key === selected)?.[1];
+  const record = recordOf(selectedStats);
+  const avatars = (key) => lineupPeople(key, playerId).slice(0, 3).map((name, i) =>
+    `<span class="lineup-avatar tone-${i}" title="${esc(name)}">${esc(name.slice(0, 1).toUpperCase())}</span>`,
+  ).join('');
+  return `
+    <div class="lineup-picker" id="lineupPicker">
+      <button type="button" class="lineup-trigger" id="lineupTrigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="lineupOptions" title="Choose a team lineup">
+        <span class="lineup-seal" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span class="lineup-current-copy"><small>TEAM LINEUP</small><b>${esc(lineupCompact(selected, playerId))}</b></span>
+        <span class="lineup-record"><b>${record.games}G</b><small>${record.wins}–${record.losses}</small></span>
+        <span class="lineup-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <div class="lineup-options" id="lineupOptions" role="listbox" aria-label="Team lineups" hidden>
+        <div class="lineup-options-head"><span>RECENT LINEUPS</span><span>${lineups.length} total</span></div>
+        ${lineups.map(([key, stats]) => {
+          const item = recordOf(stats);
+          const active = key === selected;
+          return `<button type="button" class="lineup-option ${active ? 'active' : ''}" role="option" aria-selected="${active}" data-lineup="${esc(key)}">
+            <span class="lineup-avatars" aria-hidden="true">${avatars(key)}</span>
+            <span class="lineup-option-copy"><b>${esc(lineupCompact(key, playerId))}</b><small>${esc(lineupName(key, playerId))}</small></span>
+            <span class="lineup-option-record"><b>${item.games}G</b><small>${item.wins}–${item.losses} · ${item.winRate}%</small></span>
+            <span class="lineup-check" aria-hidden="true">${active ? '✓' : ''}</span>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+function attachLineupPicker() {
+  const root = document.getElementById('lineupPicker');
+  if (!root) return;
+  const trigger = root.querySelector('#lineupTrigger');
+  const panel = root.querySelector('#lineupOptions');
+  const options = [...panel.querySelectorAll('[role="option"]')];
+  const setOpen = (open, focus = false) => {
+    panel.hidden = !open;
+    trigger.setAttribute('aria-expanded', String(open));
+    if (open && focus) (options.find((option) => option.getAttribute('aria-selected') === 'true') || options[0])?.focus();
+  };
+  const onOutside = (event) => { if (!root.contains(event.target)) setOpen(false); };
+  trigger.onclick = () => setOpen(panel.hidden, panel.hidden);
+  root.onkeydown = (event) => {
+    if (event.key === 'Escape') {
+      setOpen(false);
+      trigger.focus();
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    if (panel.hidden) return setOpen(true, true);
+    const current = options.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? options.length - 1
+        : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+    options[next]?.focus();
+  };
+  for (const option of options) option.onclick = () => {
+    statsUi.lineup = option.dataset.lineup;
+    renderChampions();
+  };
+  document.addEventListener('pointerdown', onOutside);
+  lineupPickerCleanup = () => document.removeEventListener('pointerdown', onOutside);
+}
 
 function renderChampions() {
+  lineupPickerCleanup?.();
+  lineupPickerCleanup = null;
   const members = S.members || [];
   const id = statsUi.player && members.some((m) => m.id === statsUi.player) ? statsUi.player : S.me?.id;
   const source = STAT_SOURCES.find(([k]) => k === statsUi.source) || STAT_SOURCES[0];
@@ -1076,7 +1167,7 @@ function renderChampions() {
         <div class="seg" id="src">${STAT_SOURCES.map(([k, label]) => `<button data-src="${k}" class="${k === source[0] ? 'active' : ''}">${label}</button>`).join('')}</div>
         <span class="grow"></span>
         <div class="toolbar-actions">
-          ${lineups.length && source[0] === 'team' ? `<select id="lineup" class="lineup-select" title="${esc(lineupName(lineup, id))}">${lineups.map(([k, v]) => `<option value="${esc(k)}" title="${esc(lineupName(k, id))} · ${gamesOf(v)} games" ${k === lineup ? 'selected' : ''}>👥 ${esc(lineupCompact(k, id))} · ${gamesOf(v)}G</option>`).join('')}</select>` : ''}
+          ${lineups.length && source[0] === 'team' ? renderLineupPicker(lineups, lineup, id) : ''}
           <select id="who" class="who-select">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
         </div>
       </div>
@@ -1113,13 +1204,7 @@ function renderChampions() {
     statsUi.lineup = null;
     renderChampions();
   };
-  const sel = document.getElementById('lineup');
-  if (sel) {
-    sel.onchange = (e) => {
-      statsUi.lineup = e.target.value;
-      renderChampions();
-    };
-  }
+  attachLineupPicker();
 }
 
 // ---------- Team ----------

@@ -195,6 +195,7 @@
         U: new Map(Object.entries(model.comp.U).map(([id, u]) => [Number(id), Float64Array.from(u)])),
       };
     }
+    ix.pillars = model.pillars || null;
     // Ban inputs: how likely a team is to pick each champion:role, and the role's average pick
     ix.matches = model.matches || 0;
     ix.banRate = new Map(Object.entries(model.banRate || {}).map(([id, r]) => [Number(id), r]));
@@ -222,6 +223,76 @@
 
   // A player on the board: { championId, position? } or a bare champion id
   const asPick = (p) => (typeof p === 'number' ? { championId: p, position: '' } : p);
+
+  // Unknown roles are distributed over valid team assignments, weighted by role share.
+  // This prevents two flex picks from both being treated as the same most-played role.
+  function roleAssignments(ix, picks, against = []) {
+    const team = picks.map(asPick);
+    if (!team.length) return [{ roles: [], probability: 1 }];
+    const key = `${team.map((p) => `${p.championId}:${p.position || ''}`).join(',')}|vs:${against.map((p) => `${asPick(p).championId}:${asPick(p).position || ''}`).join(',')}`;
+    ix.roleAssignmentCache ||= new Map();
+    const cached = ix.roleAssignmentCache.get(key);
+    if (cached) return cached;
+
+    const choices = team.map((pick) => {
+      if (pick.position && ROLE_INDEX[pick.position] !== undefined) return [{ role: ROLE_INDEX[pick.position], weight: 1 }];
+      const available = [];
+      for (let role = 0; role < 5; role++) {
+        const entry = ix.champ.get(`${pick.championId}:${role}`);
+        if (entry?.share > 0) available.push({ role, weight: entry.share });
+      }
+      if (!available.length) {
+        const best = ix.bestRole.get(pick.championId)?.r;
+        return best === undefined ? [] : [{ role: best, weight: 1 }];
+      }
+      return available;
+    });
+    if (choices.some((list) => !list.length)) return [];
+
+    const assignments = [];
+    const selected = [];
+    const visit = (i, used, probability) => {
+      if (i === team.length) {
+        assignments.push({ roles: [...selected], rawProbability: probability });
+        return;
+      }
+      for (const option of choices[i]) {
+        if (used.has(option.role)) continue;
+        used.add(option.role);
+        selected.push(option.role);
+        visit(i + 1, used, probability * option.weight);
+        selected.pop();
+        used.delete(option.role);
+      }
+    };
+    visit(0, new Set(), 1);
+    if (!assignments.length) return [];
+
+    if (against.length) {
+      const opposingAssignments = roleAssignments(ix, against);
+      for (const assignment of assignments) {
+        let expectedCounter = 0;
+        for (const opposing of opposingAssignments) {
+          let counter = 0;
+          for (let i = 0; i < team.length; i++) {
+            for (let j = 0; j < opposing.roles.length; j++) {
+              counter += matchup(ix, team[i].championId, assignment.roles[i], asPick(against[j]).championId, opposing.roles[j]);
+            }
+          }
+          expectedCounter += opposing.probability * counter;
+        }
+        assignment.rawProbability *= Math.exp(Math.max(-30, Math.min(30, ix.lambda * expectedCounter)));
+      }
+    }
+    const sum = assignments.reduce((total, assignment) => total + assignment.rawProbability, 0) || 1;
+    for (const assignment of assignments) {
+      assignment.probability = assignment.rawProbability / sum;
+      delete assignment.rawProbability;
+    }
+    if (ix.roleAssignmentCache.size > 200) ix.roleAssignmentCache.clear();
+    ix.roleAssignmentCache.set(key, assignments);
+    return assignments;
+  }
 
   const dot = (a, b) => {
     if (!a || !b) return 0;
@@ -271,6 +342,33 @@
     return v;
   }
 
+  function pillarProfile(ix, team) {
+    let ap = 0;
+    let ad = 0;
+    let frontline = 0;
+    let control = 0;
+    for (const id of team) {
+      const tag = ix.tags.get(id) || 'None';
+      if (tag === 'Mage') ap += 1;
+      if (tag === 'Support') ap += 0.5;
+      if (tag === 'Marksman' || tag === 'Assassin' || tag === 'Fighter') ad += 1;
+      if (tag === 'Tank') frontline += 1;
+      if (tag === 'Fighter') frontline += 0.5;
+      if (tag === 'Tank' || tag === 'Support') control += 1;
+      if (tag === 'Mage') control += 0.5;
+    }
+    return { damageImbalance: Math.abs(Math.log((ap + 0.5) / (ad + 0.5))), frontline: frontline / 5, control: control / 5 };
+  }
+
+  function pillarValue(ix, ourTeam, enemyTeam) {
+    if (!ix.pillars) return 0;
+    const ours = pillarProfile(ix, ourTeam);
+    const theirs = pillarProfile(ix, enemyTeam);
+    return (ix.pillars.damageImbalance || 0) * (ours.damageImbalance - theirs.damageImbalance)
+      + (ix.pillars.frontline || 0) * (ours.frontline - theirs.frontline)
+      + (ix.pillars.control || 0) * (ours.control - theirs.control);
+  }
+
   // future: { allyStyle, enemyStyle } expected styles of the picks still to come (or null)
   function scoreOne(ix, championId, r, allies, enemies, future = null) {
     const self = `${championId}:${r}`;
@@ -298,25 +396,36 @@
 
     let mu = 0;
     const enemyHits = [];
-    for (const p of enemies.map(asPick)) {
-      const re = roleIndex(ix, p.championId, p.position);
-      const explicit = re === null ? null : ix.vs.get(`${championId}:${r}:${p.championId}:${re}`);
-      if (explicit) variance += explicit.se * explicit.se;
-      const v = re === null
-        ? ix.tv.get(`${tag}:${ix.tags.get(p.championId) || 'None'}`) || 0
-        : matchup(ix, championId, r, p.championId, re);
-      mu += v;
-      if (v) enemyHits.push({ championId: p.championId, value: v, lane: re === r });
+    const enemyPicks = enemies.map(asPick);
+    const assignments = roleAssignments(ix, enemyPicks, [...allies, { championId, position: ROLES[r] }]);
+    for (let i = 0; i < enemyPicks.length; i++) {
+      const p = enemyPicks[i];
+      const roleProbabilities = new Map();
+      let expectedMatchup = 0;
+      for (const assignment of assignments) {
+        const enemyRole = assignment.roles[i];
+        roleProbabilities.set(enemyRole, (roleProbabilities.get(enemyRole) || 0) + assignment.probability);
+        expectedMatchup += assignment.probability * matchup(ix, championId, r, p.championId, enemyRole);
+      }
+      mu += expectedMatchup;
+      if (expectedMatchup) enemyHits.push({
+        championId: p.championId,
+        value: expectedMatchup,
+        lane: roleProbabilities.get(r) || 0,
+        roleProbabilities: Object.fromEntries([...roleProbabilities].map(([enemyRole, probability]) => [ROLES[enemyRole], probability])),
+      });
     }
 
-    const comp = ix.comp
+    const comp = (ix.comp
       ? compValue(
           ix,
           championId,
           styleOf(ix, allies.map((p) => asPick(p).championId).filter((id) => id !== championId), future?.allyStyle),
           styleOf(ix, enemies.map((p) => asPick(p).championId), future?.enemyStyle),
         )
-      : 0;
+      : 0) + pillarValue(ix,
+        [...allies.map((p) => asPick(p).championId).filter((id) => id !== championId), championId],
+        enemies.map((p) => asPick(p).championId));
 
     const logit = base + syn + mu + comp;
     const score = toScore(ix, logit);
@@ -530,31 +639,37 @@
     return { ...row, logit: final, score, counterRisk: Math.round(toScore(ix, withFuture)) - score };
   }
 
-  function orderPickSuggestions(rated, enemyPicks = [], model = null) {
+  function orderPickSuggestions(rated, enemyPicks = [], model = null, knownAllies = []) {
     const roleBias = { jungle: 0, utility: 0, bottom: 2, middle: 8, top: 10 };
     const ix = has(model) ? index(model) : null;
-    const roleOf = (pick) => {
-      if (ROLE_INDEX[pick.position] !== undefined) return ROLE_INDEX[pick.position];
-      return ix && pick.championId ? ix.bestRole.get(pick.championId)?.r ?? null : null;
-    };
-    const enemyRoles = new Set(enemyPicks.map(roleOf).filter((r) => r !== null));
+    const ownPicks = [...knownAllies.map(asPick), ...rated.map((pick) => ({ championId: pick.championId, position: pick.p.position }))];
+    const assignments = ix ? roleAssignments(ix, enemyPicks, ownPicks) : [];
+    const roleProbability = (role) => assignments.reduce((sum, assignment) =>
+      sum + (assignment.roles.includes(role) ? assignment.probability : 0), 0);
     const botRoles = new Set([ROLE_INDEX.bottom, ROLE_INDEX.utility]);
-    return [...rated].sort((a, b) => {
-      const priority = (pick) => {
-        const role = ROLE_INDEX[pick.p.position];
-        const matchup = Math.min(8, Math.max(0, pick.matchup || 0));
-        const hasCounterTarget = role === ROLE_INDEX.jungle
-          ? enemyRoles.size > 0
-          : role === ROLE_INDEX.bottom || role === ROLE_INDEX.utility
-            ? [...botRoles].some((r) => enemyRoles.has(r))
-            : enemyRoles.has(role);
-        const counterBonus = hasCounterTarget
-          ? role === ROLE_INDEX.jungle ? 4 + Math.min(6, matchup) : 12 + matchup
-          : 0;
-        return (pick.risk ?? 0) + (roleBias[pick.p.position] ?? 0) - counterBonus;
-      };
-      return priority(a) - priority(b);
-    });
+    const priority = (pick) => {
+      const role = ROLE_INDEX[pick.p.position];
+      const matchup = Math.min(8, Math.max(0, pick.matchup || 0));
+      const targetProbability = role === ROLE_INDEX.jungle
+        ? Math.min(1, enemyPicks.length / 3)
+        : role === ROLE_INDEX.bottom || role === ROLE_INDEX.utility
+          ? Math.min(1, [...botRoles].reduce((sum, targetRole) => sum + roleProbability(targetRole), 0))
+          : roleProbability(role);
+      const counterBonus = targetProbability * (role === ROLE_INDEX.jungle
+        ? 4 + Math.min(6, matchup)
+        : 12 + matchup);
+      const personalProtection = Math.min(4, Math.max(0, (pick.personal || 0) * 0.5));
+      return (pick.risk ?? 0) + (roleBias[pick.p.position] ?? 0) + personalProtection - counterBonus;
+    };
+    return rated.map((pick) => ({ ...pick, orderPriority: priority(pick) }))
+      .sort((a, b) => a.orderPriority - b.orderPriority);
+  }
+
+  function pickOrderImprovement(current, desired, rated) {
+    if (!Array.isArray(current) || !current.length) return Infinity;
+    const priorities = new Map(rated.map((pick) => [pick.p.cellId, pick.orderPriority]));
+    const utility = (order) => order.reduce((sum, cellId, i) => sum + i * (priorities.get(cellId) || 0), 0);
+    return utility(desired) - utility(current);
   }
 
   function pickOrderTrades(rated, suggested, simultaneousPickGroups = []) {
@@ -570,9 +685,20 @@
     return trades.slice(0, 2);
   }
 
-  function stabilizePickOrder(previous, pending, desired, now, delay = 1500) {
+  function shouldUpdatePickOrder(initialized, turn) {
+    if (!initialized) return !(turn?.side === 'ally' && turn.kind === 'pick');
+    return turn?.side === 'enemy' && turn.kind === 'pick';
+  }
+
+  function shouldUpdatePickOrderForHover(turn, teammateHoverChanged) {
+    return turn?.side === 'ally' && turn.kind === 'pick' && teammateHoverChanged;
+  }
+
+  function stabilizePickOrder(previous, pending, desired, now, delay = 1500, allowChange = true, improvement = Infinity, threshold = 2.5) {
     const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((id, i) => id === b[i]);
+    if (!allowChange) return { order: Array.isArray(previous) ? previous : [], pending: null };
     if (!Array.isArray(previous) || !previous.length || same(previous, desired)) return { order: desired, pending: null };
+    if (improvement < threshold) return { order: previous, pending: null };
     if (!pending || !same(pending.order, desired)) return { order: previous, pending: { order: desired, since: now } };
     if (now - pending.since >= delay) return { order: desired, pending: null };
     return { order: previous, pending };
@@ -650,7 +776,7 @@
     const b = side(them);
     let matchups = 0;
     for (const x of us) for (const y of them) matchups += matchup(ix, x.c, x.r, y.c, y.r);
-    let composition = a.composition - b.composition;
+    let composition = a.composition - b.composition + pillarValue(ix, us.map((p) => p.c), them.map((p) => p.c));
     if (ix.comp) {
       const A = styleOf(ix, us.map((p) => p.c));
       const B = styleOf(ix, them.map((p) => p.c));
@@ -842,9 +968,129 @@
   // Older engine (recommend.js) takes allies as champion ids
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
+  const metaSourceCache = new WeakMap();
+  function metaSourceIndex(stats) {
+    if (metaSourceCache.has(stats)) return metaSourceCache.get(stats);
+    const meta = new Map();
+    const roleScores = Array.from({ length: 5 }, () => []);
+    const sourceRows = (rows) => (rows || []).filter((row) => !row.source || row.source === 'metasrc');
+    for (const row of sourceRows(stats.meta)) {
+      const role = ROLE_INDEX[row.role];
+      const score = Number(row.score);
+      if (role === undefined || !Number.isFinite(score)) continue;
+      meta.set(`${row.champion_id}:${role}`, score);
+      roleScores[role].push(score);
+    }
+    const roleStats = roleScores.map((scores) => {
+      const mean = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
+      const sd = scores.length
+        ? Math.sqrt(scores.reduce((sum, score) => sum + (score - mean) ** 2, 0) / scores.length) || 1
+        : 1;
+      return { mean, sd };
+    });
+    const synergy = new Map();
+    for (const row of sourceRows(stats.synergy)) {
+      const role = ROLE_INDEX[row.role];
+      const strength = Number(row.strength);
+      if (role !== undefined && Number.isFinite(strength)) synergy.set(`${row.champion_id}:${role}:${row.ally_id}`, strength);
+    }
+    const matchup = new Map();
+    for (const row of sourceRows(stats.matchup)) {
+      const role = ROLE_INDEX[row.role];
+      const enemyRole = ROLE_INDEX[row.opponent_role || row.role];
+      const strength = Number(row.strength);
+      if (role !== undefined && enemyRole !== undefined && Number.isFinite(strength)) {
+        matchup.set(`${row.champion_id}:${role}:${row.opponent_id}:${enemyRole}`, strength);
+      }
+    }
+    const result = {
+      strength: (champion, role) => {
+        const score = meta.get(`${champion}:${role}`);
+        return score === undefined ? 0 : (score - roleStats[role].mean) / roleStats[role].sd;
+      },
+      synergy: (a, ra, b, rb) => {
+        const direct = synergy.get(`${a}:${ra}:${b}`);
+        const reverse = synergy.get(`${b}:${rb}:${a}`);
+        if (direct !== undefined && reverse !== undefined) return (direct + reverse) / 2;
+        return direct ?? reverse ?? 0;
+      },
+      matchup: (a, ra, b, rb) => {
+        const direct = matchup.get(`${a}:${ra}:${b}:${rb}`);
+        if (direct !== undefined) return direct;
+        const reverse = matchup.get(`${b}:${rb}:${a}:${ra}`);
+        return reverse === undefined ? 0 : -reverse;
+      },
+    };
+    metaSourceCache.set(stats, result);
+    return result;
+  }
+
+  function metaFeaturesForCandidate({ stats, model, championId, role, allies = [], enemies = [] }) {
+    const source = metaSourceIndex(stats);
+    const ix = index(model);
+    const ownPicks = [{ championId, position: role }, ...allies.map(asPick)];
+    const enemyPicks = enemies.map(asPick);
+    const ownAssignments = roleAssignments(ix, ownPicks);
+    const enemyAssignments = roleAssignments(ix, enemyPicks, ownPicks);
+    if (!ownAssignments.length || !enemyAssignments.length) return [0, 0, 0];
+
+    const total = [0, 0, 0];
+    let probabilitySum = 0;
+    for (const own of ownAssignments) for (const enemy of enemyAssignments) {
+      const probability = own.probability * enemy.probability;
+      const ownTeam = new Array(5).fill(null);
+      const enemyTeam = new Array(5).fill(null);
+      ownPicks.forEach((pick, i) => { ownTeam[own.roles[i]] = pick.championId; });
+      enemyPicks.forEach((pick, i) => { enemyTeam[enemy.roles[i]] = pick.championId; });
+      const feature = [0, 0, 0];
+      for (let r = 0; r < 5; r++) {
+        if (ownTeam[r]) feature[0] += source.strength(ownTeam[r], r);
+        if (enemyTeam[r]) feature[0] -= source.strength(enemyTeam[r], r);
+        for (let other = r + 1; other < 5; other++) {
+          if (ownTeam[r] && ownTeam[other]) feature[1] += source.synergy(ownTeam[r], r, ownTeam[other], other);
+          if (enemyTeam[r] && enemyTeam[other]) feature[1] -= source.synergy(enemyTeam[r], r, enemyTeam[other], other);
+        }
+        for (let enemyRole = 0; enemyRole < 5; enemyRole++) {
+          if (ownTeam[r] && enemyTeam[enemyRole]) feature[2] += source.matchup(ownTeam[r], r, enemyTeam[enemyRole], enemyRole);
+        }
+      }
+      for (let i = 0; i < 3; i++) total[i] += probability * feature[i];
+      probabilitySum += probability;
+    }
+    return probabilitySum ? total.map((value) => value / probabilitySum) : [0, 0, 0];
+  }
+
+  function calibratedMetaLogit(features, calibration) {
+    if (!calibration?.weights || !calibration?.mean || !calibration?.sd) return null;
+    return calibration.weights[0] + features.reduce((sum, value, i) =>
+      sum + calibration.weights[i + 1] * ((value - calibration.mean[i]) / calibration.sd[i]), 0);
+  }
+
+  const sigmoid = (x) => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, x))));
+
+  function tunedScore(modelResult, championId, role, args) {
+    const calibration = args.model?.ensemble?.metaCalibration;
+    if (!args.model?.ensemble?.supported || !calibration || !args.stats?.meta?.length) return null;
+    const metaLogit = calibratedMetaLogit(metaFeaturesForCandidate({
+      stats: args.stats,
+      model: args.model,
+      championId,
+      role,
+      allies: args.allies,
+      enemies: args.enemies,
+    }), calibration);
+    if (!Number.isFinite(metaLogit) || !Number.isFinite(modelResult.logit)) return null;
+    const { wModel, wMeta } = getWeights(args.model, args.stats);
+    return {
+      score: Math.round(100 * sigmoid(wModel * modelResult.logit + wMeta * metaLogit)),
+      wModel,
+      wMeta,
+    };
+  }
+
   // Dynamic confidence-based weighting:
   // Model weight is bounded between 0.0 and 0.50, scaling with how proven each layer is.
-  // MetaSRC gets the remainder (50% to 100%).
+  // MetaSRC keeps at least half of the fallback blend.
   function modelConfidence(m) {
     if (!m) return 0;
     // 1. Meta / Strength confidence: based on matches collected, reaches 1.0 at 20,000 matches
@@ -863,10 +1109,11 @@
     return 0.4 * cMeta + 0.3 * cSyn + 0.3 * cVs;
   }
 
-  function getWeights(m) {
+  function getWeights(m, stats = null) {
     const conf = modelConfidence(m);
     // Use a supported out-of-time blend; until then, fall back to source confidence.
-    const tuned = m?.ensemble?.supported && Number.isFinite(m.ensemble.modelWeight)
+    const hasMetaSrc = stats?.meta?.some((row) => !row.source || row.source === 'metasrc');
+    const tuned = hasMetaSrc && m?.ensemble?.supported && m.ensemble.metaCalibration && Number.isFinite(m.ensemble.modelWeight)
       ? Math.max(0, Math.min(0.5, m.ensemble.modelWeight))
       : null;
     const wModel = tuned ?? Math.max(0.0, Math.min(0.50, 0.50 * conf));
@@ -890,10 +1137,11 @@
       const metaRes = root.Recommend.evaluate(legacy(args));
       if (!modelRes) return metaRes;
       if (!metaRes) return modelRes;
-      const { wModel, wMeta } = getWeights(args.model);
+      const tuned = tunedScore(modelRes, args.championId, modelRes.role, args);
+      const { wModel, wMeta } = tuned || getWeights(args.model, args.stats);
       return {
         ...modelRes,
-        score: blendScore(modelRes.score, metaRes.score, args.model),
+        score: tuned?.score ?? blendScore(modelRes.score, metaRes.score, args.model),
         metaSrcScore: metaRes.score,
         modelScore: modelRes.score,
         weights: { model: Number(wModel.toFixed(2)), metasrc: Number(wMeta.toFixed(2)) },
@@ -912,12 +1160,15 @@
       const modelList = recommend(args);
       const metaList = root.Recommend.recommend(legacy(args));
       const metaMap = new Map(metaList.map((m) => [`${m.championId}:${m.role}`, m]));
-      const { wModel, wMeta } = getWeights(args.model);
+      const { wModel: fallbackModelWeight, wMeta: fallbackMetaWeight } = getWeights(args.model, args.stats);
 
       const blended = modelList.map((m) => {
         const metaItem = metaMap.get(`${m.championId}:${m.role}`);
         if (!metaItem) return m;
-        const finalScore = blendScore(m.score, metaItem.score, args.model);
+        const tuned = tunedScore(m, m.championId, m.role, args);
+        const wModel = tuned?.wModel ?? fallbackModelWeight;
+        const wMeta = tuned?.wMeta ?? fallbackMetaWeight;
+        const finalScore = tuned?.score ?? blendScore(m.score, metaItem.score, args.model);
         return {
           ...m,
           score: finalScore,
@@ -939,7 +1190,10 @@
     recommend: hybridRecommend,
     evaluate: hybridEvaluate,
     orderPickSuggestions,
+    pickOrderImprovement,
     pickOrderTrades,
+    shouldUpdatePickOrder,
+    shouldUpdatePickOrderForHover,
     stabilizePickOrder,
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),

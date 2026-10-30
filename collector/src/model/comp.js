@@ -23,6 +23,7 @@ const MAX_ITERS = 400;
 const CHECK_EVERY = 25; // iterations between validation checks while tuning
 const PATIENCE = 100; // tuning stops after this many iterations without a better validation loss
 const TUNE_ROWS = 25000; // tuning fits on at most this many matches (evenly spread)
+const MAX_FIT_ROWS = 150000; // final style fits use a representative sample; CV evaluates every match
 const LR = 0.02;
 const TAU_GRID = [30, 300, 3000]; // L2 penalty in pseudo-games
 
@@ -93,7 +94,7 @@ function term(p, idx, r, M = matrix(p.m), Tb = new Float64Array(K), Tr = new Flo
  * Fits the composition term on rows, on top of offset (logits of the rest of the model).
  * onCheck(p, iteration) is called every CHECK_EVERY iterations (for early stopping).
  */
-function fit(idx, y, offset, rows, { tau, iters = MAX_ITERS, seed = 7, onCheck = null }) {
+function fit(idx, y, offset, rows, { tau, iters = MAX_ITERS, seed = 7, onCheck = null, effectiveRows = rows.length }) {
   // onCheck may return false to stop early
   const rand = seeded(seed);
   const nm = (K * (K - 1)) / 2;
@@ -104,7 +105,7 @@ function fit(idx, y, offset, rows, { tau, iters = MAX_ITERS, seed = 7, onCheck =
     m: new Float64Array(nm),
   };
   const n = rows.length;
-  const lam = tau / n;
+  const lam = tau / effectiveRows;
   const names = ['U', 'a', 'c', 'm'];
   const mom = Object.fromEntries(names.map((k) => [k, new Float64Array(p[k].length)]));
   const vel = Object.fromEntries(names.map((k) => [k, new Float64Array(p[k].length)]));
@@ -176,6 +177,9 @@ const lossOf = (z, y) => -Math.log(Math.min(Math.max(y ? sigmoid(z) : 1 - sigmoi
 function compLayer(matches, y, offset, fold, folds, log = () => {}) {
   const idx = champions(matches);
   const rows = matches.map((_, i) => i);
+  const sample = (source) => source.length > MAX_FIT_ROWS
+    ? Array.from({ length: MAX_FIT_ROWS }, (_, i) => source[Math.floor(i * source.length / MAX_FIT_ROWS)])
+    : source;
   const all0 = rows.filter((r) => fold[r] !== 0);
   const every = Math.max(1, all0.length / TUNE_ROWS);
   const train0 = all0.length > TUNE_ROWS ? Array.from({ length: TUNE_ROWS }, (_, i) => all0[Math.floor(i * every)]) : all0;
@@ -192,6 +196,7 @@ function compLayer(matches, y, offset, fold, folds, log = () => {}) {
     let tauBest = null;
     fit(idx, y, offset, train0, {
       tau,
+      effectiveRows: all0.length,
       onCheck: (p, t) => {
         const loss = validLoss(p);
         if (!tauBest || loss < tauBest.loss) tauBest = { tau, iters: t, loss };
@@ -204,13 +209,14 @@ function compLayer(matches, y, offset, fold, folds, log = () => {}) {
   const z = Float64Array.from(offset);
   if (best.iters) {
     for (let f = 0; f < folds; f++) {
-      const train = rows.filter((r) => fold[r] !== f);
-      const p = fit(idx, y, offset, train, { tau: best.tau, iters: best.iters });
+      const allTrain = rows.filter((r) => fold[r] !== f);
+      const train = sample(allTrain);
+      const p = fit(idx, y, offset, train, { tau: best.tau, iters: best.iters, effectiveRows: allTrain.length });
       const M = matrix(p.m);
       for (const r of rows) if (fold[r] === f) z[r] = offset[r] + term(p, idx, r, M);
     }
   }
-  const params = fit(idx, y, offset, rows, { tau: best.tau, iters: best.iters });
+  const params = fit(idx, y, offset, sample(rows), { tau: best.tau, iters: best.iters, effectiveRows: rows.length });
   return { params, idx, z, tau: best.tau, iters: best.iters };
 }
 

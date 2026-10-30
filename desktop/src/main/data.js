@@ -196,8 +196,8 @@ class DataStore {
     };
     const [meta, synergy, matchup] = await Promise.all([
       all('champion_meta', 'champion_id,role,score,tier,games,source', ['champion_id', 'role', 'source']),
-      all('champion_synergy', 'champion_id,role,ally_id,strength,games', ['champion_id', 'role', 'ally_id', 'source']),
-      all('champion_matchup', 'champion_id,role,opponent_id,opponent_role,strength,games', ['champion_id', 'role', 'opponent_id', 'opponent_role', 'source']),
+      all('champion_synergy', 'champion_id,role,ally_id,strength,games,source', ['champion_id', 'role', 'ally_id', 'source']),
+      all('champion_matchup', 'champion_id,role,opponent_id,opponent_role,strength,games,source', ['champion_id', 'role', 'opponent_id', 'opponent_role', 'source']),
     ]);
     return { meta, synergy, matchup };
   }

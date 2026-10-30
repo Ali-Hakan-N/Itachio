@@ -32,7 +32,15 @@ const FM_MIN_GAMES = 20;
 const REPORT_FILE = path.join(DATA_DIR, '..', 'model-report.json');
 const PRUNE = 0.002; // pair weights smaller than this are left out of the upload
 const MIN_MATCHES = 2000;
-const MAX_TRAIN_MATCHES = 150000; // newest matches only, keeps training memory around 500 MB
+const MAX_TRAIN_MATCHES_HARD = 1_000_000;
+const DEFAULT_TRAIN_MATCHES = 300_000;
+function resolveTrainMatchLimit(value = process.env.MODEL_MAX_TRAIN_MATCHES) {
+  const requested = Number.parseInt(value || '', 10);
+  return Number.isFinite(requested)
+    ? Math.min(MAX_TRAIN_MATCHES_HARD, Math.max(MIN_MATCHES, requested))
+    : DEFAULT_TRAIN_MATCHES;
+}
+const MAX_TRAIN_MATCHES = resolveTrainMatchLimit();
 const KEEP_SNAPSHOTS = 3;
 const ENSEMBLE_OBSERVATION_LIMIT = 5000;
 const ENSEMBLE_OBSERVATION_DAYS = 180;
@@ -132,6 +140,7 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
   const vs = [];
   const ts = {};
   const tv = {};
+  const pillars = { damageImbalance: 0, frontline: 0, control: 0 };
   const se = (i) => (model.se ? round(model.se[i], 5) : null);
   const on = new Set(model.groups || ['c', 'o', 's', 'ts', 'v', 'tv']);
   model.keys.forEach((key, i) => {
@@ -144,6 +153,7 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
     else if (p[0] === 'v' && Math.abs(w) >= PRUNE) vs.push([+p[1], +p[2], +p[3], +p[4], w, se(i)]);
     else if (p[0] === 'ts') ts[`${p[1]}:${p[2]}`] = w;
     else if (p[0] === 'tv') tv[`${p[1]}:${p[2]}`] = w;
+    else if (p[0] === 'a' && p[1] in pillars) pillars[p[1]] = w;
   });
 
   // Latent vectors of champion:role pairs with enough games (others are near zero anyway)
@@ -224,6 +234,7 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
     ts,
     tv,
     fm,
+    pillars,
     tags: tagOf,
   };
 }
@@ -588,4 +599,4 @@ async function publishBuilds(client, matches, patch, log) {
   log(`builds: ${general} champion builds, ${rows.length - general} against one kind of damage, ${rows.filter((r) => r.items.start).length} with starting items · situational items: ${Object.keys(situations.items).length} items (by part: ${learned})`);
 }
 
-module.exports = { banRates, publishBuilds, pickTraining, storeMatches, storeStarts, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
+module.exports = { banRates, publishBuilds, pickTraining, storeMatches, storeStarts, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT, MAX_TRAIN_MATCHES, resolveTrainMatchLimit };

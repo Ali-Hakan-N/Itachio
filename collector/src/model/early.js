@@ -50,6 +50,7 @@ const DRAFT_GROUPS = ['c', 'o', 's', 'v'];
 // toward the two champions' average lanes with LANE_VS_PRIOR games
 const LANE_VS_MIN = 15;
 const LANE_VS_PRIOR = 20;
+const MAX_EARLY_FIT_MATCHES = 100000;
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const clampP = (p) => Math.min(Math.max(p, 1e-9), 1 - 1e-9);
@@ -70,6 +71,12 @@ function earlyState(m) {
   }
   for (let i = 0; i < TEAM_DIM; i++) s[ROLE_DIM * 5 + i] = m.f[i] || 0;
   return s;
+}
+
+function sampleRows(rows, max = MAX_EARLY_FIT_MATCHES) {
+  if (rows.length <= max) return rows;
+  const stride = rows.length / max;
+  return Array.from({ length: max }, (_, i) => rows[Math.floor(i * stride)]);
 }
 
 // Component of feature i: its role, or 5 for the objectives
@@ -95,9 +102,10 @@ function solve(A, b) {
 }
 
 /** Logistic regression of the result on the early state (Newton). Returns { beta, bias } */
-function fitSurrogate(S, y, rows) {
+function fitSurrogate(S, y, rows, effectiveRows = rows.length) {
   const n = DIM + 1;
   let w = new Array(n).fill(0);
+  const penalty = SURROGATE_L2 * rows.length / effectiveRows;
   for (let it = 0; it < 25; it++) {
     const H = Array.from({ length: n }, () => new Array(n).fill(0));
     const g = new Array(n).fill(0);
@@ -121,8 +129,8 @@ function fitSurrogate(S, y, rows) {
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < i; j++) H[j][i] = H[i][j];
       if (i < DIM) {
-        H[i][i] += SURROGATE_L2;
-        g[i] -= SURROGATE_L2 * w[i];
+        H[i][i] += penalty;
+        g[i] -= penalty * w[i];
       }
     }
     const step = solve(H, g);
@@ -213,8 +221,8 @@ function parts(D, r, w, part) {
  * Fits the surrogate and the per-component draft regressions on fitRows.
  * lambdas: one per component (chosen by tune()). Returns the weights summed over components.
  */
-function fitEarly(D, S, rows, on, lambdas) {
-  const sur = fitSurrogate(S, D.y, rows);
+function fitEarly(D, S, rows, on, lambdas, effectiveRows = rows.length) {
+  const sur = fitSurrogate(S, D.y, rows, effectiveRows);
   const A = Array.from({ length: COMPONENTS }, () => new Float64Array(D.y.length));
   for (const r of rows) {
     const a = components(sur.beta, S[r]);
@@ -222,15 +230,15 @@ function fitEarly(D, S, rows, on, lambdas) {
   }
   const w = new Float64Array(D.keys.length);
   for (let k = 0; k < COMPONENTS; k++) {
-    const f = ridge(D, rows, on, A[k], lambdas[k]);
+    const f = ridge(D, rows, on, A[k], lambdas[k] * rows.length / effectiveRows);
     for (let i = 0; i < D.keys.length; i++) w[i] += f.w[i];
   }
   return { sur, w };
 }
 
 /** Penalty per component, chosen by squared error on held-out matches */
-function tune(D, S, train, valid, on, log) {
-  const sur = fitSurrogate(S, D.y, train);
+function tune(D, S, train, valid, on, effectiveRows, log) {
+  const sur = fitSurrogate(S, D.y, train, effectiveRows);
   const A = Array.from({ length: COMPONENTS }, () => new Float64Array(D.y.length));
   for (const r of [...train, ...valid]) {
     const a = components(sur.beta, S[r]);
@@ -242,7 +250,7 @@ function tune(D, S, train, valid, on, log) {
     let warm = null;
     // From strong to weak penalty, each solve starts from the previous one
     for (const lambda of [...LAMBDA_GRID].reverse()) {
-      const f = ridge(D, train, on, A[k], lambda, warm);
+      const f = ridge(D, train, on, A[k], lambda * train.length / effectiveRows, warm);
       warm = f.w;
       let err = 0;
       for (const r of valid) {
@@ -263,10 +271,11 @@ function surrogateQuality(D, S, rows, folds) {
   let loss = 0;
   let right = 0;
   for (let f = 0; f < folds; f++) {
-    const train = rows.filter((r) => D.fold[r] !== f);
+    const allTrain = rows.filter((r) => D.fold[r] !== f);
+    const train = sampleRows(allTrain);
     const test = rows.filter((r) => D.fold[r] === f);
     if (!train.length || !test.length) continue;
-    const { beta, bias } = fitSurrogate(S, D.y, train);
+    const { beta, bias } = fitSurrogate(S, D.y, train, allTrain.length);
     for (const r of test) {
       let z = bias;
       for (let i = 0; i < DIM; i++) z += beta[i] * S[r][i];
@@ -288,12 +297,13 @@ function surrogateQuality(D, S, rows, folds) {
  */
 function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
   const S = matches.map(earlyState);
-  const rows = [];
-  S.forEach((s, r) => s && rows.push(r));
-  if (rows.length < minMatches) {
-    log(`model: early game   ${rows.length} matches with early data, ${minMatches} needed`);
+  const allRows = [];
+  S.forEach((s, r) => s && allRows.push(r));
+  if (allRows.length < minMatches) {
+    log(`model: early game   ${allRows.length} matches with early data, ${minMatches} needed`);
     return null;
   }
+  const rows = sampleRows(allRows);
   const on = new Uint8Array(D.keys.length);
   const part = new Int8Array(D.keys.length).fill(-1);
   for (let i = 0; i < D.keys.length; i++) {
@@ -304,23 +314,25 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
     else if (g === codes.v) part[i] = 2;
   }
 
-  const surrogate = surrogateQuality(D, S, rows, folds);
-  log(`model: early game   ${rows.length} matches; early state alone predicts the result ${(surrogate.accuracy * 100).toFixed(1)}% (logloss ${surrogate.logloss.toFixed(4)})`);
+  const surrogate = surrogateQuality(D, S, allRows, folds);
+  log(`model: early game   ${allRows.length} matches (${rows.length} fit sample); early state alone predicts the result ${(surrogate.accuracy * 100).toFixed(1)}% (logloss ${surrogate.logloss.toFixed(4)})`);
 
-  const lambdas = tune(D, S, rows.filter((r) => D.fold[r] !== 0), rows.filter((r) => D.fold[r] === 0), on, log);
+  const tuneRows = allRows.filter((r) => D.fold[r] !== 0);
+  const lambdas = tune(D, S, sampleRows(tuneRows), allRows.filter((r) => D.fold[r] === 0), on, tuneRows.length, log);
 
   // Cross-fitting: early matches get features from models that did not see them
   const feat = PARTS.map(() => new Float64Array(D.y.length));
   const put = (r, w) => parts(D, r, w, part).forEach((v, p) => (feat[p][r] = v));
   for (let f = 0; f < folds; f++) {
-    const train = rows.filter((r) => D.fold[r] !== f);
-    const test = rows.filter((r) => D.fold[r] === f);
+    const allTrain = allRows.filter((r) => D.fold[r] !== f);
+    const train = sampleRows(allTrain);
+    const test = allRows.filter((r) => D.fold[r] === f);
     if (!test.length) continue;
-    const fit = fitEarly(D, S, train, on, lambdas);
+    const fit = fitEarly(D, S, train, on, lambdas, allTrain.length);
     for (const r of test) put(r, fit.w);
   }
   // Everything else (matches without early data) from the model on all early matches
-  const full = fitEarly(D, S, rows, on, lambdas);
+  const full = fitEarly(D, S, rows, on, lambdas, allRows.length);
   // Average lane result of every champion:role, from its own side, in log-odds: what an
   // average player gets with it. Player analysis compares a player's lanes with this.
   // Also, for the game plan: every lane matchup (role, blue champion, red champion), and
@@ -335,7 +347,7 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
     e.n++;
     map.set(key, e);
   };
-  for (const r of rows) {
+  for (const r of allRows) {
     const a = components(full.sur.beta, S[r]);
     const m = matches[r];
     for (let k = 0; k < 5; k++) {
@@ -364,7 +376,8 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
 
   const only = (p) => Float64Array.from(full.w, (v, i) => (part[i] === p ? v : 0));
   return {
-    matches: rows.length,
+    matches: allRows.length,
+    fitMatches: rows.length,
     surrogate: { ...surrogate, beta: Array.from(full.sur.beta) },
     laneMean,
     laneVs,

@@ -65,6 +65,7 @@ test('ensemble weight favors MetaSrc only when it significantly improves future 
   assert.equal(selection.supported, true);
   assert.ok(selection.modelWeight < 0.5);
   assert.ok(selection.candidateLogloss < selection.baselineLogloss);
+  assert.equal(selection.metaCalibration.weights.length, 4);
 });
 
 test('ensemble weight stays at 50% when the model wins the holdout comparison', () => {

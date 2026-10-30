@@ -7,6 +7,7 @@
 //                  of each turns into wins
 //   composition    team styles learned from the matches (comp.js), fitted on top of the
 //                  rest, so plans like front-to-back or engage can count as a whole
+//   composition pillars explicit learned class proxies for damage balance, frontline and control
 //   synergy        a weight for every same-team pair (champion:role × champion:role)
 //                  and for every class pair (Mage + Tank ...)
 //   matchup        a weight for every enemy pair, and for class against class
@@ -38,13 +39,14 @@ const { features, groupOf } = require('./features');
 const { earlyModel } = require('./early');
 const { compLayer } = require('./comp');
 
-const GROUP_CODE = { c: 0, o: 1, s: 2, ts: 3, v: 4, tv: 5, e: 6 };
+const GROUP_CODE = { c: 0, o: 1, s: 2, ts: 3, v: 4, tv: 5, e: 6, a: 7 };
 const CODE_GROUP = Object.fromEntries(Object.entries(GROUP_CODE).map(([g, c]) => [c, g]));
 // Grids are tau in pseudo-games
 const LAYERS = [
   { name: 'strength', groups: ['c', 'o'], tune: 'c', grid: [3, 10, 30, 100, 300] },
   { name: 'synergy', groups: ['s', 'ts'], tune: 's', grid: [10, 30, 100, 300, 1000, 3000], adaptive: true },
   { name: 'matchup', groups: ['v', 'tv'], tune: 'v', grid: [10, 30, 100, 300, 1000, 3000], adaptive: true },
+  { name: 'composition pillars', groups: ['a'], tune: 'a', grid: [10, 30, 100, 300, 1000] },
   { name: 'latent pairs', fm: true, grid: [3, 30, 300] },
 ];
 // Three weights (strength, synergy and matchup part of the predicted early advantage);
@@ -59,7 +61,7 @@ const ADAPTIVE_ROUNDS = 3; // reweighting passes, close to a sparse (L1-like) pr
 // Playing a champion in a role it is rarely played in can't be an advantage: the data
 // sets the size of that penalty, not its sign
 const NON_POSITIVE = new Set(['o']);
-const DEFAULTS = { folds: 5, latentDim: 6, tuneIters: 200, finalIters: 500, maxTuneRows: 60000, lr: 0.05 };
+const DEFAULTS = { folds: 5, latentDim: 6, tuneIters: 200, finalIters: 500, maxTuneRows: 60000, maxFinalRows: 250000, lr: 0.05 };
 const PROVEN_SE = 2;
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
@@ -103,8 +105,7 @@ function design(matches, ctx, folds = DEFAULTS.folds) {
   const keys = [];
   const groups = [];
   const rowPtr = new Int32Array(matches.length + 1);
-  const cols = [];
-  const vals = [];
+  let nnz = 0;
   const y = new Float64Array(matches.length);
   const entIndex = new Map();
   const entities = [];
@@ -120,7 +121,7 @@ function design(matches, ctx, folds = DEFAULTS.folds) {
     return e;
   };
   matches.forEach((m, r) => {
-    for (const [key, v] of features(m, ctx)) {
+    for (const [key] of features(m, ctx)) {
       let col = index.get(key);
       if (col === undefined) {
         col = keys.length;
@@ -128,18 +129,27 @@ function design(matches, ctx, folds = DEFAULTS.folds) {
         keys.push(key);
         groups.push(GROUP_CODE[groupOf(key)]);
       }
-      cols.push(col);
-      vals.push(v);
+      nnz++;
     }
-    rowPtr[r + 1] = cols.length;
+    rowPtr[r + 1] = nnz;
     y[r] = m.w;
     for (let i = 0; i < 5; i++) {
       ent[r * 10 + i] = entityOf(m.b[i], i);
       ent[r * 10 + 5 + i] = entityOf(m.r[i], i);
     }
   });
+  const cols = new Int32Array(nnz);
+  const vals = new Float32Array(nnz);
+  matches.forEach((m, r) => {
+    let at = rowPtr[r];
+    for (const [key, value] of features(m, ctx)) {
+      cols[at] = index.get(key);
+      vals[at] = value;
+      at++;
+    }
+  });
   return {
-    keys, groups: Uint8Array.from(groups), rowPtr, cols: Int32Array.from(cols), vals: Float32Array.from(vals), y,
+    keys, groups: Uint8Array.from(groups), rowPtr, cols, vals, y,
     ent, entities, fold: Uint8Array.from(matches, (m) => hash(m.id) % folds),
   };
 }
@@ -244,8 +254,8 @@ function fit(D, rows, cfg, opts = {}) {
   return params;
 }
 
-function fitOnce(D, rows, cfg, scale, { iters, lr = DEFAULTS.lr, seed = 1 } = {}) {
-  const cols = columnsFor(D, cfg, rows.length, scale);
+function fitOnce(D, rows, cfg, scale, { iters, lr = DEFAULTS.lr, seed = 1, effectiveRows = rows.length } = {}) {
+  const cols = columnsFor(D, cfg, effectiveRows, scale);
   const F = D.keys.length;
   const k = cfg.fm ? cfg.fm.k : 0;
   const E = D.entities.length;
@@ -316,7 +326,7 @@ function fitOnce(D, rows, cfg, scale, { iters, lr = DEFAULTS.lr, seed = 1 } = {}
     if (lat) {
       for (const l of lat) {
         const x = params.L[l.name];
-        for (let i = 0; i < x.length; i++) step(x, i, l.g[i] / n + (cfg.fm.tau / n) * x[i], l.m, l.v);
+        for (let i = 0; i < x.length; i++) step(x, i, l.g[i] / n + (cfg.fm.tau / effectiveRows) * x[i], l.m, l.v);
       }
     }
   }
@@ -429,8 +439,8 @@ function reliability(D, rows, z, bins = 10) {
 }
 
 /** Approximate standard error of every explicit weight (diagonal Laplace) */
-function standardErrors(D, rows, params, cfg) {
-  const cols = columnsFor(D, cfg, rows.length, params.scale || null);
+function standardErrors(D, rows, params, cfg, effectiveRows = rows.length) {
+  const cols = columnsFor(D, cfg, effectiveRows, params.scale || null);
   const k = cfg.fm ? cfg.fm.k : 0;
   const tmp = makeTmp(Math.max(k, 1));
   const h = new Float64Array(D.keys.length);
@@ -439,7 +449,7 @@ function standardErrors(D, rows, params, cfg) {
     const w = p * (1 - p);
     for (let j = D.rowPtr[r]; j < D.rowPtr[r + 1]; j++) {
       const c = D.cols[j];
-      if (cols.on[c]) h[c] += w * D.vals[j] * D.vals[j];
+      if (cols.on[c]) h[c] += (effectiveRows / rows.length) * w * D.vals[j] * D.vals[j];
     }
   }
   return Float64Array.from(h, (v, i) => (cols.on[i] ? 1 / Math.sqrt(v + rows.length * cols.lam[i]) : 0));
@@ -544,8 +554,9 @@ function train(matches, ctx, options = {}) {
   const cv = summary(D, rows, zFinal);
   const after = reliability(D, rows, zFinal);
 
-  const params = fit(D, rows, current, { iters: o.finalIters });
-  const se = standardErrors(D, rows, params, current);
+  const finalRows = subsample(rows, o.maxFinalRows);
+  const params = fit(D, finalRows, current, { iters: o.finalIters, effectiveRows: rows.length });
+  const se = standardErrors(D, finalRows, params, current, rows.length);
   // Calibration goes into every weight, so the app's scores are calibrated too
   for (let i = 0; i < params.w.length; i++) params.w[i] *= cal.a;
   for (let i = 0; i < se.length; i++) se[i] *= cal.a;

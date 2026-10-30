@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 global.Recommend = require('../src/renderer/recommend');
-const { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, Engine } = require('../src/renderer/model');
+const { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, winParts, Engine } = require('../src/renderer/model');
 
 // Roles: 0 top, 1 jungle, 2 middle, 3 bottom, 4 utility
 // 1 strong top, 2 average top, 3 mid that is rarely played top, 4 bot, 5 support, 6 enemy mid
@@ -61,6 +61,20 @@ test('matchups work both ways; enemy role is guessed when unknown', () => {
   assert.ok(vs.score < evaluate({ model, championId: 1, role: 'top' }).score);
   const other = evaluate({ model, championId: 6, role: 'middle', enemies: [{ championId: 1, position: 'top' }] });
   assert.ok(other.score > 50); // 6 is strong against 1
+});
+
+test('unknown flex roles use the role-share distribution for matchup score', () => {
+  const flexModel = {
+    ...model,
+    champ: { ...model.champ, '6:0': [0, 900, 0.5], '6:2': [0, 900, 0.5] },
+    vs: [[1, 0, 6, 0, 0.12], [1, 0, 6, 2, -0.12]],
+  };
+  const top = evaluate({ model: flexModel, championId: 1, role: 'top', enemies: [{ championId: 6, position: 'top' }] });
+  const mid = evaluate({ model: flexModel, championId: 1, role: 'top', enemies: [{ championId: 6, position: 'middle' }] });
+  const flex = evaluate({ model: flexModel, championId: 1, role: 'top', enemies: [{ championId: 6 }] });
+
+  assert.ok(flex.matchup < top.matchup);
+  assert.ok(flex.matchup > mid.matchup);
 });
 
 test('class pairs give unseen pairs a small effect', () => {
@@ -262,6 +276,25 @@ test('composition: a champion that gives the team the style it lacks scores high
   assert.ok(none[1] - none[2] > has[1] - has[2], `${none[1] - none[2]} > ${has[1] - has[2]}`);
 });
 
+test('learned composition pillars affect draft win parts by team class proxies', () => {
+  const withPillars = { ...model, pillars: { damageImbalance: 0, frontline: 1, control: 0 } };
+  const args = {
+    model: withPillars,
+    allies: [
+      { championId: 1, position: 'top' }, { championId: 2, position: 'jungle' },
+      { championId: 3, position: 'middle' }, { championId: 4, position: 'bottom' }, { championId: 5, position: 'utility' },
+    ],
+    enemies: [
+      { championId: 6, position: 'top' }, { championId: 3, position: 'jungle' },
+      { championId: 6, position: 'middle' }, { championId: 4, position: 'bottom' }, { championId: 5, position: 'utility' },
+    ],
+  };
+  const parts = winParts(args);
+  const withoutPillars = winParts({ ...args, model });
+
+  assert.ok(parts.composition > withoutPillars.composition);
+});
+
 test('uncertain strength counts less: a rare pick scores below an equally strong common one', () => {
   // Same estimated strength; 8 rests on few games (large standard error), 1 on many
   const m = {
@@ -323,14 +356,14 @@ test('personal layer for a draft: season and patch always, team only with the sa
 test('hybrid ensemble blends model score and external stats layer with confidence weighting', () => {
   const stats = {
     meta: [
-      { champion_id: 1, role: 'top', score: 80 },
-      { champion_id: 2, role: 'top', score: 40 },
+      { champion_id: 1, role: 'top', score: 80, source: 'metasrc' },
+      { champion_id: 2, role: 'top', score: 40, source: 'metasrc' },
     ],
     synergy: [],
     matchup: [],
   };
 
-  // 1. Fully proven model (high matches, proven syn & vs): reaches 50% model, 50% MetaSRC
+  // 1. Fully proven model (high matches, proven syn & vs): caps at 50% model, 50% MetaSRC
   const provenModel = {
     ...model,
     matches: 25000,
@@ -343,10 +376,19 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
   assert.equal(evProven.weights.metasrc, 0.5);
   assert.equal(evProven.score, Math.round(0.5 * evProven.modelScore + 0.5 * evProven.metaSrcScore));
 
-  const tunedModel = { ...provenModel, ensemble: { supported: true, modelWeight: 0.25 } };
+  const tunedModel = {
+    ...provenModel,
+    ensemble: {
+      supported: true,
+      modelWeight: 0.25,
+      metaCalibration: { mean: [0, 0, 0], sd: [1, 1, 1], weights: [0, 1, 0, 0] },
+    },
+  };
+  const baseTuned = evaluate({ model: tunedModel, championId: 1, role: 'top' });
   const evTuned = Engine.evaluate({ stats, model: tunedModel, championId: 1, role: 'top' });
   assert.equal(evTuned.weights.model, 0.25);
   assert.equal(evTuned.weights.metasrc, 0.75);
+  assert.equal(evTuned.score, Math.round(100 / (1 + Math.exp(-(0.25 * baseTuned.logit + 0.75)))));
 
   // 2. Young model without proven syn/vs: model weight is lower, MetaSRC carries the weight
   const youngModel = { ...model, matches: 2000, syn: [], vs: [] };
@@ -409,4 +451,52 @@ test('pick order waits for a new ordering to remain stable before applying it', 
   assert.deepEqual(Engine.stabilizePickOrder(change.order, change.pending, [2, 3, 4], 500), {
     order: [2, 3, 4], pending: null,
   });
+});
+
+test('pick-order hysteresis ignores small priority changes and waits for meaningful ones', () => {
+  const current = [
+    { p: { cellId: 1 }, orderPriority: 0 },
+    { p: { cellId: 2 }, orderPriority: 5 },
+  ];
+  const desired = [
+    { p: { cellId: 2 }, orderPriority: 0 },
+    { p: { cellId: 1 }, orderPriority: 2 },
+  ];
+  const improvement = Engine.pickOrderImprovement([1, 2], [2, 1], desired);
+  assert.equal(improvement, 2);
+  assert.deepEqual(Engine.stabilizePickOrder([1, 2], null, [2, 1], 100, 1500, true, improvement, 2.5), {
+    order: [1, 2], pending: null,
+  });
+  assert.equal(Engine.pickOrderImprovement([1, 2], [2, 1], [
+    { p: { cellId: 2 }, orderPriority: 0 },
+    { p: { cellId: 1 }, orderPriority: 3 },
+  ]), 3);
+});
+
+test('personal player performance increases pick protection priority', () => {
+  const picks = [
+    { p: { position: 'middle' }, risk: 0, matchup: 0, personal: 0 },
+    { p: { position: 'jungle' }, risk: 0, matchup: 0, personal: 0 },
+  ];
+  const plain = Engine.orderPickSuggestions(picks);
+  const personal = Engine.orderPickSuggestions(picks.map((pick) => pick.p.position === 'middle' ? { ...pick, personal: 6 } : pick));
+
+  assert.equal(personal.find((pick) => pick.p.position === 'middle').orderPriority, plain.find((pick) => pick.p.position === 'middle').orderPriority + 3);
+});
+
+test('pick order updates at enemy picks and teammate hover changes, not on local hover alone', () => {
+  assert.equal(Engine.shouldUpdatePickOrder(false, { side: 'ally', kind: 'pick' }), false);
+  assert.equal(Engine.shouldUpdatePickOrder(false, { side: 'ally', kind: 'ban' }), true);
+  assert.equal(Engine.shouldUpdatePickOrder(false, null), true);
+  assert.equal(Engine.shouldUpdatePickOrder(true, { side: 'ally', kind: 'pick' }), false);
+  assert.equal(Engine.shouldUpdatePickOrder(true, { side: 'enemy', kind: 'pick' }), true);
+  assert.equal(Engine.shouldUpdatePickOrder(true, { side: 'enemy', kind: 'ban' }), false);
+  assert.equal(Engine.shouldUpdatePickOrder(true, null), false);
+  assert.equal(Engine.shouldUpdatePickOrderForHover({ side: 'ally', kind: 'pick' }, true), true);
+  assert.equal(Engine.shouldUpdatePickOrderForHover({ side: 'ally', kind: 'pick' }, false), false);
+  assert.equal(Engine.shouldUpdatePickOrderForHover({ side: 'enemy', kind: 'pick' }, true), false);
+
+  const frozen = Engine.stabilizePickOrder([1, 2], { order: [2, 1], since: 100 }, [2, 1], 500, 1500, false);
+  assert.deepEqual(frozen, { order: [1, 2], pending: null });
+  assert.deepEqual(Engine.stabilizePickOrder(null, null, [2, 1], 500, 1500, false), { order: [], pending: null });
 });
