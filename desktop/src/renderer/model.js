@@ -794,9 +794,69 @@
   // Older engine (recommend.js) takes allies as champion ids
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
+  // Weights for hybrid ensemble: 50% learned ML model, 50% external layer (MetaSRC)
+  const W_MODEL = 0.5;
+  const W_METASRC = 0.5;
+
+  function blendScore(modelScore, metaScore) {
+    if (modelScore === null || modelScore === undefined) return metaScore;
+    if (metaScore === null || metaScore === undefined) return modelScore;
+    return Math.round(W_MODEL * modelScore + W_METASRC * metaScore);
+  }
+
+  function hybridEvaluate(args) {
+    const hasModel = has(args.model);
+    const hasStats = Boolean(args.stats?.meta?.length);
+
+    if (hasModel && hasStats && root.Recommend) {
+      const modelRes = evaluate(args);
+      const metaRes = root.Recommend.evaluate(legacy(args));
+      if (!modelRes) return metaRes;
+      if (!metaRes) return modelRes;
+      return {
+        ...modelRes,
+        score: blendScore(modelRes.score, metaRes.score),
+        metaSrcScore: metaRes.score,
+        modelScore: modelRes.score,
+        allies: modelRes.allies?.length ? modelRes.allies : metaRes.allies,
+        enemies: modelRes.enemies?.length ? modelRes.enemies : metaRes.enemies,
+      };
+    }
+    return hasModel ? evaluate(args) : (root.Recommend ? root.Recommend.evaluate(legacy(args)) : null);
+  }
+
+  function hybridRecommend(args) {
+    const hasModel = has(args.model);
+    const hasStats = Boolean(args.stats?.meta?.length);
+
+    if (hasModel && hasStats && root.Recommend) {
+      const modelList = recommend(args);
+      const metaList = root.Recommend.recommend(legacy(args));
+      const metaMap = new Map(metaList.map((m) => [`${m.championId}:${m.role}`, m]));
+
+      const blended = modelList.map((m) => {
+        const metaItem = metaMap.get(`${m.championId}:${m.role}`);
+        if (!metaItem) return m;
+        const finalScore = blendScore(m.score, metaItem.score);
+        return {
+          ...m,
+          score: finalScore,
+          metaSrcScore: metaItem.score,
+          modelScore: m.score,
+          allies: m.allies?.length ? m.allies : metaItem.allies,
+          enemies: m.enemies?.length ? m.enemies : metaItem.enemies,
+        };
+      });
+
+      blended.sort((a, b) => b.score - a.score);
+      return args.limit ? blended.slice(0, args.limit) : blended;
+    }
+    return hasModel ? recommend(args) : (root.Recommend ? root.Recommend.recommend(legacy(args)) : []);
+  }
+
   const Engine = {
-    recommend: (args) => (has(args.model) ? recommend(args) : root.Recommend.recommend(legacy(args))),
-    evaluate: (args) => (has(args.model) ? evaluate(args) : root.Recommend.evaluate(legacy(args))),
+    recommend: hybridRecommend,
+    evaluate: hybridEvaluate,
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),
     guessRoles: (args) => (has(args.model) && args.players.length === 5 ? guessRoles(args) : null),

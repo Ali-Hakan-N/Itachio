@@ -319,3 +319,25 @@ test('personal layer for a draft: season and patch always, team only with the sa
   assert.equal(personalFor(stats, 'a').season, st.season);
   assert.equal(personalFor(stats, 'z'), null);
 });
+
+test('hybrid ensemble blends model score and external stats layer (50/50)', () => {
+  const stats = {
+    meta: [
+      { champion_id: 1, role: 'top', score: 80 },
+      { champion_id: 2, role: 'top', score: 40 },
+    ],
+    synergy: [],
+    matchup: [],
+  };
+  // Evaluate top champion 1: model gives ~70+, stats gives 80 -> blended ~75
+  const ev = Engine.evaluate({ stats, model, championId: 1, role: 'top' });
+  assert.ok(ev);
+  assert.ok(ev.metaSrcScore === 80, `metaSrcScore was ${ev.metaSrcScore}`);
+  assert.equal(ev.score, Math.round(0.5 * ev.modelScore + 0.5 * ev.metaSrcScore));
+
+  // Recommend blends and sorts
+  const recs = Engine.recommend({ stats, model, role: 'top', limit: 2 });
+  assert.ok(recs.length > 0);
+  assert.equal(recs[0].championId, 1);
+  assert.equal(recs[0].score, Math.round(0.5 * recs[0].modelScore + 0.5 * recs[0].metaSrcScore));
+});

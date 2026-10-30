@@ -6,6 +6,8 @@
   "scripts": {
     "collect": "node --env-file=.env src/run.js",
     "collect:dry": "node --env-file=.env src/run.js --dry-run",
+    "collect:metasrc": "node --env-file=.env src/run.js --source metasrc",
+    "collect:metasrc:dry": "node --env-file=.env src/run.js --source metasrc --dry-run",
     "train": "node --env-file=.env src/train-model.js",
     "players": "node --env-file=.env src/update-players.js",
     "test": "node --test test/*.test.js"
@@ -14,6 +16,9 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.118.0"
+    "@supabase/supabase-js": "^2.118.0",
+    "puppeteer-core": "^25.16.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
