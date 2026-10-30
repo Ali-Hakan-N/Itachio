@@ -501,11 +501,8 @@ function pickOrderHtml(d, blocked) {
     return { p, championId, risk: ev?.counterRisk ?? 0 };
   });
   const suggested = Engine.orderPickSuggestions(rated);
-  const trades = [];
-  rated.forEach((r, i) => {
-    const s2 = suggested[i];
-    if (s2.p !== r.p && !trades.some((t) => t.includes(r.p) || t.includes(s2.p))) trades.push([r.p, s2.p]);
-  });
+  const simultaneous = d.turn?.side === 'ally' && d.turn.kind === 'pick' ? d.turn.cellIds : [];
+  const trades = Engine.pickOrderTrades(rated, suggested, simultaneous);
   const riskText = (n) => (n > 0 ? `<b class="down">−${n}</b>` : n < 0 ? `<b class="up">+${-n}</b>` : '<b>0</b>');
   return `
     <div class="pick-order">

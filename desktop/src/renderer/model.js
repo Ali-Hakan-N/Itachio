@@ -539,6 +539,18 @@
     });
   }
 
+  function pickOrderTrades(rated, suggested, simultaneousCellIds = []) {
+    const simultaneous = new Set(simultaneousCellIds);
+    const trades = [];
+    rated.forEach((r, i) => {
+      const next = suggested[i];
+      if (!next || next.p === r.p) return;
+      if (simultaneous.has(r.p.cellId) && simultaneous.has(next.p.cellId)) return;
+      if (!trades.some((trade) => trade.includes(r.p) || trade.includes(next.p))) trades.push([r.p, next.p]);
+    });
+    return trades.slice(0, 2);
+  }
+
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
   function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10, personal = null }) {
     const ix = index(model);
@@ -804,8 +816,8 @@
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
   // Dynamic confidence-based weighting:
-  // Model weight is bounded between 0.0 and 0.40, scaling with how proven each layer is.
-  // MetaSRC gets the remainder (60% to 100%).
+  // Model weight is bounded between 0.0 and 0.50, scaling with how proven each layer is.
+  // MetaSRC gets the remainder (50% to 100%).
   function modelConfidence(m) {
     if (!m) return 0;
     // 1. Meta / Strength confidence: based on matches collected, reaches 1.0 at 20,000 matches
@@ -826,8 +838,8 @@
 
   function getWeights(m) {
     const conf = modelConfidence(m);
-    // Model weight is bounded between 0.0 and 0.40
-    const wModel = Math.max(0.0, Math.min(0.40, 0.40 * conf));
+    // Model weight is bounded between 0.0 and 0.50
+    const wModel = Math.max(0.0, Math.min(0.50, 0.50 * conf));
     const wMeta = 1.0 - wModel;
     return { wModel, wMeta, conf };
   }
@@ -897,6 +909,7 @@
     recommend: hybridRecommend,
     evaluate: hybridEvaluate,
     orderPickSuggestions,
+    pickOrderTrades,
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),
     guessRoles: (args) => (has(args.model) && args.players.length === 5 ? guessRoles(args) : null),
