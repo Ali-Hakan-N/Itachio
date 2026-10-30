@@ -557,16 +557,25 @@
     });
   }
 
-  function pickOrderTrades(rated, suggested, simultaneousCellIds = []) {
-    const simultaneous = new Set(simultaneousCellIds);
+  function pickOrderTrades(rated, suggested, simultaneousPickGroups = []) {
+    const simultaneousGroup = new Map();
+    simultaneousPickGroups.forEach((group, i) => group.forEach((cellId) => simultaneousGroup.set(cellId, i)));
     const trades = [];
     rated.forEach((r, i) => {
       const next = suggested[i];
       if (!next || next.p === r.p) return;
-      if (simultaneous.has(r.p.cellId) && simultaneous.has(next.p.cellId)) return;
+      if (simultaneousGroup.has(r.p.cellId) && simultaneousGroup.get(r.p.cellId) === simultaneousGroup.get(next.p.cellId)) return;
       if (!trades.some((trade) => trade.includes(r.p) || trade.includes(next.p))) trades.push([r.p, next.p]);
     });
     return trades.slice(0, 2);
+  }
+
+  function stabilizePickOrder(previous, pending, desired, now, delay = 1500) {
+    const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((id, i) => id === b[i]);
+    if (!Array.isArray(previous) || !previous.length || same(previous, desired)) return { order: desired, pending: null };
+    if (!pending || !same(pending.order, desired)) return { order: previous, pending: { order: desired, since: now } };
+    if (now - pending.since >= delay) return { order: desired, pending: null };
+    return { order: previous, pending };
   }
 
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
@@ -931,6 +940,7 @@
     evaluate: hybridEvaluate,
     orderPickSuggestions,
     pickOrderTrades,
+    stabilizePickOrder,
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),
     guessRoles: (args) => (has(args.model) && args.players.length === 5 ? guessRoles(args) : null),

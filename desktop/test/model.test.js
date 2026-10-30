@@ -392,5 +392,21 @@ test('pick order does not suggest a trade between simultaneous picks', () => {
   ];
   const suggested = [rated[1], rated[0]];
 
-  assert.deepEqual(Engine.pickOrderTrades(rated, suggested, [2, 3]), []);
+  assert.deepEqual(Engine.pickOrderTrades(rated, suggested, [[2, 3]]), []);
+});
+
+test('pick order waits for a new ordering to remain stable before applying it', () => {
+  const first = Engine.stabilizePickOrder(null, null, [2, 3, 4], 0);
+  assert.deepEqual(first, { order: [2, 3, 4], pending: null });
+
+  const change = Engine.stabilizePickOrder(first.order, null, [3, 2, 4], 100);
+  assert.deepEqual(change.order, [2, 3, 4]);
+  assert.deepEqual(change.pending, { order: [3, 2, 4], since: 100 });
+  assert.deepEqual(Engine.stabilizePickOrder(change.order, change.pending, [3, 2, 4], 1400), change);
+  assert.deepEqual(Engine.stabilizePickOrder(change.order, change.pending, [3, 2, 4], 1600), {
+    order: [3, 2, 4], pending: null,
+  });
+  assert.deepEqual(Engine.stabilizePickOrder(change.order, change.pending, [2, 3, 4], 500), {
+    order: [2, 3, 4], pending: null,
+  });
 });

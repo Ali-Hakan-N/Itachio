@@ -101,3 +101,19 @@ test('pick numbers stay the same when the second of two simultaneous picks locks
   assert.deepEqual(early.map((a) => [a.seq, a.championId]), [[2, 53]]);
   assert.deepEqual(both.map((a) => [a.seq, a.championId]), [[1, 143], [2, 53]]);
 });
+
+test('exposes future simultaneous ally picks before their turn becomes active', () => {
+  const act = (id, cell) => ({
+    id, actorCellId: cell, type: 'pick', isAllyAction: true, isInProgress: false,
+    championId: 0, completed: false,
+  });
+  const session = {
+    gameId: 2, localPlayerCellId: 0,
+    myTeam: [0, 1, 2].map((cellId) => ({ cellId, team: 1 })), theirTeam: [],
+    actions: [[act(1, 0), act(2, 1)], [act(3, 2)]],
+  };
+
+  const draft = normalizeSession(session);
+  assert.equal(draft.turn, null);
+  assert.deepEqual(draft.allyPickGroups, [[0, 1]]);
+});

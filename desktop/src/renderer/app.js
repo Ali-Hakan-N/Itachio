@@ -488,6 +488,35 @@ function usualChampion(p, blocked) {
   return best ? best.championId : 0;
 }
 
+const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null };
+const PICK_ORDER_STABILITY_MS = 1500;
+
+function stabilizedPickOrder(d, rated, suggested) {
+  if (pickOrderUi.gameId !== d.gameId) {
+    clearTimeout(pickOrderUi.timer);
+    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null });
+  }
+  const desired = suggested.map((r) => r.p.cellId);
+  const result = Engine.stabilizePickOrder(pickOrderUi.order, pickOrderUi.pending, desired, Date.now(), PICK_ORDER_STABILITY_MS);
+  pickOrderUi.order = result.order;
+  pickOrderUi.pending = result.pending;
+  const pendingKey = result.pending?.order.join(',') || null;
+  if (pendingKey !== pickOrderUi.pendingKey) {
+    clearTimeout(pickOrderUi.timer);
+    pickOrderUi.timer = null;
+    pickOrderUi.pendingKey = pendingKey;
+    if (pendingKey) {
+      const gameId = d.gameId;
+      pickOrderUi.timer = setTimeout(() => {
+        pickOrderUi.timer = null;
+        if (pickOrderUi.gameId === gameId && screen === 'main') renderMain();
+      }, PICK_ORDER_STABILITY_MS);
+    }
+  }
+  const byCell = new Map(rated.map((r) => [r.p.cellId, r]));
+  return pickOrderUi.order.map((cellId) => byCell.get(cellId)).filter(Boolean);
+}
+
 function pickOrderHtml(d, blocked) {
   const byCell = new Map(d.ally.map((p) => [p.cellId, p]));
   const remaining = (d.allyPickOrder || []).map((c) => byCell.get(c)).filter((p) => p && !p.locked && p.position);
@@ -501,13 +530,12 @@ function pickOrderHtml(d, blocked) {
     return { p, championId, risk: ev?.counterRisk ?? 0, matchup: ev?.matchup ?? 0 };
   });
   const enemyPicks = d.enemy.filter((p) => p.locked && p.championId);
-  const suggested = Engine.orderPickSuggestions(rated, enemyPicks, S.model);
-  const simultaneous = d.turn?.side === 'ally' && d.turn.kind === 'pick' ? d.turn.cellIds : [];
-  const trades = Engine.pickOrderTrades(rated, suggested, simultaneous);
+  const suggested = stabilizedPickOrder(d, rated, Engine.orderPickSuggestions(rated, enemyPicks, S.model));
+  const trades = Engine.pickOrderTrades(rated, suggested, d.allyPickGroups || []);
   const riskText = (n) => (n > 0 ? `<b class="down">−${n}</b>` : n < 0 ? `<b class="up">+${-n}</b>` : '<b>0</b>');
   return `
     <div class="pick-order">
-      <h3 class="sub">Pick Order</h3>
+      <h3 class="sub" title="Champion icon shows the player's hover, or most-played champion in that role">Pick Order</h3>
       <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk shown; order also saves solo lanes for CT opportunities">${riskText(r.risk)}</span></li>`).join('')}</ol>
       ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
     </div>`;

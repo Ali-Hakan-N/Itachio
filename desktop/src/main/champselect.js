@@ -11,7 +11,7 @@ function flatActions(session) {
  * @returns {{
  *   gameId: number|null, ourSide: 'blue'|'red', phase: string, endsAt: number|null,
  *   localCellId: number, isOurTurn: boolean, myPickActionId: number|null, myBanActionId: number|null,
- *   banHoverId: number, allyPickOrder: number[], turn: null|{side:'ally'|'enemy', kind:'ban'|'pick', cellIds:number[]},
+ *   banHoverId: number, allyPickOrder: number[], allyPickGroups: number[][], turn: null|{side:'ally'|'enemy', kind:'ban'|'pick', cellIds:number[]},
  *   ally: Array<{cellId:number, championId:number, hoverId:number, locked:boolean, position:string, puuid:string, isLocal:boolean}>,
  *   enemy: Array<{cellId:number, championId:number, locked:boolean, position:string}>,
  *   allyBans: number[], enemyBans: number[],
@@ -26,6 +26,12 @@ function normalizeSession(session, now = Date.now()) {
 
   const allyTeamNo = myTeam[0]?.team ?? (localCellId >= 0 && localCellId < 5 ? 1 : 2);
   const ourSide = allyTeamNo === 2 ? 'red' : 'blue';
+  // Action arrays describe each pick round, including future rounds not yet in progress.
+  const allyPickGroups = (session.actions || [])
+    .map((group) => (Array.isArray(group) ? group : [group])
+      .filter((a) => a?.type === 'pick' && a.isAllyAction)
+      .map((a) => a.actorCellId))
+    .filter((group) => group.length > 1);
 
   const pickDone = new Map(); // cellId -> championId
   for (const a of actions) {
@@ -104,6 +110,7 @@ function normalizeSession(session, now = Date.now()) {
     myBanActionId: myBan ? myBan.id : null,
     // Our team's cells in the order they pick
     allyPickOrder: [...new Set(actions.filter((a) => a.type === 'pick' && a.isAllyAction).map((a) => a.actorCellId))],
+    allyPickGroups,
     banHoverId: myBan && myBan.championId > 0 ? myBan.championId : 0,
     turn,
     ally,
