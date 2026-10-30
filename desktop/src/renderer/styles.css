@@ -74,12 +74,6 @@ h3 { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: upp
 .tabs button:hover { color: var(--ink); }
 .tabs button.active { color: var(--bg); background: var(--ink); font-weight: 600; }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-.icon-btn {
-  display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px;
-  background: var(--bg-2); border: 1px solid var(--line); color: var(--muted); transition: color 0.15s, border-color 0.15s, transform 0.3s;
-}
-.icon-btn svg { width: 16px; height: 16px; fill: currentColor; }
-.icon-btn:hover { color: var(--ink); border-color: var(--line-2); transform: rotate(45deg); }
 .status {
   display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px;
   padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-2);
@@ -352,21 +346,6 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .badge.warn, .slot-score small.warn { color: var(--warn); border-color: rgba(243, 182, 63, 0.45); }
 .badge.good { color: var(--cue); border-color: rgba(47, 211, 192, 0.45); }
 
-/* One icon per recommendation for its notes (off-role, low data, you, counter risk, safe blind) */
-.note-icon { position: relative; display: inline-flex; color: var(--faint); cursor: help; }
-.note-icon svg { width: 15px; height: 15px; fill: currentColor; }
-.note-icon.warn { color: var(--warn); }
-.note-icon.good { color: var(--cue); }
-.note-icon .tip {
-  position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%); z-index: 30;
-  display: none; flex-direction: column; gap: 8px; width: 250px; padding: 10px 12px;
-  background: var(--panel-3); border: 1px solid var(--line-2); border-radius: var(--radius-m); box-shadow: var(--shadow);
-  font-size: 12px; font-weight: 400; color: var(--muted); line-height: 1.4; text-align: left; white-space: normal;
-}
-.note-icon:hover .tip { display: flex; }
-.tip-row b { display: block; color: var(--ink); font-weight: 600; margin-bottom: 1px; }
-.tip-row.warn b { color: var(--warn); }
-.tip-row.good b { color: var(--cue); }
 
 /* ---------- Colored scores ---------- */
 .sc { font-family: var(--display); font-weight: 700; }
@@ -611,16 +590,6 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .switch:checked { background: var(--cue-dim); border-color: var(--cue); }
 .switch:checked::after { transform: translateX(18px); background: var(--cue); }
 
-/* ---------- Team: roles ---------- */
-.roles { display: flex; flex-wrap: wrap; gap: 6px; }
-.role-chip {
-  font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
-  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--muted);
-}
-button.role-chip:hover { color: var(--ink); border-color: var(--muted); }
-.role-chip.on { color: var(--cue); background: var(--cue-dim); border-color: rgba(47, 211, 192, 0.5); }
-.member.mine { border-color: rgba(47, 211, 192, 0.25); }
-
 /* ---------- Champions: sources, roles to learn ---------- */
 .source-note { margin: -4px 0 14px; }
 .learn-line { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
@@ -650,3 +619,73 @@ button.role-chip:hover { color: var(--ink); border-color: var(--muted); }
 .item-group > span { display: flex; gap: 3px; }
 .sit-note { margin: 8px 0 0; }
 .sit-note b { color: var(--ink); font-weight: 600; }
+
+/* ---------- Options button: a red seal with the three tomoe ---------- */
+.opt-btn {
+  display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border-radius: 9px;
+  background: radial-gradient(circle at 50% 40%, rgba(200, 50, 43, 0.28), rgba(200, 50, 43, 0.08));
+  border: 1px solid rgba(200, 50, 43, 0.55); color: #e8524a;
+  box-shadow: 0 0 0 3px rgba(200, 50, 43, 0.1), 0 0 14px rgba(200, 50, 43, 0.22);
+  transition: box-shadow 0.2s, border-color 0.2s, color 0.2s;
+}
+.opt-btn svg { width: 24px; height: 24px; fill: currentColor; transition: transform 0.6s cubic-bezier(0.3, 1.4, 0.5, 1); }
+.opt-btn .tomoe-ring { fill: none; stroke: currentColor; stroke-width: 1.2; opacity: 0.55; }
+.opt-btn:hover { color: #ff6b62; border-color: #e8524a; box-shadow: 0 0 0 3px rgba(200, 50, 43, 0.18), 0 0 22px rgba(200, 50, 43, 0.45); }
+.opt-btn:hover svg { transform: rotate(120deg); }
+
+/* ---------- Update overlay: the seal ---------- */
+.seal.big { width: 56px; height: 56px; border-radius: 12px; animation: seal-pulse 1.8s ease-in-out infinite; }
+@keyframes seal-pulse { 50% { box-shadow: 0 0 0 6px rgba(200, 50, 43, 0.2), 0 0 40px rgba(200, 50, 43, 0.55); } }
+@media (prefers-reduced-motion: reduce) { .seal.big { animation: none; } }
+
+/* ---------- Team: roles ---------- */
+.roles-label { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.roles-label small { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); margin-left: 4px; }
+.role-tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.role-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 9px 2px 7px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-m); color: var(--faint);
+  font-size: 11px; font-weight: 600; transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
+}
+.role-tile svg { width: 22px; height: 22px; fill: currentColor; stroke: currentColor; stroke-width: 0; }
+.role-tile svg .faint, .role-tag svg .faint { opacity: 0.3; stroke-width: 1.2; }
+.role-tile:hover { color: var(--ink); border-color: var(--line-2); transform: translateY(-1px); }
+.role-tile.on {
+  color: var(--cue); border-color: rgba(47, 211, 192, 0.55);
+  background: linear-gradient(180deg, rgba(47, 211, 192, 0.16), rgba(47, 211, 192, 0.04));
+  box-shadow: 0 0 0 1px rgba(47, 211, 192, 0.15) inset, 0 6px 18px rgba(47, 211, 192, 0.12);
+}
+.role-tile.on span { color: var(--ink); }
+.role-tile:disabled { opacity: 0.6; }
+.role-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.role-tag {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 7px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; color: var(--cue); background: var(--cue-dim); border: 1px solid rgba(47, 211, 192, 0.35);
+}
+.role-tag svg { width: 14px; height: 14px; fill: currentColor; stroke: currentColor; stroke-width: 0; }
+.member.mine { border-color: rgba(47, 211, 192, 0.25); }
+
+/* ---------- Game plan ---------- */
+.plan-grid { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 10px; }
+.plan-block { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); }
+.plan-block > small { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin-bottom: 2px; }
+.prow { display: grid; grid-template-columns: 92px 1fr 56px; align-items: center; gap: 8px; font-size: 12.5px; min-height: 24px; }
+.plabel { color: var(--muted); font-weight: 600; }
+.pvs { display: flex; gap: 2px; }
+.pvs .champ.s { width: 22px; height: 22px; }
+.lanes-block .prow { grid-template-columns: 56px 50px 54px 1fr 56px; }
+.pcall { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--faint); }
+.pcall.ahead { color: var(--cue); }
+.pcall.behind { color: var(--red); }
+.pbar { position: relative; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.05); }
+.pbar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--line-2); }
+.pbar i { position: absolute; top: 0; height: 100%; border-radius: 3px; background: var(--faint); }
+.pbar i.pos { left: 50%; }
+.pbar i.neg { right: 50%; }
+.pbar i.up { background: linear-gradient(90deg, rgba(47, 211, 192, 0.4), var(--cue)); }
+.pbar i.down { background: linear-gradient(270deg, rgba(239, 84, 88, 0.4), var(--red)); }
+.pval { text-align: right; font-weight: 700; color: var(--muted); }
+.pval.up, .hint b.up { color: var(--cue); }
+.pval.down, .hint b.down { color: var(--red); }
+.plan-advice { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.plan-advice li::marker { color: var(--gold); }

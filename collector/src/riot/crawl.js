@@ -10,7 +10,6 @@ const { parseMatch } = require('./parse');
 const { RiotKeyError } = require('./client');
 
 const IDS_PER_PLAYER = 100; // the most match-v5 returns per request
-const TIMELINE_EVERY = 8; // one match in this many is also read with its timeline (starting items)
 
 // "16.9" < "16.21"
 const olderPatch = (a, b) => {
@@ -92,7 +91,7 @@ async function crawl(o) {
 
 async function crawlRegion(o) {
   const { api, region, log } = o;
-  const stats = { region, matches: 0, read: 0, otherPatch: 0, skipped: 0, byQueue: {} };
+  const stats = { region, matches: 0, otherPatch: 0, skipped: 0, byQueue: {} };
   const seen = new Set();
   let buffer = [];
   const flush = async () => {
@@ -140,17 +139,7 @@ async function crawlRegion(o) {
           }
           for (const id of await o.filterUnseen(fresh)) {
             if (!timeLeft() || full()) break;
-            const raw = await api.get(region, `/lol/match/v5/matches/${id}`);
-            let parsed = parseMatch(raw);
-            // One match in TIMELINE_EVERY of the patch is also read with its timeline, for
-            // starting items (a second request, so not every match)
-            if (parsed && parsed.patch === o.patch && ++stats.read % TIMELINE_EVERY === 0) {
-              const timeline = await api.get(region, `/lol/match/v5/matches/${id}/timeline`).catch((err) => {
-                if (err instanceof RiotKeyError) throw err;
-                return null;
-              });
-              if (timeline) parsed = parseMatch(raw, timeline) || parsed;
-            }
+            const parsed = parseMatch(await api.get(region, `/lol/match/v5/matches/${id}`));
             if (!parsed) stats.skipped++;
             else if (parsed.patch !== o.patch) {
               stats.otherPatch++;

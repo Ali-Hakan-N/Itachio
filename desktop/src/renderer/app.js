@@ -9,6 +9,15 @@ const ROLES = [
   ['utility', 'Support'],
 ];
 const ROLE_NAME = Object.fromEntries(ROLES);
+// Lane icons: the map with the role's lane (or a fang for jungle, a shield for support)
+const ROLE_ICON = {
+  top: '<path d="M1 1h11L9 4H4v5l-3 3z"/><path class="faint" d="M15 15H6l2-2h5V8l2-2z"/>',
+  jungle: '<path d="M8 1c.6 2.6 3.8 4.6 3.8 8.6A3.8 3.8 0 0 1 8 13.4a3.8 3.8 0 0 1-3.8-3.8C4.2 5.6 7.4 3.6 8 1z"/><path class="faint" d="M3 15l2.4-3.4M13 15l-2.4-3.4"/>',
+  middle: '<path d="M12 1h3v3L4 15H1v-3z"/><path class="faint" d="M1 1h5L1 6zM15 15h-5l5-5z"/>',
+  bottom: '<path d="M15 15H4l3-3h5V7l3-3z"/><path class="faint" d="M1 1h9L8 3H3v5L1 10z"/>',
+  utility: '<path d="M8 1.5l5.8 2.2v4.1c0 3.4-2.4 5.8-5.8 6.7-3.4-.9-5.8-3.3-5.8-6.7V3.7z"/><path class="faint" d="M8 5v6M5 8h6"/>',
+};
+const roleIcon = (r) => `<svg viewBox="0 0 16 16" aria-hidden="true">${ROLE_ICON[r] || ''}</svg>`;
 
 const PHASE_TEXT = {
   None: 'Idle',
@@ -105,7 +114,7 @@ function renderUpdate() {
     box.innerHTML = `
       <div class="update-overlay">
         <div class="update-card">
-          <span class="logo big" aria-hidden="true"></span>
+          <img class="seal big" src="logo.png" alt="" aria-hidden="true">
           <h2>Installing Update</h2>
           <p>The app restarts in a moment.</p>
           ${bar('')}
@@ -342,59 +351,12 @@ function enemyContext(d, exceptCell) {
 }
 
 // 50 is an average champion; 67 is one standard deviation above it, 80 two
-// Recommendations look ahead (model.js); a pick losing (or gaining) this many points to the enemy's answers is flagged
-const COUNTER_RISK_BADGE = 3;
-// The player's own layer (their games on the champion) is shown from this many points
-const PERSONAL_BADGE = 2;
 // Team members on our side of the draft (their player ids, me included)
 const draftLineup = (d) => (d?.ally || []).map((p) => (p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id)).filter(Boolean);
 // Personal layer of a player on the board, when they are in the team and analyzed: their
 // season and patch statistics, and those with the team members on our side now
 const personalOf = (playerId, d) => Engine.personalFor(S.playerStats, playerId, draftLineup(d));
 const tierOf = (s) => (s >= 80 ? 'S' : s >= 67 ? 'A' : s >= 55 ? 'B' : s >= 40 ? 'C' : 'D');
-
-// Notes on a recommendation, shown together in one icon's tooltip: [{ kind, title, text }]
-// Champions this high in their role's pick rates are flagged as meta (information only)
-const META_RANK = 5;
-
-function recNotes(r) {
-  const notes = [];
-  if (r.popRank && r.popRank <= META_RANK) {
-    notes.push({
-      kind: '',
-      title: `Meta: #${r.popRank} Most Picked`,
-      text: `Picked by ${(r.pickRate * 100).toFixed(1)}% of teams in this role. Popularity does not count in the score, which is about winning.`,
-    });
-  }
-  if (r.offRole) notes.push({ kind: 'warn', title: 'Off-role', text: 'Rarely played in this role.' });
-  if (r.unsure && !r.offRole) notes.push({ kind: '', title: 'Low Data', text: `Few games behind it: rough estimate, ±${r.uncertainty} points.` });
-  if (Math.abs(r.personal || 0) >= PERSONAL_BADGE) {
-    notes.push({
-      kind: r.personal > 0 ? 'good' : 'warn',
-      title: `You ${r.personal > 0 ? '+' : '−'}${Math.abs(r.personal)}`,
-      text: r.personalGames
-        ? `From your ${r.personalGames} games on it (season, patch and with this five), compared with how you usually play.`
-        : 'You have not played it: champions you rarely play go worse for you.',
-    });
-  }
-  if (r.counterRisk >= COUNTER_RISK_BADGE) {
-    notes.push({ kind: 'warn', title: `Counter Risk −${r.counterRisk}`, text: 'Easy to answer: expected loss once the enemy picks in the roles they have open.' });
-  }
-  if (r.counterRisk <= -COUNTER_RISK_BADGE) {
-    notes.push({ kind: 'good', title: `Safe Blind +${-r.counterRisk}`, text: 'What the enemy usually picks in their open roles does badly against it.' });
-  }
-  return notes;
-}
-
-function notesIcon(notes) {
-  if (!notes.length) return '';
-  const kind = notes.some((n) => n.kind === 'warn') ? 'warn' : notes.every((n) => n.kind === 'good') ? 'good' : '';
-  return `
-    <span class="note-icon ${kind}" aria-label="${esc(notes.map((n) => n.title).join(', '))}">
-      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm0 5.25a.75.75 0 0 0-.75.75v3.75a.75.75 0 0 0 1.5 0V7.5A.75.75 0 0 0 8 6.75Zm0-2.5a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8Z"/></svg>
-      <span class="tip">${notes.map((n) => `<span class="tip-row ${n.kind}"><b>${esc(n.title)}</b>${esc(n.text)}</span>`).join('')}</span>
-    </span>`;
-}
 
 function recRow(r, i, { canHover, hoverId, rank }) {
   const tier = tierOf(r.score);
@@ -407,7 +369,6 @@ function recRow(r, i, { canHover, hoverId, rank }) {
       <span class="info">
         <span class="name">${esc(champName(r.championId))}
           <span class="tier t-${tier}">${tier}</span>
-          ${notesIcon(recNotes(r))}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
       </span>
@@ -501,35 +462,96 @@ function pickOrderHtml(d, blocked) {
     </div>`;
 }
 
-// The game plan once every champion is locked (it stays through the game)
+// The game plan once every champion is locked (it stays through the game). Every number is
+// the model's, in percentage points of win chance, so they can be compared; the advice is
+// read off the same numbers with the same threshold (plan.edge), so it never says
+// something the numbers do not show.
+const signedPct = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}%`;
+const pctClass = (v, edge) => (v >= edge ? 'up' : v <= -edge ? 'down' : '');
+const PLAN_PARTS = [
+  ['champions', 'Champions', 'Strength of each pick in its role'],
+  ['synergy', 'Synergy', 'Pairs on the same team, both teams'],
+  ['matchups', 'Matchups', 'Every champion against every enemy'],
+  ['composition', 'Composition', 'Team styles and how they meet'],
+];
+
+function planAdvice(plan) {
+  const E = plan.edge;
+  const s = (v) => (v >= E ? 1 : v <= -E ? -1 : 0);
+  const early = signedPct(plan.early);
+  const later = signedPct(plan.later);
+  const timing = {
+    '1:1': `Ahead early (${early}) and later (${later}): press every lead, the draft does not fall off.`,
+    '1:0': `Your edge is early (${early}): force fights and objectives before 20 minutes; after that the draft is even.`,
+    '1:-1': `Front-loaded: ahead early (${early}), the enemy draft is better later (${later}). Turn lane leads into towers and dragons and close the game before it scales.`,
+    '0:1': `Your edge comes later (${later}): an even early game is enough, so skip risky early fights.`,
+    '-1:1': `Back-loaded: behind early (${early}), ahead later (${later}). Give up contested early objectives, farm safely and fight once your items are in.`,
+    '-1:0': `The enemy is stronger early (${early}): play safe and trade objectives until laning is over; later the draft is even.`,
+    '0:-1': `Even early, the enemy draft is better later (${later}): take what the early game gives and end before it scales.`,
+    '-1:-1': `The enemy draft is ahead early (${early}) and later (${later}): play for picks and their mistakes, avoid even fights.`,
+    '0:0': 'Even early and later: the game comes down to how each lane plays its matchup.',
+  }[`${s(plan.early)}:${s(plan.later)}`];
+  const out = [timing];
+  const lane = (role) => plan.lanes.find((l) => l && l.role === role);
+  if (plan.focus) {
+    const l = lane(plan.focus);
+    out.push(plan.focus === 'jungle'
+      ? `Your jungle matchup is the strongest (${signedPct(l.pct)}): invade and contest the enemy jungle early.`
+      : `${ROLE_NAME[plan.focus]} is your strongest lane (${signedPct(l.pct)}): path and roam toward it early and take the objectives on its side.`);
+  }
+  if (plan.weak) {
+    const l = lane(plan.weak);
+    out.push(plan.weak === 'jungle'
+      ? `Your jungle matchup is the weakest (${signedPct(l.pct)}): avoid invades, ward your own jungle and track the enemy jungler.`
+      : `${ROLE_NAME[plan.weak]} is your weakest lane (${signedPct(l.pct)}): play it safe with vision and expect the enemy jungler there.`);
+  }
+  if (plan.objectives >= E / 2) out.push(`Your draft takes first objectives better (${signedPct(plan.objectives)}): contest the first dragon, grubs and herald.`);
+  if (plan.objectives <= -E / 2) out.push(`The enemy draft takes first objectives better (${signedPct(plan.objectives)}): trade them across the map instead of contesting with even numbers.`);
+  if (plan.damage) {
+    const [low, high] = S.damage?.thresholds || [0.4, 0.6];
+    const m = Math.round(plan.damage.theirs * 100);
+    out.push(plan.damage.theirs >= high
+      ? `Enemy damage is ${m}% magic: magic resist pays off.`
+      : plan.damage.theirs <= low
+        ? `Enemy damage is ${100 - m}% physical: armor pays off.`
+        : `Enemy damage is mixed (${m}% magic): spread your resistances.`);
+  }
+  return out;
+}
+
 function gamePlanHtml(d) {
   const allies = d.ally.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
   const enemies = d.enemy.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
   if (allies.length < 5 || enemies.length < 5) return '';
   const plan = Engine.gamePlan({ model: S.model, allies, enemies, damage: S.damage });
   if (!plan) return '';
-  const name = (id) => esc(champName(id));
-  const call = { ahead: '<b class="up">Ahead</b>', even: '<b>Even</b>', behind: '<b class="down">Behind</b>' };
-  const lanes = plan.lanes.filter(Boolean).map((l) => `<li><span>${ROLE_NAME[l.role]}</span>${call[l.call]}<small>${name(l.ours)} vs ${name(l.theirs)}</small></li>`).join('');
-  const early = {
-    ours: 'Your team is stronger in the first minutes: build leads early and turn them into objectives before the enemy scales.',
-    theirs: 'The enemy is stronger in the first minutes: play safe, trade lanes when behind and fight once your items are in.',
-    even: 'The lanes are even overall: the game is decided by what each lane makes of its matchup.',
-  }[plan.early];
-  const focus = plan.focus ? `Play around <b>${ROLE_NAME[plan.focus]}</b> early: it is your strongest lane.` : '';
-  // The same thresholds the builds use (thirds of all teams), so plan and build agree
-  const [low, high] = S.damage?.thresholds || [0.4, 0.6];
-  const dmg = (share) => (share >= high ? 'mostly magic' : share <= low ? 'mostly physical' : 'mixed');
-  const damage = plan.damage
-    ? `Enemy damage is <b>${dmg(plan.damage.theirs)}</b> (${Math.round(plan.damage.theirs * 100)}% magic)${plan.damage.theirs >= high ? ': magic resist pays off.' : plan.damage.theirs <= low ? ': armor pays off.' : '.'} Yours is ${dmg(plan.damage.ours)}.`
-    : '';
+  const E = plan.edge;
+  // Bars from the middle: right for us, left for them; full width at the largest value (at least 5 points)
+  const values = [...Object.values(plan.parts), ...plan.lanes.filter(Boolean).map((l) => l.pct), plan.early, plan.later, plan.objectives];
+  const scale = Math.max(5, ...values.map(Math.abs));
+  const bar = (v) => `<span class="pbar"><i class="${v < 0 ? 'neg' : 'pos'} ${pctClass(v, E)}" data-w="${Math.min(50, (Math.abs(v) / scale) * 50)}"></i></span>`;
+  const row = (label, v, title = '', extra = '') => `<div class="prow"${title ? ` title="${esc(title)}"` : ''}><span class="plabel">${label}</span>${extra}${bar(v)}<b class="pval ${pctClass(v, E)}">${signedPct(v)}</b></div>`;
+  const call = { ahead: 'Ahead', even: 'Even', behind: 'Behind' };
+  const lanes = plan.lanes.filter(Boolean).map((l) => row(
+    ROLE_NAME[l.role],
+    l.pct,
+    l.games ? `${champName(l.ours)} vs ${champName(l.theirs)}: learned from ${l.games} games of this lane` : `${champName(l.ours)} vs ${champName(l.theirs)}: from both champions' average lanes`,
+    `<span class="pvs">${champImg(l.ours, 's')}${champImg(l.theirs, 's')}</span><small class="pcall ${l.call}">${call[l.call]}</small>`,
+  )).join('');
+  const chance = Math.round(plan.winChance * 100);
   return `
     <div class="game-plan">
-      <h3 class="sub head-row"><span>Game Plan</span><span class="hint">Draft win chance <b>${Math.round(plan.winChance * 100)}%</b></span></h3>
-      <ul class="lanes">${lanes}</ul>
-      <p>${early}</p>
-      ${focus ? `<p>${focus}</p>` : ''}
-      ${damage ? `<p>${damage}</p>` : ''}
+      <h3 class="sub head-row"><span>Game Plan</span><span class="hint">Draft win chance <b class="${pctClass(chance - 50, E)}">${chance}%</b></span></h3>
+      <div class="plan-grid">
+        <div class="plan-block"><small>Where the edge comes from</small>${PLAN_PARTS.map(([k, label, title]) => row(label, plan.parts[k], title)).join('')}</div>
+        <div class="plan-block"><small>By phase</small>
+          ${row('Early', plan.early, 'Lanes and first objectives together: the first 15 minutes')}
+          ${row('Later', plan.later, 'The rest of the draft\'s edge: teamfights, scaling, the game after laning')}
+          ${row('Objectives', plan.objectives, 'First blood, tower, dragon, herald and grubs')}
+        </div>
+        <div class="plan-block lanes-block"><small>Lanes · laning phase</small>${lanes}</div>
+      </div>
+      <ul class="plan-advice">${planAdvice(plan).map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
     </div>`;
 }
 
@@ -646,7 +668,7 @@ function lastGameHtml(g) {
   const theirAvg = avg(enemies, allies);
   const chance = plan ? Math.round(plan.winChance * 100) : null;
   const call = { ahead: 'ahead', even: 'even', behind: 'behind' };
-  const lanes = plan ? plan.lanes.filter(Boolean).map((l) => `${ROLE_NAME[l.role]} ${call[l.call]}`).join(' · ') : '';
+  const lanes = plan ? plan.lanes.filter(Boolean).map((l) => `${ROLE_NAME[l.role]} ${call[l.call]} (${signedPct(l.pct)})`).join(' · ') : '';
   return `
     <div class="last-game">
       <div class="lg-head">
@@ -1035,15 +1057,15 @@ function renderTeam() {
         const roles = new Set(m.roles || []);
         // Any number of roles: the team is not a fixed five, and a player can play several
         const chips = ROLES.map(([r, name]) => (mine
-          ? `<button type="button" class="role-chip ${roles.has(r) ? 'on' : ''}" data-role="${r}" aria-pressed="${roles.has(r)}">${name}</button>`
-          : roles.has(r) ? `<span class="role-chip on">${name}</span>` : '')).join('');
+          ? `<button type="button" class="role-tile ${roles.has(r) ? 'on' : ''}" data-role="${r}" aria-pressed="${roles.has(r)}">${roleIcon(r)}<span>${name}</span></button>`
+          : roles.has(r) ? `<span class="role-tag">${roleIcon(r)}${name}</span>` : '')).join('');
         return `
           <div class="member ${mine ? 'mine' : ''}">
             <div class="top">
               <span class="nick">${esc(m.nickname)}${owner ? ' <span class="badge owner">Owner</span>' : ''}</span>
             </div>
             <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
-            <div class="roles" ${mine ? 'title="Roles you play: pick any number"' : ''}>${chips || '<span class="muted small">No roles chosen</span>'}</div>
+            ${mine ? `<div class="roles-label">Your roles <small>pick any number</small></div><div class="role-tiles">${chips}</div>` : `<div class="role-tags">${chips || '<span class="muted small">No roles chosen</span>'}</div>`}
             ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove From Team</button>` : ''}
           </div>`;
       }).join('')}

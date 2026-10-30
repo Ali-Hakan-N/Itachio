@@ -261,3 +261,24 @@ test('crawl: an error in one region does not stop the others', async () => {
   assert.equal(stats.europe.error, 'HTTP 500');
   assert.ok(stats.asia.matches >= 1);
 });
+
+test('client: work run with first() goes ahead; other requests wait for it', async () => {
+  const { RiotClient } = require('../src/riot/client');
+  const order = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const fetch = async (url) => {
+    if (url.includes('/slow')) await gate;
+    order.push(url.split('.com')[1]);
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+  };
+  const api = new RiotClient({ key: 'k', limits: '1000:1', fetch, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) });
+  const urgent = api.first(async (fast) => {
+    await fast.get('europe', '/slow');
+    await fast.get('europe', '/team2');
+  });
+  const normal = api.get('europe', '/crawl');
+  release();
+  await Promise.all([urgent, normal]);
+  assert.deepEqual(order, ['/slow', '/team2', '/crawl']);
+});

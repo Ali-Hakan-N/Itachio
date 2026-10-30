@@ -39,6 +39,30 @@ const BUSY_POLL_MS = 20_000; // while training: stop if a game starts
 
 const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
 const fileFor = (patch) => path.join(DATA_DIR, `${patch.replace(/[^0-9.]/g, '')}.jsonl`);
+// Starting items read later from timelines (riot/timelines.js): { id, sb, sr } per line
+const startsFor = (patch) => path.join(DATA_DIR, `${patch.replace(/[^0-9.]/g, '')}.starts`);
+
+/** Adds starting items of stored matches: rows [{ id, sb, sr }] */
+function storeStarts(patch, rows) {
+  if (!rows.length) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.appendFileSync(startsFor(patch), `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+}
+
+function loadStarts(patch) {
+  const out = new Map();
+  if (!fs.existsSync(startsFor(patch))) return out;
+  for (const line of fs.readFileSync(startsFor(patch), 'utf8').split('\n')) {
+    if (!line) continue;
+    try {
+      const r = JSON.parse(line);
+      out.set(r.id, r);
+    } catch {
+      /* a line cut off by a crash */
+    }
+  }
+  return out;
+}
 
 /** Appends parsed matches (riot/parse.js) with complete roles; returns how many were stored */
 function storeMatches(patch, parsed) {
@@ -52,6 +76,7 @@ function storeMatches(patch, parsed) {
 function loadMatches(patch) {
   const file = fileFor(patch);
   if (!fs.existsSync(file)) return [];
+  const starts = loadStarts(patch);
   const seen = new Set();
   const out = [];
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
@@ -60,6 +85,8 @@ function loadMatches(patch) {
       const m = JSON.parse(line);
       if (seen.has(m.id)) continue;
       seen.add(m.id);
+      const st = starts.get(m.id);
+      if (st && !m.sb) Object.assign(m, { sb: st.sb, sr: st.sr });
       out.push(m);
     } catch {
       /* a line cut off by a crash: skip it */
@@ -79,7 +106,7 @@ function loadMatches(patch) {
  *          synergy <S_a, S_b>, a against b <P_a, Q_b> - <P_b, Q_a>
  *   synE/vsE: [[a, ra, b, rb, weight]] pairs through the early game layer (model/early.js),
  *          when it was kept: added to syn/vs (same sign rules)
- *   early: { matches, kept, accuracy of the early state alone, kappa, beta, laneMean } or null. When kept,
+ *   early: { matches, kept, accuracy of the early state alone, kappa, beta, laneMean, laneVs, objMean } or null. When kept,
  *          champion strength through the early game is already included in champ and off
  *   banRate: { "<champ>": share of matches it was banned in } (when enough matches have bans)
  *   counterpick: { lambda, se, picks } how much players pick against their opponents (choice.js)
@@ -140,6 +167,10 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
         // For player analysis: how the early state is priced, and each champion's average lane
         beta: model.early.surrogate.beta.map((b) => round(b, 5)),
         laneMean: Object.fromEntries(Object.entries(model.early.laneMean || {}).map(([k, v]) => [k, round(v, 4)])),
+        // For the game plan: lane matchups [role, a, b, value from a's side, games], and
+        // each champion:role's part of its side's first objectives
+        laneVs: (model.early.laneVs || []).map(([k, a, b, v, n]) => [k, a, b, round(v, 4), n]),
+        objMean: Object.fromEntries(Object.entries(model.early.objMean || {}).map(([k, v]) => [k, round(v, 4)])),
         kappa: model.early.kappa ? Object.fromEntries(Object.entries(model.early.kappa).map(([p, k]) => [p, round(k, 4)])) : null,
       }
     : null;
@@ -475,4 +506,4 @@ async function publishBuilds(client, matches, patch, log) {
   log(`builds: ${general} champion builds, ${rows.length - general} against one kind of damage, ${rows.filter((r) => r.items.start).length} with starting items · situational items: ${Object.keys(situations.items).length} items (by part: ${learned})`);
 }
 
-module.exports = { banRates, publishBuilds, pickTraining, storeMatches, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };
+module.exports = { banRates, publishBuilds, pickTraining, storeMatches, storeStarts, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT };

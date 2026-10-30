@@ -95,6 +95,7 @@
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
   const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
   const LANE_CALL = 0.6; // game plan: a lane is ahead or behind beyond this many standard deviations of its role
+  const EDGE_PCT = 1; // game plan: an edge counts from this many percentage points of win chance
   const PERSONAL_WEIGHT = 0.5;
   const PERSONAL_CAP = 0.4; // in standard deviations of strength
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
@@ -574,45 +575,65 @@
    * Returns [{ championId, score, role, pickChance, value }], best ban first.
    */
   /**
-   * Probability that our team wins with this final draft: every champion's strength, every
-   * pair on each team once, every matchup between the teams and both compositions.
+   * Our team's win chance with this final draft, split into where it comes from (each part
+   * in log-odds, from our side): champions (strength and off-role), synergy (pairs on each
+   * team), matchups (every pair across the teams) and composition (team styles).
    * allies / enemies: five { championId, position } each.
    */
-  function winChance({ model, allies, enemies }) {
+  function winParts({ model, allies, enemies }) {
     const ix = index(model);
     const team = (list) => list.map(asPick).map((p) => ({ c: p.championId, r: roleIndex(ix, p.championId, p.position) })).filter((p) => p.r !== null);
     const us = team(allies);
     const them = team(enemies);
     const side = (t) => {
-      let z = 0;
+      const out = { champions: 0, synergy: 0, composition: 0 };
       t.forEach((p, i) => {
         const e = ix.champ.get(`${p.c}:${p.r}`);
-        z += (e ? e.w : 0) + ix.off[p.r] * -Math.log(Math.max(e ? e.share : 0, ix.floor));
-        for (let j = i + 1; j < t.length; j++) z += synergy(ix, p.c, p.r, t[j].c, t[j].r);
+        out.champions += (e ? e.w : 0) + ix.off[p.r] * -Math.log(Math.max(e ? e.share : 0, ix.floor));
+        for (let j = i + 1; j < t.length; j++) out.synergy += synergy(ix, p.c, p.r, t[j].c, t[j].r);
       });
       if (ix.comp) {
         const T = styleOf(ix, t.map((p) => p.c));
-        for (let k = 0; k < T.length; k++) z += ix.comp.a[k] * Math.tanh(T[k] + ix.comp.c[k]);
+        for (let k = 0; k < T.length; k++) out.composition += ix.comp.a[k] * Math.tanh(T[k] + ix.comp.c[k]);
       }
-      return z;
+      return out;
     };
-    let z = side(us) - side(them);
-    for (const a of us) for (const b of them) z += matchup(ix, a.c, a.r, b.c, b.r);
+    const a = side(us);
+    const b = side(them);
+    let matchups = 0;
+    for (const x of us) for (const y of them) matchups += matchup(ix, x.c, x.r, y.c, y.r);
+    let composition = a.composition - b.composition;
     if (ix.comp) {
       const A = styleOf(ix, us.map((p) => p.c));
       const B = styleOf(ix, them.map((p) => p.c));
-      for (let k = 0; k < A.length; k++) for (let j = 0; j < A.length; j++) z += A[k] * ix.comp.M[k][j] * B[j];
+      for (let k = 0; k < A.length; k++) for (let j = 0; j < A.length; j++) composition += A[k] * ix.comp.M[k][j] * B[j];
     }
-    return 1 / (1 + Math.exp(-z));
+    const parts = { champions: a.champions - b.champions, synergy: a.synergy - b.synergy, matchups, composition };
+    return { ...parts, logit: parts.champions + parts.synergy + parts.matchups + parts.composition };
   }
 
+  /** Probability that our team wins with this final draft (winParts added up) */
+  function winChance(args) {
+    return 1 / (1 + Math.exp(-winParts(args).logit));
+  }
+
+  // Log-odds as percentage points of win chance around an even game
+  const pct = (z) => (100 / (1 + Math.exp(-z))) - 50;
+
   /**
-   * A game plan from the final draft, every part read off the model:
-   *   lanes   per role, our lane result minus theirs as an average player gets it with
-   *           these champions (laneMean of the early game model, log-odds): ahead, even, behind
-   *   early   our lanes added up against theirs: who is stronger in the first minutes
-   *   focus   the role whose lane we are most ahead in (where to play early)
-   *   damage  each team's magic share (Data Dragon ratings), when given
+   * A game plan from the final draft, every number read off the model, all in percentage
+   * points of win chance so they can be compared:
+   *   winChance  the whole draft; parts: champions, synergy, matchups, composition
+   *   lanes      per role, the lane result of our champion against theirs as an average
+   *              player gets it: the learned lane matchup (early.laneVs) when it has
+   *              games, else the two champions' average lanes (early.laneMean). A lane is
+   *              ahead or behind beyond LANE_CALL standard deviations of its role.
+   *   objectives what the two drafts do to the first objectives (early.objMean)
+   *   early      lanes and objectives together: the draft's edge in the first minutes
+   *   later      the rest of the draft's edge (win chance minus early): what it does after
+   *   edge       percentage points from which an edge is worth naming (EDGE_PCT)
+   *   focus/weak the lane we are most ahead / behind in, when called
+   *   damage     each team's magic share (Data Dragon ratings), when given
    * Returns null without the early game model.
    */
   function gamePlan({ model, allies, enemies, damage = null }) {
@@ -626,6 +647,15 @@
       const m = v.reduce((a, x) => a + x, 0) / v.length;
       return Math.sqrt(v.reduce((a, x) => a + (x - m) ** 2, 0) / v.length) || 0.05;
     });
+    if (!ix.laneVs) {
+      ix.laneVs = new Map((model.early.laneVs || []).map(([k, a, b, v, n]) => [`${k}:${a}:${b}`, { v, n }]));
+    }
+    const laneOf = (r, a, b) => {
+      const [x, y, sign] = a < b ? [a, b, 1] : [b, a, -1];
+      const learned = ix.laneVs.get(`${r}:${x}:${y}`);
+      if (learned) return { diff: sign * learned.v, games: learned.n };
+      return { diff: (lane[`${a}:${r}`] ?? 0) - (lane[`${b}:${r}`] ?? 0), games: 0 };
+    };
     const roleOf = (p) => roleIndex(ix, asPick(p).championId, asPick(p).position);
     const byRole = (list) => {
       const out = new Array(5).fill(null);
@@ -639,26 +669,36 @@
     const them = byRole(enemies);
     const lanes = ROLES.map((role, r) => {
       if (!us[r] || !them[r]) return null;
-      const diff = (lane[`${us[r]}:${r}`] ?? 0) - (lane[`${them[r]}:${r}`] ?? 0);
-      // A lane is called when it is more than LANE_CALL standard deviations of its role apart
+      const { diff, games } = laneOf(r, us[r], them[r]);
       const cut = LANE_CALL * sdOf[r];
-      return { role, ours: us[r], theirs: them[r], diff, call: diff > cut ? 'ahead' : diff < -cut ? 'behind' : 'even' };
+      return { role, ours: us[r], theirs: them[r], diff, pct: pct(diff), games, call: diff > cut ? 'ahead' : diff < -cut ? 'behind' : 'even' };
     });
     const known = lanes.filter(Boolean);
-    const total = known.reduce((a, l) => a + l.diff, 0);
-    const spread = Math.sqrt(known.reduce((a, l) => a + sdOf[ROLE_INDEX[l.role]] ** 2, 0)) || 0.05;
-    const early = total > LANE_CALL * spread ? 'ours' : total < -LANE_CALL * spread ? 'theirs' : 'even';
-    const best = known.filter((l) => l.call === 'ahead').sort((a, b) => b.diff - a.diff)[0] || null;
+    const obj = model.early.objMean || {};
+    const objSide = (ids) => ids.reduce((a, c, r) => a + (c ? obj[`${c}:${r}`] ?? 0 : 0), 0);
+    const objectives = objSide(us) - objSide(them);
+    const earlyLogit = known.reduce((a, l) => a + l.diff, 0) + objectives;
+    const parts = winParts({ model, allies, enemies });
+    const later = parts.logit - earlyLogit;
+    const early = pct(earlyLogit);
+    const laterPct = pct(later);
+    const ahead = known.filter((l) => l.call === 'ahead').sort((a, b) => b.diff - a.diff)[0] || null;
+    const behind = known.filter((l) => l.call === 'behind').sort((a, b) => a.diff - b.diff)[0] || null;
     const magic = (list) => {
       if (!damage) return null;
       const ids = list.map((p) => asPick(p).championId);
       return ids.reduce((a, c) => a + (damage.magic[c] ?? 0.5), 0) / ids.length;
     };
     return {
-      winChance: winChance({ model, allies, enemies }),
+      winChance: 1 / (1 + Math.exp(-parts.logit)),
+      parts: { champions: pct(parts.champions), synergy: pct(parts.synergy), matchups: pct(parts.matchups), composition: pct(parts.composition) },
       lanes,
+      objectives: pct(objectives),
       early,
-      focus: best ? best.role : null,
+      later: laterPct,
+      edge: EDGE_PCT,
+      focus: ahead ? ahead.role : null,
+      weak: behind ? behind.role : null,
       damage: damage ? { ours: magic(allies), theirs: magic(enemies) } : null,
     };
   }
@@ -766,7 +806,7 @@
     personalFor,
   };
 
-  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, personalFor, Engine, ROLES };
+  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, winParts, personalFor, Engine, ROLES };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Engine = Engine;
 })(typeof window !== 'undefined' ? window : globalThis);

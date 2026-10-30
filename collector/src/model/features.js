@@ -7,7 +7,8 @@
 //   lb / lr: early game per role, as riot/parse.js laneOf() (newer matches only)
 //   f: first blood, tower, dragon, herald, grubs: 1 blue, -1 red, 0 nobody (newer matches)
 //   gb / gr: runes, items and spells per role, as riot/parse.js gearOf() (newer matches)
-//   sb / sr: starting items per role (matches read with their timeline, one in TIMELINE_EVERY)
+//   sb / sr: starting items per role (from the match timeline, riot/timelines.js)
+//   ib / ir: participant id per role, to read the timeline (newer matches)
 //   xb / xr: per role, magic and physical damage to champions, healing, crowd control
 //            seconds (riot/parse.js factsOf); d: game length in seconds (newer matches)
 //
@@ -37,6 +38,8 @@ function toCompact(m) {
   const sr = new Array(5).fill(null);
   const xb = new Array(5).fill(null);
   const xr = new Array(5).fill(null);
+  const ib = new Array(5).fill(0);
+  const ir = new Array(5).fill(0);
   let blueWon = null;
   for (const p of m.p) {
     const i = ROLE_INDEX[p.r];
@@ -48,6 +51,7 @@ function toCompact(m) {
     (p.t === 100 ? gb : gr)[i] = p.g || null;
     (p.t === 100 ? sb : sr)[i] = p.s || null;
     (p.t === 100 ? xb : xr)[i] = p.x || null;
+    (p.t === 100 ? ib : ir)[i] = p.i || 0;
     if (p.t === 100) blueWon = p.w;
   }
   if (b.includes(0) || r.includes(0) || blueWon === null) return null;
@@ -58,6 +62,7 @@ function toCompact(m) {
   if (gb.some(Boolean) || gr.some(Boolean)) Object.assign(out, { gb, gr });
   if (sb.some(Boolean) || sr.some(Boolean)) Object.assign(out, { sb, sr });
   if (m.dur && (xb.some(Boolean) || xr.some(Boolean))) Object.assign(out, { xb, xr, d: m.dur });
+  if (ib.every(Boolean) && ir.every(Boolean)) Object.assign(out, { ib, ir });
   return out;
 }
 

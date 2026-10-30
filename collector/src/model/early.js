@@ -46,6 +46,10 @@ const LAMBDA_GRID = [3, 10, 30, 100, 300, 1000, 3000]; // ridge penalty in games
 const CG_ITERS = 80;
 const SURROGATE_L2 = 1; // tiny, only keeps the solve stable
 const DRAFT_GROUPS = ['c', 'o', 's', 'v'];
+// Lane matchups for the game plan: pairs with this many games are exported, each shrunk
+// toward the two champions' average lanes with LANE_VS_PRIOR games
+const LANE_VS_MIN = 15;
+const LANE_VS_PRIOR = 20;
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const clampP = (p) => Math.min(Math.max(p, 1e-9), 1 - 1e-9);
@@ -319,20 +323,41 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
   const full = fitEarly(D, S, rows, on, lambdas);
   // Average lane result of every champion:role, from its own side, in log-odds: what an
   // average player gets with it. Player analysis compares a player's lanes with this.
+  // Also, for the game plan: every lane matchup (role, blue champion, red champion), and
+  // what each champion:role does to the first objectives (blood, tower, dragon, herald,
+  // grubs, priced together) from its own side.
   const laneSum = new Map();
+  const vsSum = new Map();
+  const objSum = new Map();
+  const add = (map, key, v) => {
+    const e = map.get(key) || { sum: 0, n: 0 };
+    e.sum += v;
+    e.n++;
+    map.set(key, e);
+  };
   for (const r of rows) {
     const a = components(full.sur.beta, S[r]);
     const m = matches[r];
     for (let k = 0; k < 5; k++) {
-      for (const [key, v] of [[`${m.b[k]}:${k}`, a[k]], [`${m.r[k]}:${k}`, -a[k]]]) {
-        const e = laneSum.get(key) || { sum: 0, n: 0 };
-        e.sum += v;
-        e.n++;
-        laneSum.set(key, e);
-      }
+      add(laneSum, `${m.b[k]}:${k}`, a[k]);
+      add(laneSum, `${m.r[k]}:${k}`, -a[k]);
+      // Canonical order: lower champion id first, value from its side
+      const [x, y, v] = m.b[k] < m.r[k] ? [m.b[k], m.r[k], a[k]] : [m.r[k], m.b[k], -a[k]];
+      add(vsSum, `${k}:${x}:${y}`, v);
+      add(objSum, `${m.b[k]}:${k}`, a[5]);
+      add(objSum, `${m.r[k]}:${k}`, -a[5]);
     }
   }
   const laneMean = Object.fromEntries([...laneSum].map(([key, e]) => [key, e.sum / e.n]));
+  const laneVs = [];
+  for (const [key, e] of vsSum) {
+    if (e.n < LANE_VS_MIN) continue;
+    const [k, x, y] = key.split(':').map(Number);
+    const prior = (laneMean[`${x}:${k}`] ?? 0) - (laneMean[`${y}:${k}`] ?? 0);
+    laneVs.push([k, x, y, (e.sum + LANE_VS_PRIOR * prior) / (e.n + LANE_VS_PRIOR), e.n]);
+  }
+  // Each champion's share of its side's objectives, shrunk toward none (five per side)
+  const objMean = Object.fromEntries([...objSum].map(([key, e]) => [key, e.sum / (e.n + LANE_VS_PRIOR) / 5]));
   const hasEarly = new Uint8Array(D.y.length);
   for (const r of rows) hasEarly[r] = 1;
   for (let r = 0; r < D.y.length; r++) if (!hasEarly[r]) put(r, full.w);
@@ -342,6 +367,8 @@ function earlyModel(D, matches, { folds, minMatches, codes, log = () => {} }) {
     matches: rows.length,
     surrogate: { ...surrogate, beta: Array.from(full.sur.beta) },
     laneMean,
+    laneVs,
+    objMean,
     lambdas,
     features: { c: feat[0], s: feat[1], v: feat[2] },
     weights: { c: only(0), s: only(1), v: only(2) },

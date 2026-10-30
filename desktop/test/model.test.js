@@ -289,12 +289,23 @@ test('game plan: lanes from the early game model, win chance from the whole draf
   const plan = gamePlan({ model: m, allies, enemies, damage: { magic: { 1: 0, 3: 1, 4: 0, 2: 1, 6: 1, 5: 0 } } });
   assert.equal(plan.lanes[0].call, 'ahead');
   assert.equal(plan.focus, 'top');
-  assert.equal(plan.early, 'ours');
+  assert.ok(plan.early > 0);
   assert.ok(plan.winChance > 0.5); // 1 top is the strongest champion
+  // The parts add up to the win chance, and early plus later is the whole edge
+  const parts = Object.values(plan.parts);
+  assert.equal(parts.length, 4);
+  const logit = (q) => Math.log((50 + q) / (50 - q));
+  assert.ok(Math.abs(logit(plan.early) + logit(plan.later) - Math.log(plan.winChance / (1 - plan.winChance))) < 1e-9);
   assert.ok(Math.abs(plan.damage.theirs - 2 / 3) < 1e-9);
   // Seen from the other side the chance flips
   assert.ok(Math.abs(winChance({ model: m, allies: enemies, enemies: allies }) - (1 - plan.winChance)) < 1e-9);
   assert.equal(gamePlan({ model, allies, enemies }), null); // no early game model
+  // A learned lane matchup replaces the two average lanes: 1 top loses this one
+  const learned = gamePlan({ model: { ...m, early: { laneMean, laneVs: [[0, 1, 2, -0.4, 60]], objMean: { '1:0': 0.05 } } }, allies, enemies });
+  assert.equal(learned.lanes[0].call, 'behind');
+  assert.equal(learned.lanes[0].games, 60);
+  assert.equal(learned.weak, 'top');
+  assert.ok(learned.objectives > 0);
 });
 
 test('personal layer for a draft: season and patch always, team only with the same line-up', () => {

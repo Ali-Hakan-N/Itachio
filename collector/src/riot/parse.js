@@ -128,7 +128,7 @@ function parseMatch(match, timeline = null) {
       const g = gearOf(p);
       const s = start?.get(p.participantId);
       const x = factsOf(p);
-      return { c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win, ...(x && { x }), ...(l && { l }), ...(g && { g }), ...(s?.length && { s }) };
+      return { c: p.championId, r: ROLE[p.teamPosition] || '', t: p.teamId, w: !!p.win, ...(p.participantId && { i: p.participantId }), ...(x && { x }), ...(l && { l }), ...(g && { g }), ...(s?.length && { s }) };
     }),
   };
 }

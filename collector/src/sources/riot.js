@@ -1,6 +1,14 @@
 // Riot API source: collects new Diamond+ matches into the raw counters, then
 // computes meta / synergy / matchup from all counters of the current patch.
 //
+// Order of work, most important first:
+//   1. the team's players (their games and statistics): first, and again every
+//      PLAYERS_EVERY_MS; their requests go ahead of everything else while they run
+//   2. general matches from every server, for the model
+//   3. build data: starting items from the timelines of the stored matches, in the last
+//      BUILD_SHARE of the time (or earlier if the crawl runs out of players)
+// Runes, final items and summoner spells come with the matches themselves.
+//
 // Every new match is also stored as a single row on this computer. The win model
 // (src/model) is trained on them about once an hour, in a background thread and only
 // while no game is running; after collecting it waits up to 3 hours for a free
@@ -27,6 +35,7 @@ const { score } = require('../riot/score');
 const store = require('../riot/store');
 const model = require('../model');
 const players = require('../players');
+const { collectStarts } = require('../riot/timelines');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -37,6 +46,7 @@ const TRAIN_CHECK_MS = 5 * 60_000;
 // crawl starts, then again this often (they are few, so it is quick)
 const PLAYERS_EVERY_MS = 2 * 60 * 60_000;
 const FINAL_TRAIN_WAIT_MS = 3 * 60 * 60_000;
+const BUILD_SHARE = 0.15; // of the time budget, kept for build data after the crawl
 // scripts/schedule-windows.ps1 -Stop creates this file: stop cleanly, like Ctrl+C
 const STOP_FILE = path.join(__dirname, '..', '..', 'data', 'stop');
 const STOP_CHECK_MS = 30_000;
@@ -142,8 +152,8 @@ module.exports = {
     const updatePlayers = () => {
       if (dryRun || playersRun) return playersRun;
       lastPlayers = Date.now();
-      playersRun = players
-        .updatePlayers({ client, api, log })
+      playersRun = api
+        .first((fast) => players.updatePlayers({ client, api: fast, log }))
         .catch((err) => log(`player analysis failed (${err.message})`))
         .finally(() => (playersRun = null));
       return playersRun;
@@ -154,12 +164,13 @@ module.exports = {
     }, TRAIN_CHECK_MS);
 
     log(`patch ${patch} · ${platforms.length} servers · up to ${minutes} min${dryRun ? ' · dry run (no writes)' : ''}`);
+    const end = Date.now() + minutes * 60_000;
     const crawlStats = await crawl({
       api,
       patch,
       platforms,
       stop,
-      deadline: Date.now() + minutes * 60_000,
+      deadline: end - minutes * 60_000 * BUILD_SHARE,
       since: Date.now() - lookbackDays * 86_400_000,
       maxPerRegion: dryRun ? DRY_RUN_MAX_PER_REGION : Number(env.RIOT_MAX_PER_REGION) || 0,
       diamondPages: dryRun ? 1 : Number(env.RIOT_DIAMOND_PAGES) || 5,
@@ -176,6 +187,11 @@ module.exports = {
           },
       log,
     });
+    // Build data with the time left
+    if (!dryRun && !stop.reason) {
+      await collectStarts({ api, matches: model.loadMatches(patch), deadline: end, stop, log, store: (rows) => model.storeStarts(patch, rows) })
+        .catch((err) => log(`build data failed (${err.message})`));
+    }
     clearInterval(trainTimer);
     clearInterval(playersTimer);
     clearInterval(stopWatch);

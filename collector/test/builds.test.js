@@ -83,3 +83,15 @@ test('starting items: purchases of the first minute, minus undone ones', () => {
   assert.deepEqual(s.get(1), [1055, 2003]);
   assert.deepEqual(s.get(2), [1056]);
 });
+
+test('build data: a stored match gets its starting items by participant id', () => {
+  const { startsOf } = require('../src/riot/timelines');
+  const m = { id: 'TR1_1', ib: [1, 2, 3, 4, 5], ir: [6, 7, 8, 9, 10] };
+  const timeline = { info: { frames: [{ events: [
+    { type: 'ITEM_PURCHASED', participantId: 2, timestamp: 1000, itemId: 1039 },
+    { type: 'ITEM_PURCHASED', participantId: 9, timestamp: 1000, itemId: 1055 },
+  ] }] } };
+  const row = startsOf(m, timeline);
+  assert.deepEqual(row.sb, [null, [1039], null, null, null]);
+  assert.deepEqual(row.sr, [null, null, null, [1055], null]);
+});

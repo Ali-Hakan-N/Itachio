@@ -28,7 +28,7 @@ Pick better in champ select. Itachio watches your League of Legends draft live a
 6. Each team's average score is shown at the top of its side.
 7. **Pick Order** suggests who on your team should pick next, and which pick trades are worth making.
 8. Once every champion is locked, the **Build** panel shows runes, summoner spells and items for your champion against this enemy team. Items cover starting items, core items, boots, and situational items picked for this enemy team, with the reason (for example "vs healing" or "vs magic damage"). Click **Apply** to send them to the client, or turn on auto push in **Options** so they're sent by themselves.
-9. The **Game Plan** under the build shows the draft's win chance, which lanes are ahead or behind, where to play early and what damage the enemy deals.
+9. The **Game Plan** under the build shows the draft's win chance and where it comes from (champions, synergy, matchups, composition), the edge early and later, the first objectives, and every lane's matchup, all in points of win chance. Below that, a few lines of advice are read off the same numbers: when to play for the game, which lane to play around, which to protect, and what damage the enemy deals.
 
 After the game, the **Draft** tab shows a summary: the result, the draft's win chance, and every player's score and numbers.
 
@@ -36,9 +36,9 @@ The **Champions** tab shows each teammate's champion statistics for this season,
 
 The **History** tab lists your ranked games of the season with both teams in role order. Use the menu to see a teammate's games. **Clear History** hides your games so far from the list; your champion statistics stay as they are.
 
-**Options** (the gear at the top right) has two tabs. **General** lets you start Itachio with Windows. **Drafting** lets you turn on auto push for runes and for the item build.
+**Options** (the red seal at the top right) has two tabs. **General** lets you start Itachio with Windows. **Drafting** lets you turn on auto push for runes and for the item build.
 
-Scores look ahead: a pick that is easy to counter while the enemy can still answer scores lower, one that holds up well blind scores higher. Hover the small icon next to a champion to see what moved its score (off-role, low data, counter risk, safe blind).
+Scores look ahead: a pick that is easy to counter while the enemy can still answer scores lower, one that holds up well blind scores higher.
 
 Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), blue (B), gray (C), red (D).
 

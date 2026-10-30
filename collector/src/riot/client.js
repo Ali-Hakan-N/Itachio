@@ -3,12 +3,15 @@
 // it retries a few times, and on an invalid key (401/403) it stops the whole run.
 // When the connection is lost it waits for the network (up to OFFLINE_MAX_MS) instead
 // of giving up, so an internet outage does not end the day's collecting.
+// Priority: work run through first() goes ahead of everything else. While it runs, other
+// requests do not start (one already waiting for its turn may still go first).
 
 class RiotKeyError extends Error {}
 
 const sleepReal = (ms) => new Promise((r) => setTimeout(r, ms));
 const OFFLINE_MAX_MS = 3 * 60 * 60_000;
 const OFFLINE_WAIT_MS = 60_000;
+const PRIORITY_POLL_MS = 250;
 
 // "20:1,100:120" -> [[20, 1000], [100, 120000]]  (requests : seconds)
 function parseLimits(spec) {
@@ -76,6 +79,17 @@ class RiotClient {
     this.limiters = new Map();
     this.requests = 0;
     this.limitSpec = String(limits);
+    this.urgent = 0; // priority work running
+  }
+
+  /** Runs fn(api) ahead of every other request: api is this client with priority */
+  async first(fn) {
+    this.urgent++;
+    try {
+      return await fn({ get: (host, path, query) => this.get(host, path, query, { priority: true }) });
+    } finally {
+      this.urgent--;
+    }
   }
 
   // Riot reports the key's real limits in X-App-Rate-Limit ("20:1,100:120").
@@ -97,11 +111,12 @@ class RiotClient {
   }
 
   /** host: "tr1", "europe"... · returns null on 404 */
-  async get(host, path, query = {}) {
+  async get(host, path, query = {}, { priority = false } = {}) {
     const qs = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined && v !== null)).toString();
     const url = `https://${host}.api.riotgames.com${path}${qs ? `?${qs}` : ''}`;
     const limiter = this.#limiter(host);
 
+    while (!priority && this.urgent > 0) await this.sleep(PRIORITY_POLL_MS);
     for (let attempt = 1; ; attempt++) {
       await limiter.acquire();
       this.requests++;
