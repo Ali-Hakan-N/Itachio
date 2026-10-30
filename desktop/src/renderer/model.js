@@ -22,8 +22,8 @@
 // Personal layer: how the player does on the champion (collector/src/players), from three
 // sources: personal = { season, history, team }, each { byKey: { "<champ>:<role name>":
 // { delta, games } }, unplayed } (champions not played there get unplayed). season is
-// their ranked games of the season, history those of the patch, team those with exactly
-// the team-mates of this draft (personalFor picks the line-up). delta is in log-odds,
+// their ranked games of the season, history those of the patch, team those where all five
+// on their side were the team members of this draft (personalFor picks the line-up). delta is in log-odds,
 // already shrunk hard toward the player's own level for champions with few games. The
 // sources add up, count PERSONAL_WEIGHT of that, and are capped at PERSONAL_CAP standard
 // deviations of strength (about 7 points): a nudge, never what makes a pick.

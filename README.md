@@ -32,7 +32,7 @@ Pick better in champ select. Itachio watches your League of Legends draft live a
 
 After the game, the **Draft** tab shows a summary: the result, the draft's win chance, and every player's score and numbers.
 
-The **Champions** tab shows each teammate's champion statistics for this season, for this patch, and for games played with team members. It also shows the champions most worth learning in each role they play.
+The **Champions** tab shows each teammate's champion statistics for this season, for this patch, and for games played as a full team of five. It also shows the champions most worth learning in each role they play.
 
 The **History** tab lists your ranked games of the season with both teams in role order. Use the menu to see a teammate's games. **Clear History** hides your games so far from the list; your champion statistics stay as they are.
 
@@ -50,7 +50,7 @@ Scores go from 0 to 100. Colors show how strong a pick is: gold (S), teal (A), b
 
 **How do I update?** Updates are automatic. When you open the app it installs a new version by itself and restarts. If one comes out while the app is open, a blinking **Update** button shows at the top right; click it to restart into the new version, or just close the app and it installs then.
 
-**What is the Champions tab?** How each of you plays each champion, from your ranked games (Solo/Duo and Flex). **This Season** covers all of the season's games, **This Patch** only the current patch's. **With the Team** covers games where other team members were on your side, kept separately for each group of team-mates. All three count in your scores in champ select. The team part only counts when the same team-mates are on your side.
+**What is the Champions tab?** How each of you plays each champion, from your ranked games (Solo/Duo and Flex). **This Season** covers all of the season's games, **This Patch** only the current patch's. **With the Team** covers games where all five on your side were team members, with no one from outside, kept separately for each five. All three count in your scores in champ select, each as much as its number of games backs it up, so one bad game barely moves a champion. The team part only counts when the same five are on your side.
 
 **Is this allowed?** Itachio only reads champ select and sets a hover when you click. It never locks in or plays for you.
 

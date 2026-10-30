@@ -4,9 +4,12 @@
 //   season   all of them: how well the player plays each champion
 //   history  those of the current patch: the same with less data, and how the champion
 //            does for them in this patch
-//   team     those with other team members on the player's side, per line-up (the sorted
-//            ids of the team members on that side, the player included): how the player
-//            does on a champion with exactly these team-mates
+//   team     those where all five on the player's side were team members (no one from
+//            outside), per line-up (the sorted ids of the five): how the player does on a
+//            champion with exactly this team
+// All three are inputs of the player's scores, and each counts as much as its games back
+// it: analyze.js shrinks every champion hard toward the player's own level, so one bad
+// game moves little.
 // How each player does on each champion comes from analyze.js for all three. The games
 // also go to player_games, for the History tab.
 
@@ -34,13 +37,18 @@ function lineupOf(playerId, game, teamOf) {
   return ids.length ? [playerId, ...new Set(ids)].sort().join(',') : '';
 }
 
-/** Splits every player's games by line-up: Map "<player>|<lineup>" -> games */
+const TEAM_SIZE = 5;
+
+/**
+ * Splits every player's full-team games by line-up: Map "<player>|<lineup>" -> games.
+ * Only games where all five on the player's side were team members count.
+ */
 function byLineup(byPlayer, lineups) {
   const out = new Map();
   for (const [id, games] of byPlayer) {
     for (const g of games) {
       const lineup = lineups.get(id)?.get(g.id);
-      if (!lineup) continue;
+      if (!lineup || lineup.split(',').length !== TEAM_SIZE) continue;
       const key = `${id}|${lineup}`;
       if (!out.has(key)) out.set(key, []);
       out.get(key).push(g);
@@ -139,7 +147,7 @@ async function updatePlayers({ client, api, log, data = null }) {
   else log(`players: history: no games of patch ${patch} yet`);
   const team = byLineup(byPlayer, lineups);
   if (team.size) await writeStats(client, 'team', team, model, log, ids);
-  else log('players: team: no games with team-mates yet');
+  else log('players: team: no games of five team members together yet');
   await writeGames(client, byPlayer, lineups);
 }
 

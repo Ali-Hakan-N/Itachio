@@ -33,7 +33,7 @@ const statsUi = { player: null, source: 'season', lineup: null };
 const STAT_SOURCES = [
   ['season', 'This Season'], // the player's ranked games of the season
   ['history', 'This Patch'], // the same, of the current patch
-  ['team', 'With the Team'], // their games with team members on their side, per line-up
+  ['team', 'With the Team'], // their games with five team members on their side, per line-up
 ];
 // Whose games the History tab shows (default: me)
 const historyUi = { player: null };
@@ -373,7 +373,7 @@ function recNotes(r) {
       kind: r.personal > 0 ? 'good' : 'warn',
       title: `You ${r.personal > 0 ? '+' : '−'}${Math.abs(r.personal)}`,
       text: r.personalGames
-        ? `From your ${r.personalGames} games on it (season, patch and with these team-mates), compared with how you usually play.`
+        ? `From your ${r.personalGames} games on it (season, patch and with this five), compared with how you usually play.`
         : 'You have not played it: champions you rarely play go worse for you.',
     });
   }
@@ -961,7 +961,7 @@ function renderChampions() {
   const empty = {
     season: 'No ranked games this season yet.',
     history: 'No ranked games this patch yet.',
-    team: 'No ranked games with team members yet. Games where another team member was on your side count here, per group of team-mates.',
+    team: 'No ranked games of five team members together yet. Games where all five on your side are team members count here, for each five.',
   }[source[0]];
   $view.innerHTML = `
     <div class="champ-stats">
@@ -975,7 +975,7 @@ function renderChampions() {
       <p class="note source-note">${{
         season: 'How well each champion goes for this player, from all their ranked games of the season. It feeds their scores in the draft.',
         history: 'The same from this patch only: fewer games, but how each champion does for them right now. It feeds their scores too.',
-        team: 'Their games with exactly these team-mates on their side. In the draft it counts when the same team-mates are on your side.',
+        team: 'Their games where all five on their side were these team members. In the draft it counts when the same five are on your side.',
       }[source[0]]}</p>
       ${rows.length
         ? `<div class="stats-table">

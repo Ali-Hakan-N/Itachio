@@ -71,12 +71,12 @@ test("line-up: the team members on the player's side, sorted, the player include
   assert.equal(lineupOf('a', {}, teamOf), '');
 });
 
-test("line-up games: every player's games split by line-up, solo games left out", () => {
-  const games = [{ id: 'g1' }, { id: 'g2' }, { id: 'g3' }];
-  const lineups = new Map([['a', new Map([['g1', 'a,b'], ['g2', ''], ['g3', 'a,b']])]]);
+test('line-up games: only games of five team members together, split by which five', () => {
+  const games = [{ id: 'g1' }, { id: 'g2' }, { id: 'g3' }, { id: 'g4' }, { id: 'g5' }];
+  const lineups = new Map([['a', new Map([['g1', 'a,b,c,d,e'], ['g2', ''], ['g3', 'a,b,c,d,e'], ['g4', 'a,b'], ['g5', 'a,b,c,d,f']])]]);
   const out = byLineup(new Map([['a', games]]), lineups);
-  assert.deepEqual([...out.keys()], ['a|a,b']);
-  assert.deepEqual(out.get('a|a,b').map((g) => g.id), ['g1', 'g3']);
+  assert.deepEqual([...out.keys()], ['a|a,b,c,d,e', 'a|a,b,c,d,f']);
+  assert.deepEqual(out.get('a|a,b,c,d,e').map((g) => g.id), ['g1', 'g3']);
 });
 
 test("game row: the player's champion, side and result, both teams in role order", () => {
