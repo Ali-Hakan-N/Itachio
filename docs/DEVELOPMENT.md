@@ -64,6 +64,7 @@ Done once, by one person on the team.
 1. Create a project on [supabase.com](https://supabase.com).
 2. Apply the migrations: `npx supabase link --project-ref <ref>` then `npx supabase db push`.
 3. Optional: turn off **Authentication > Email > Confirm email** so players can sign in right after signing up.
+4. Add `itachio://auth/callback` to **Authentication > URL Configuration > Redirect URLs** for password recovery.
 
 ### 2. Champion sync
 

@@ -40,8 +40,8 @@ function check({ data, error }) {
 }
 
 class DataStore {
-  constructor({ url, key, storageFile }) {
-    this.client = createClient(url, key, {
+  constructor({ url, key, storageFile, client }) {
+    this.client = client || createClient(url, key, {
       auth: { storage: fileStorage(storageFile), persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
     });
     this.channel = null;
@@ -58,6 +58,30 @@ class DataStore {
   async signUp(email, password) {
     const data = check(await this.client.auth.signUp({ email, password }));
     return { needsConfirmation: !data.session };
+  }
+  async requestPasswordReset(email, redirectTo) {
+    check(await this.client.auth.resetPasswordForEmail(email, { redirectTo }));
+  }
+  async completePasswordRecovery(callbackUrl) {
+    const url = new URL(callbackUrl);
+    if (url.protocol !== 'itachio:' || url.hostname !== 'auth' || url.pathname !== '/callback') {
+      throw new Error('Invalid password recovery link');
+    }
+    const code = url.searchParams.get('code');
+    if (code) {
+      check(await this.client.auth.exchangeCodeForSession(code));
+      return;
+    }
+    const tokens = new URLSearchParams(url.hash.slice(1));
+    const access_token = tokens.get('access_token');
+    const refresh_token = tokens.get('refresh_token');
+    if (tokens.get('type') !== 'recovery' || !access_token || !refresh_token) {
+      throw new Error('Invalid password recovery link');
+    }
+    check(await this.client.auth.setSession({ access_token, refresh_token }));
+  }
+  async updatePassword(password) {
+    check(await this.client.auth.updateUser({ password }));
   }
   async signOut() {
     this.unsubscribe();

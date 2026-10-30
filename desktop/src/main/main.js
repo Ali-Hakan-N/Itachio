@@ -12,6 +12,57 @@ let win = null;
 let core = null;
 let data = null;
 let configError = null;
+const AUTH_REDIRECT_URL = 'itachio://auth/callback';
+let pendingAuthUrl = process.argv.find((arg) => arg.startsWith('itachio://')) || null;
+let passwordRecoveryPending = false;
+let passwordRecoveryError = null;
+
+function isAuthCallbackUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'itachio:' && url.hostname === 'auth' && url.pathname === '/callback';
+  } catch {
+    return false;
+  }
+}
+
+async function receiveAuthUrl(value) {
+  if (!isAuthCallbackUrl(value)) return;
+  if (!data) {
+    pendingAuthUrl = value;
+    return;
+  }
+  try {
+    await data.completePasswordRecovery(value);
+    passwordRecoveryPending = true;
+    passwordRecoveryError = null;
+    send('auth:recovery', { ok: true });
+  } catch (err) {
+    passwordRecoveryError = err.message || String(err);
+    send('auth:recovery', { ok: false, error: passwordRecoveryError });
+  }
+  bringToFront();
+}
+
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) {
+  app.quit();
+} else {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('itachio', process.execPath, [path.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient('itachio');
+  }
+  app.on('second-instance', (_event, commandLine) => {
+    const authUrl = commandLine.find((arg) => arg.startsWith('itachio://'));
+    if (authUrl) void receiveAuthUrl(authUrl);
+    bringToFront();
+  });
+  app.on('open-url', (event, authUrl) => {
+    event.preventDefault();
+    void receiveAuthUrl(authUrl);
+  });
+}
 
 // Errors go to the console and to a log file in the app's data folder
 const logFile = () => path.join(app.getPath('userData'), 'itachio.log');
@@ -136,6 +187,7 @@ function requireTeamMember() {
 }
 
 app.whenReady().then(async () => {
+  if (!hasInstanceLock) return;
   const config = loadConfig();
   createWindow();
 
@@ -148,8 +200,19 @@ app.whenReady().then(async () => {
 
   handle('app:init', async () => {
     if (!config) return { configError, version: app.getVersion() };
+    if (pendingAuthUrl) {
+      const authUrl = pendingAuthUrl;
+      pendingAuthUrl = null;
+      await receiveAuthUrl(authUrl);
+    }
     const user = await data.getUser();
-    return { configError: null, version: app.getVersion(), user: user ? { email: user.email } : null };
+    return {
+      configError: null,
+      version: app.getVersion(),
+      user: user ? { email: user.email } : null,
+      passwordRecovery: passwordRecoveryPending,
+      passwordRecoveryError,
+    };
   });
 
   if (config) {
@@ -202,6 +265,12 @@ app.whenReady().then(async () => {
 
   handle('auth:signIn', ({ email, password }) => data.signIn(email, password));
   handle('auth:signUp', ({ email, password }) => data.signUp(email, password));
+  handle('auth:requestPasswordReset', ({ email }) => data.requestPasswordReset(email, AUTH_REDIRECT_URL));
+  handle('auth:updatePassword', async ({ password }) => {
+    await data.updatePassword(password);
+    passwordRecoveryPending = false;
+    passwordRecoveryError = null;
+  });
   handle('auth:signOut', async () => {
     await data.signOut();
     core.clearUserData();

@@ -129,6 +129,14 @@ api.onUpdate((u) => {
   updateState = u;
   renderUpdate();
 });
+api.onAuthRecovery((result) => {
+  screen = 'login';
+  if (result.ok) renderLogin('recovery');
+  else {
+    renderLogin('signin');
+    toast(result.error || 'This password recovery link is invalid or expired', 'error');
+  }
+});
 
 async function boot() {
   const init = await run(api.init());
@@ -144,6 +152,15 @@ async function boot() {
     configError = init.configError;
     screen = 'config';
     return render();
+  }
+  if (init.passwordRecoveryError) {
+    screen = 'login';
+    render();
+    return toast(init.passwordRecoveryError, 'error');
+  }
+  if (init.passwordRecovery) {
+    screen = 'login';
+    return renderLogin('recovery');
   }
   if (!init.user) {
     screen = 'login';
@@ -232,24 +249,60 @@ function renderConfig() {
 
 function renderLogin(mode = 'signin') {
   const signup = mode === 'signup';
+  const forgot = mode === 'forgot';
+  const recovery = mode === 'recovery';
+  if (recovery) {
+    $view.innerHTML = `
+      <form class="card" id="f">
+        <h2>Choose a New Password</h2>
+        <label>New password <input name="password" type="password" required minlength="6" autocomplete="new-password"></label>
+        <label>Confirm password <input name="confirmPassword" type="password" required minlength="6" autocomplete="new-password"></label>
+        <div class="err" id="err"></div>
+        <button class="btn primary" type="submit">Update Password</button>
+      </form>`;
+    document.getElementById('f').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = Object.fromEntries(new FormData(e.target));
+      const err = document.getElementById('err');
+      if (fd.password !== fd.confirmPassword) return (err.textContent = 'Passwords do not match');
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      const res = await api.updatePassword({ password: fd.password });
+      btn.disabled = false;
+      if (!res.ok) return (err.textContent = res.error);
+      await loadAll();
+      toast('Password updated');
+    };
+    return;
+  }
   $view.innerHTML = `
     <form class="card" id="f">
-      <h2>${signup ? 'Create Account' : 'Sign In'}</h2>
+      <h2>${signup ? 'Create Account' : forgot ? 'Reset Password' : 'Sign In'}</h2>
       <label>Email <input name="email" type="email" required autocomplete="email"></label>
-      <label>Password <input name="password" type="password" required minlength="6" autocomplete="${signup ? 'new-password' : 'current-password'}"></label>
+      ${forgot ? '' : `<label>Password <input name="password" type="password" required minlength="6" autocomplete="${signup ? 'new-password' : 'current-password'}"></label>`}
       <div class="err" id="err"></div>
-      <button class="btn primary" type="submit">${signup ? 'Create Account' : 'Sign In'}</button>
-      <button class="link" type="button" id="swap">${signup ? 'Have an account? Sign in' : 'No account? Create one'}</button>
+      <button class="btn primary" type="submit">${signup ? 'Create Account' : forgot ? 'Send Reset Link' : 'Sign In'}</button>
+      ${forgot
+        ? '<button class="link" type="button" id="back">Back to sign in</button>'
+        : `<button class="link" type="button" id="swap">${signup ? 'Have an account? Sign in' : 'No account? Create one'}</button>${signup ? '' : '<button class="link" type="button" id="forgot">Forgot password?</button>'}`}
     </form>`;
-  document.getElementById('swap').onclick = () => renderLogin(signup ? 'signin' : 'signup');
+  if (forgot) document.getElementById('back').onclick = () => renderLogin('signin');
+  else {
+    document.getElementById('swap').onclick = () => renderLogin(signup ? 'signin' : 'signup');
+    if (!signup) document.getElementById('forgot').onclick = () => renderLogin('forgot');
+  }
   document.getElementById('f').onsubmit = async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
     const btn = e.target.querySelector('button[type=submit]');
     btn.disabled = true;
-    const res = await (signup ? api.signUp(fd) : api.signIn(fd));
+    const res = await (signup ? api.signUp(fd) : forgot ? api.requestPasswordReset(fd) : api.signIn(fd));
     btn.disabled = false;
     if (!res.ok) return (document.getElementById('err').textContent = res.error);
+    if (forgot) {
+      renderLogin('signin');
+      return toast('If an account exists for this email, a reset link has been sent');
+    }
     if (signup && res.data?.needsConfirmation) {
       renderLogin('signin');
       return toast('Click the confirmation link in your email, then sign in');

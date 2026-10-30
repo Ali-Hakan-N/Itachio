@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('api', {
   loadData: call('data:load'),
   signIn: call('auth:signIn'),
   signUp: call('auth:signUp'),
+  requestPasswordReset: call('auth:requestPasswordReset'),
+  updatePassword: call('auth:updatePassword'),
   signOut: call('auth:signOut'),
   saveProfile: call('profile:save'),
   createTeam: call('team:create'),
@@ -27,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   getUpdate: call('update:get'),
   installUpdate: call('update:install'),
   onUpdate: (cb) => ipcRenderer.on('update', (_e, state) => cb(state)),
+  onAuthRecovery: (cb) => ipcRenderer.on('auth:recovery', (_e, state) => cb(state)),
   onState: (cb) => ipcRenderer.on('state', (_e, partial) => cb(partial)),
   onSaved: (cb) => ipcRenderer.on('saved', (_e, info) => cb(info)),
 });
