@@ -491,3 +491,15 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .game-plan b.down { color: var(--red); }
 .game-plan p { margin: 6px 0 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
 .game-plan p b { color: var(--ink); }
+
+/* ---------- Last game ---------- */
+.last-game { max-width: 900px; margin: 0 auto; }
+.lg-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; }
+.lg-head h2 { font-size: 20px; }
+.lg-chance { margin-left: auto; color: var(--muted); }
+.lg-chance b { color: var(--ink); font-size: 18px; }
+.lg-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.lg-teams h3 { display: flex; align-items: center; gap: 8px; }
+.lg-row { display: grid; grid-template-columns: 34px 54px 34px 1fr 64px 52px; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); font-size: 13px; }
+.lg-row .champ.s { width: 30px; height: 30px; }
+.lg-role { color: var(--muted); font-size: 12px; }

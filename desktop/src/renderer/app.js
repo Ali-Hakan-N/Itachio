@@ -170,7 +170,7 @@ api.onState((partial) => {
   renderStatus();
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
-  if (tab === 'draft' && ['draft', 'pools', 'lcu', 'members', 'model', 'currentBuild', 'applied', 'gameData'].some((k) => k in partial)) renderMain();
+  if (tab === 'draft' && ['draft', 'pools', 'lcu', 'members', 'model', 'currentBuild', 'applied', 'gameData', 'lastGame'].some((k) => k in partial)) renderMain();
   if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial)) renderMain();
   if (tab === 'champions' && ('playerStats' in partial || 'members' in partial || 'model' in partial)) renderMain();
 });
@@ -599,9 +599,52 @@ function withRoles(draft) {
   return { ...draft, ally: side(draft.ally), enemy: side(draft.enemy) };
 }
 
+// The game that just ended: what the draft promised next to what happened
+function lastGameHtml(g) {
+  if (!g?.draft) return '';
+  const d = withRoles(g.draft);
+  const team = (list) => list.filter((p) => p.championId).map((p) => ({ championId: p.championId, position: p.position }));
+  const allies = team(d.ally);
+  const enemies = team(d.enemy);
+  const plan = allies.length === 5 && enemies.length === 5 ? Engine.gamePlan({ model: S.model, allies, enemies, damage: S.damage }) : null;
+  const scoreOf = (p, own, other) => Engine.evaluate({ stats: S.stats, model: S.model, championId: p.championId, role: p.position, allies: own.filter((x) => x !== p), enemies: other })?.score ?? null;
+  const stats = new Map(g.players.map((p) => [`${p.side}:${p.championId}`, p]));
+  const rows = (list, other, side) => list.map((p) => {
+    const st = stats.get(`${side}:${p.championId}`) || {};
+    const sc = scoreOf(p, list, other);
+    return `<div class="lg-row">${champImg(p.championId, 's')}<span class="lg-role">${ROLE_NAME[p.position] || ''}</span>${sc === null ? '<span></span>' : `<b class="sc sc-${tierOf(sc)}">${sc}</b>`}<span>${st.kills ?? '–'}/${st.deaths ?? '–'}/${st.assists ?? '–'}</span><span>${st.cs ?? '–'} cs</span><span>${st.damage != null ? `${(st.damage / 1000).toFixed(1)}k` : '–'}</span></div>`;
+  }).join('');
+  const avg = (list, other) => {
+    const v = list.map((p) => scoreOf(p, list, other)).filter((x) => x !== null);
+    return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null;
+  };
+  const ourAvg = avg(allies, enemies);
+  const theirAvg = avg(enemies, allies);
+  const chance = plan ? Math.round(plan.winChance * 100) : null;
+  const call = { ahead: 'ahead', even: 'even', behind: 'behind' };
+  const lanes = plan ? plan.lanes.filter(Boolean).map((l) => `${ROLE_NAME[l.role]} ${call[l.call]}`).join(' · ') : '';
+  return `
+    <div class="last-game">
+      <div class="lg-head">
+        <h2>Last Game: <span class="${g.win ? 'win' : 'loss'}">${g.win ? 'Win' : g.win === false ? 'Loss' : ''}</span></h2>
+        <span class="muted">${g.durationS ? `${Math.floor(g.durationS / 60)}:${String(g.durationS % 60).padStart(2, '0')}` : ''}</span>
+        ${chance !== null ? `<span class="lg-chance">Draft win chance <b>${chance}%</b></span>` : ''}
+      </div>
+      <div class="lg-teams">
+        <div><h3 class="sub">Your Team ${ourAvg !== null ? `<b class="sc sc-${tierOf(ourAvg)}">${ourAvg}</b>` : ''}</h3>${rows(allies, enemies, 'ally')}</div>
+        <div><h3 class="sub">Enemy Team ${theirAvg !== null ? `<b class="sc sc-${tierOf(theirAvg)}">${theirAvg}</b>` : ''}</h3>${rows(enemies, allies, 'enemy')}</div>
+      </div>
+      ${lanes ? `<p class="note">Lanes the draft gave you: ${lanes}</p>` : ''}
+    </div>`;
+}
+
 function renderDraft() {
   clearInterval(timerHandle);
   const d = withRoles(S.draft);
+  if (!d && S.lastGame?.draft) {
+    $view.innerHTML = lastGameHtml(S.lastGame);
+    return;
+  }
   if (!d) {
     const connected = S.lcu?.connected;
     $view.innerHTML = `

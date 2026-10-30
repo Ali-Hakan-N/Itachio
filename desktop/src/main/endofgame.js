@@ -38,4 +38,28 @@ function parseEndOfGame(block) {
   };
 }
 
-module.exports = { parseEndOfGame };
+/**
+ * Every player of the game from the end-of-game data, for the summary:
+ * [{ side: 'ally'|'enemy', championId, kills, deaths, assists, cs, gold, damage }]
+ */
+function parsePlayers(block) {
+  const out = [];
+  for (const team of block?.teams || []) {
+    for (const p of team.players || []) {
+      const st = p.stats || {};
+      out.push({
+        side: team.isPlayerTeam ? 'ally' : 'enemy',
+        championId: num(p.championId),
+        kills: num(st.CHAMPIONS_KILLED),
+        deaths: num(st.NUM_DEATHS),
+        assists: num(st.ASSISTS),
+        cs: (num(st.MINIONS_KILLED) || 0) + (num(st.NEUTRAL_MINIONS_KILLED) || 0),
+        gold: num(st.GOLD_EARNED),
+        damage: num(st.TOTAL_DAMAGE_DEALT_TO_CHAMPIONS),
+      });
+    }
+  }
+  return out;
+}
+
+module.exports = { parseEndOfGame, parsePlayers };

@@ -287,3 +287,27 @@ test('build: once all ten picks are locked, runes, items and spells go to the cl
   assert.equal(sent.length, count, 'only once per game');
   assert.deepEqual(core.state.applied.parts, { runes: true, items: true, spells: true });
 });
+
+test('last game: the summary keeps the final draft and every player\'s numbers until the next champ select', async () => {
+  const lcu = new (require('node:events').EventEmitter)();
+  lcu.get = async () => null;
+  const core = new AppCore({ lcu, data: fakeData(), log: { error: () => {}, info: () => {} } });
+  await core.loadUserData();
+  const { buildSession, EOG_BLOCK } = require('./mock-lcu');
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'ChampSelect' });
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: buildSession(SCRIPT.length), eventType: 'Update' });
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'InProgress' });
+  lcu.emit('event', { uri: '/lol-gameflow/v1/gameflow-phase', data: 'WaitingForStats' });
+  const block = { ...EOG_BLOCK, teams: [
+    { isPlayerTeam: true, isWinningTeam: true, players: [{ championId: 103, stats: { CHAMPIONS_KILLED: 9, NUM_DEATHS: 2, ASSISTS: 11, MINIONS_KILLED: 200 } }] },
+    { isPlayerTeam: false, isWinningTeam: false, players: [{ championId: 64, stats: { CHAMPIONS_KILLED: 1 } }] },
+  ] };
+  lcu.emit('event', { uri: '/lol-end-of-game/v1/eog-stats-block', data: block });
+  await core.queue;
+  const g = core.state.lastGame;
+  assert.equal(g.win, true);
+  assert.equal(g.draft.ally.find((p) => p.isLocal).championId, 103);
+  assert.deepEqual(g.players.find((p) => p.championId === 103), { side: 'ally', championId: 103, kills: 9, deaths: 2, assists: 11, cs: 200, gold: null, damage: null });
+  lcu.emit('event', { uri: '/lol-champ-select/v1/session', data: { ...buildSession(1), gameId: 99 }, eventType: 'Update' });
+  assert.equal(core.state.lastGame, null);
+});

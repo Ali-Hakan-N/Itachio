@@ -4,7 +4,7 @@
 
 const { EventEmitter } = require('node:events');
 const { normalizeSession } = require('./champselect');
-const { parseEndOfGame } = require('./endofgame');
+const { parseEndOfGame, parsePlayers } = require('./endofgame');
 // The UI's scoring engine also runs here, to record each pick's score
 globalThis.Recommend = globalThis.Recommend || require('../renderer/recommend');
 const { Engine } = require('../renderer/model');
@@ -37,6 +37,7 @@ class AppCore extends EventEmitter {
       gameData: null, // rune and summoner spell names and icons
       applied: null, // { gameId, championId, bucket, parts: { runes, items, spells } } what was sent to the client
       currentBuild: null, // buildFor() of the current draft, for the UI
+      lastGame: null, // summary of the game that just ended: { gameId, win, durationS, draft, players }
       pickable: null, // champions you can pick in champ select (owned + free rotation)
     };
     this.current = null; // { rowId, gameId, status } - database row of the current draft
@@ -210,7 +211,10 @@ class AppCore extends EventEmitter {
       this.#emit({ draft: null, pickable: null });
     }
 
-    if (AFTER_GAME_PHASES.has(phase) && this.state.draft) this.#emit({ draft: null });
+    if (AFTER_GAME_PHASES.has(phase) && this.state.draft) {
+      this.lastDraft = this.state.draft; // for the summary when the end-of-game data arrives
+      this.#emit({ draft: null });
+    }
 
     if (phase === 'EndOfGame') {
       // Ask for end-of-game data too, in case the event was missed
@@ -229,6 +233,7 @@ class AppCore extends EventEmitter {
       this.#loadPickable(draft.gameId);
       this.refreshModel({ atDraftStart: draft.gameId }).catch((err) => this.log.error('[model]', err.message));
       this.#loadBuilds(this.state.patch);
+      if (this.state.lastGame) this.#emit({ lastGame: null });
       const mine = (raw.actions || []).flat().filter((a) => a.actorCellId === draft.localCellId);
       this.log.info?.('champ select', JSON.stringify({
         gameId: draft.gameId, localCellId: draft.localCellId, myPickActionId: draft.myPickActionId,
@@ -454,6 +459,8 @@ class AppCore extends EventEmitter {
   #onEndOfGame(block) {
     const res = parseEndOfGame(block);
     if (!res || this.savedEog.has(res.gameId)) return;
+    const draft = this.lastDraft?.gameId === res.gameId ? this.lastDraft : null;
+    this.#emit({ lastGame: { gameId: res.gameId, win: res.win, durationS: res.durationS, draft, players: parsePlayers(block) } });
     this.savedEog.add(res.gameId);
     this.#enqueue(async () => {
       const { me } = this.state;
