@@ -92,6 +92,7 @@
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
   const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
+  const LANE_CALL = 0.6; // game plan: a lane is ahead or behind beyond this many standard deviations of its role
   const PERSONAL_WEIGHT = 0.5;
   const PERSONAL_CAP = 0.4; // in standard deviations of strength
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
@@ -616,9 +617,13 @@
     const ix = index(model);
     const lane = model.early?.laneMean;
     if (!lane) return null;
-    const values = Object.values(lane);
-    const mean = values.reduce((a, v) => a + v, 0) / values.length;
-    const sd = Math.sqrt(values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length) || 0.05;
+    // Spread of lane results per role, over champions played there often (rare ones are extreme)
+    const sdOf = [0, 1, 2, 3, 4].map((r) => {
+      const v = Object.entries(lane).filter(([k]) => Number(k.split(':')[1]) === r && (ix.champ.get(k)?.games || 0) >= SCALE_MIN_GAMES).map(([, x]) => x);
+      if (v.length < 5) return 0.05;
+      const m = v.reduce((a, x) => a + x, 0) / v.length;
+      return Math.sqrt(v.reduce((a, x) => a + (x - m) ** 2, 0) / v.length) || 0.05;
+    });
     const roleOf = (p) => roleIndex(ix, asPick(p).championId, asPick(p).position);
     const byRole = (list) => {
       const out = new Array(5).fill(null);
@@ -633,11 +638,14 @@
     const lanes = ROLES.map((role, r) => {
       if (!us[r] || !them[r]) return null;
       const diff = (lane[`${us[r]}:${r}`] ?? 0) - (lane[`${them[r]}:${r}`] ?? 0);
-      return { role, ours: us[r], theirs: them[r], diff, call: diff > sd / 2 ? 'ahead' : diff < -sd / 2 ? 'behind' : 'even' };
+      // A lane is called when it is more than LANE_CALL standard deviations of its role apart
+      const cut = LANE_CALL * sdOf[r];
+      return { role, ours: us[r], theirs: them[r], diff, call: diff > cut ? 'ahead' : diff < -cut ? 'behind' : 'even' };
     });
     const known = lanes.filter(Boolean);
     const total = known.reduce((a, l) => a + l.diff, 0);
-    const early = total > sd ? 'ours' : total < -sd ? 'theirs' : 'even';
+    const spread = Math.sqrt(known.reduce((a, l) => a + sdOf[ROLE_INDEX[l.role]] ** 2, 0)) || 0.05;
+    const early = total > LANE_CALL * spread ? 'ours' : total < -LANE_CALL * spread ? 'theirs' : 'even';
     const best = known.filter((l) => l.call === 'ahead').sort((a, b) => b.diff - a.diff)[0] || null;
     const magic = (list) => {
       if (!damage) return null;

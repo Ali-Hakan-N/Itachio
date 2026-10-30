@@ -507,9 +507,11 @@ function gamePlanHtml(d) {
     even: 'The lanes are even overall: the game is decided by what each lane makes of its matchup.',
   }[plan.early];
   const focus = plan.focus ? `Play around <b>${ROLE_NAME[plan.focus]}</b> early: it is your strongest lane.` : '';
-  const dmg = (share) => (share >= 0.6 ? 'mostly magic' : share <= 0.4 ? 'mostly physical' : 'mixed');
+  // The same thresholds the builds use (thirds of all teams), so plan and build agree
+  const [low, high] = S.damage?.thresholds || [0.4, 0.6];
+  const dmg = (share) => (share >= high ? 'mostly magic' : share <= low ? 'mostly physical' : 'mixed');
   const damage = plan.damage
-    ? `Enemy damage is <b>${dmg(plan.damage.theirs)}</b> (${Math.round(plan.damage.theirs * 100)}% magic)${plan.damage.theirs >= 0.6 ? ': magic resist pays off.' : plan.damage.theirs <= 0.4 ? ': armor pays off.' : '.'} Yours is ${dmg(plan.damage.ours)}.`
+    ? `Enemy damage is <b>${dmg(plan.damage.theirs)}</b> (${Math.round(plan.damage.theirs * 100)}% magic)${plan.damage.theirs >= high ? ': magic resist pays off.' : plan.damage.theirs <= low ? ': armor pays off.' : '.'} Yours is ${dmg(plan.damage.ours)}.`
     : '';
   return `
     <div class="game-plan">
@@ -603,7 +605,8 @@ function withRoles(draft) {
 function lastGameHtml(g) {
   if (!g?.draft) return '';
   const d = withRoles(g.draft);
-  const team = (list) => list.filter((p) => p.championId).map((p) => ({ championId: p.championId, position: p.position }));
+  const order = (p) => ROLES.findIndex(([r]) => r === p.position);
+  const team = (list) => list.filter((p) => p.championId).map((p) => ({ championId: p.championId, position: p.position })).sort((a, b) => order(a) - order(b));
   const allies = team(d.ally);
   const enemies = team(d.enemy);
   const plan = allies.length === 5 && enemies.length === 5 ? Engine.gamePlan({ model: S.model, allies, enemies, damage: S.damage }) : null;
@@ -860,6 +863,39 @@ function sideColumn(which, d) {
 // How each player does on each champion (collector/src/players), from two kinds of games:
 // their own games of the patch, and the team's full Flex games. Games, record, and the
 // effect split into the laning phase and the rest of the game
+// Champions worth learning for a player: in their main role (most games this patch), the
+// best scored with the champions their teammates usually play, leaving out what they
+// already play there
+const LEARN_COUNT = 5;
+function learnHtml(playerId) {
+  const mine = (S.playerStats?.[playerId] || {}).history?.byKey || {};
+  const entries = Object.entries(mine).map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }));
+  const roleGames = {};
+  for (const e of entries) roleGames[e.role] = (roleGames[e.role] || 0) + e.games;
+  const role = Object.entries(roleGames).sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (!role || !S.model) return '';
+  const played = new Set(entries.filter((e) => e.role === role).map((e) => e.championId));
+  // Teammates' usual champion in each other role
+  const allies = [];
+  for (const m of S.members || []) {
+    if (m.id === playerId) continue;
+    const theirs = Object.entries((S.playerStats?.[m.id] || {}).history?.byKey || {})
+      .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }))
+      .filter((x) => x.role !== role && !allies.some((a) => a.position === x.role))
+      .sort((a, b) => b.games - a.games)[0];
+    if (theirs) allies.push({ championId: theirs.championId, position: theirs.role });
+  }
+  const picks = Engine.recommend({ stats: S.stats, model: S.model, role, allies, limit: 40 })
+    .filter((r) => !played.has(r.championId))
+    .slice(0, LEARN_COUNT);
+  if (!picks.length) return '';
+  return `
+    <div class="learn">
+      <h3 class="sub">Champions to Learn · ${ROLE_NAME[role]}</h3>
+      <div class="learn-row">${picks.map((r) => `<span class="learn-pick">${champImg(r.championId)}<span>${esc(champName(r.championId))}</span><b class="sc sc-${tierOf(r.score)}">${r.score}</b></span>`).join('')}</div>
+    </div>`;
+}
+
 function renderChampions() {
   const members = S.members || [];
   const id = statsUi.player && members.some((m) => m.id === statsUi.player) ? statsUi.player : S.me?.id;
@@ -895,6 +931,7 @@ function renderChampions() {
           </div>
           <p class="note">Champions not played here: ${signed(pts(stats.unplayed))}</p>`
         : '<p class="note">No games yet.</p>'}
+      ${learnHtml(id)}
     </div>`;
   document.getElementById('src').onclick = (e) => {
     const b = e.target.closest('[data-src]');

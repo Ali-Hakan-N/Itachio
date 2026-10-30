@@ -503,3 +503,10 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .lg-row { display: grid; grid-template-columns: 34px 54px 34px 1fr 64px 52px; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); font-size: 13px; }
 .lg-row .champ.s { width: 30px; height: 30px; }
 .lg-role { color: var(--muted); font-size: 12px; }
+
+/* ---------- Champions to learn ---------- */
+.learn { margin-top: 22px; }
+.learn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.learn-pick { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-m); font-weight: 600; font-size: 13px; }
+.learn-pick .champ { width: 30px; height: 30px; }
+.learn-pick b { font-size: 15px; }

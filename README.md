@@ -25,6 +25,13 @@ Pick better in champ select. Itachio watches your League of Legends draft live a
 4. Click a champion in the pick list to hover it in the client. You still lock in from the client.
 5. Every champion on the board has a live score. It changes as new picks come in, and a locked pick shows the score it had when it was locked.
 6. Each team's average score is shown at the top of its side.
+7. **Pick Order** suggests who on your team should pick next, and which pick trades are worth making.
+8. Once every champion is locked, the **Build** panel shows runes, items and summoner spells for your champion against this enemy team. They are sent to the client by themselves; the **Apply** buttons send them again.
+9. The **Game Plan** under the build shows the draft's win chance, which lanes are ahead or behind, where to play early and what damage the enemy deals.
+
+After the game, the **Draft** tab shows a summary: the result, the draft's win chance, and every player's score and numbers.
+
+The **Champions** tab shows each teammate's champion statistics for this patch and for games with the team, and the champions most worth learning for their main role.
 
 Scores look ahead: a pick that is easy to counter while the enemy can still answer scores lower, one that holds up well blind scores higher. Hover the small icon next to a champion to see what moved its score (off-role, low data, counter risk, safe blind).
 
