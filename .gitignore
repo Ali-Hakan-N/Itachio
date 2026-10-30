@@ -7,7 +7,6 @@ desktop/config.json
 .env
 .env.*
 !.env.example
-.claude/settings.local.json
 
 # Collector local files
 collector/data/

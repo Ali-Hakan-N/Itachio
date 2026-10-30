@@ -22,7 +22,7 @@
     "selfsigned": "^5.5.0"
   },
   "build": {
-    "appId": "gg.flexdrafter.app",
+    "appId": "gg.itachio.app",
     "publish": [
       {
         "provider": "github",
@@ -48,7 +48,7 @@
       "artifactName": "Itachio-Setup.exe",
       "shortcutName": "Itachio",
       "uninstallDisplayName": "Itachio",
-      "include": "build/installer.nsh"
+      "guid": "300ce677-753a-5753-ad8d-df4ca459d17c"
     }
   }
 }
