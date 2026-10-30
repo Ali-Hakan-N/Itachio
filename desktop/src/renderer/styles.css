@@ -420,9 +420,29 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .btn.danger { color: var(--red); }
 .btn.danger:hover { background: var(--red-dim); }
 .champ-stats { max-width: 880px; }
-.champ-stats .toolbar { align-items: center; }
-.champ-stats h2 { font-size: 18px; }
+.champ-stats .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
+.champ-stats h2 { font-size: 18px; white-space: nowrap; }
 .champ-stats select { background: var(--bg-2); color: var(--ink); border: 1px solid var(--line-2); border-radius: var(--radius-s); padding: 6px 10px; }
+.toolbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.lineup-select {
+  max-width: 220px;
+  min-width: 140px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  background: rgba(47, 211, 192, 0.08) !important;
+  border: 1px solid rgba(47, 211, 192, 0.35) !important;
+  color: var(--ink) !important;
+  border-radius: var(--radius-s);
+  padding: 6px 10px;
+  transition: all 0.18s ease;
+}
+.lineup-select:hover, .lineup-select:focus {
+  border-color: var(--cue) !important;
+  background: rgba(47, 211, 192, 0.16) !important;
+}
+.who-select { min-width: 100px; }
 .stats-table { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
 .stats-row {
   display: grid; grid-template-columns: 2.4fr 0.7fr 1.2fr 0.8fr 0.8fr 0.8fr; align-items: center; gap: 10px;

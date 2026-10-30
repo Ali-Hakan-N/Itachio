@@ -962,6 +962,11 @@ function learnHtml(playerId) {
 const nickOf = (id) => (S.members || []).find((m) => m.id === id)?.nickname || '?';
 // A line-up's name from one player's side: the team members they played with
 const lineupName = (lineup, playerId) => `with ${lineup.split(',').filter((id) => id !== playerId).map(nickOf).join(', ')}`;
+const lineupCompact = (lineup, playerId) => {
+  const others = lineup.split(',').filter((id) => id !== playerId).map(nickOf);
+  if (others.length <= 2) return `with ${others.join(', ')}`;
+  return `with ${others[0]}, ${others[1]} +${others.length - 2}`;
+};
 const gamesOf = (stats) => Object.values(stats?.byKey || {}).reduce((a, v) => a + v.games, 0);
 
 function renderChampions() {
@@ -991,8 +996,10 @@ function renderChampions() {
         <h2>Champion Statistics</h2>
         <div class="seg" id="src">${STAT_SOURCES.map(([k, label]) => `<button data-src="${k}" class="${k === source[0] ? 'active' : ''}">${label}</button>`).join('')}</div>
         <span class="grow"></span>
-        ${lineups.length && source[0] === 'team' ? `<select id="lineup">${lineups.map(([k, v]) => `<option value="${esc(k)}" ${k === lineup ? 'selected' : ''}>${esc(lineupName(k, id))} · ${gamesOf(v)} games</option>`).join('')}</select>` : ''}
-        <select id="who">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
+        <div class="toolbar-actions">
+          ${lineups.length && source[0] === 'team' ? `<select id="lineup" class="lineup-select" title="${esc(lineupName(lineup, id))}">${lineups.map(([k, v]) => `<option value="${esc(k)}" title="${esc(lineupName(k, id))} · ${gamesOf(v)} games" ${k === lineup ? 'selected' : ''}>👥 ${esc(lineupCompact(k, id))} · ${gamesOf(v)}G</option>`).join('')}</select>` : ''}
+          <select id="who" class="who-select">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
+        </div>
       </div>
       <p class="note source-note">${{
         season: 'How well each champion goes for this player, from all their ranked games of the season. It feeds their scores in the draft.',
@@ -1188,7 +1195,10 @@ async function openOptions() {
         <div class="options" role="dialog" aria-modal="true" aria-label="Options">
           <nav class="options-nav">
             <h2>Options</h2>
-            ${OPTION_TABS.map(([k, label]) => `<button data-otab="${k}" class="${k === optionsTab ? 'active' : ''}">${label}</button>`).join('')}
+            ${OPTION_TABS.map(([k, label]) => `
+              <button data-otab="${k}" class="${k === optionsTab ? 'active' : ''} locked" disabled title="Locked for now" style="pointer-events: none; opacity: 0.55; cursor: not-allowed;">
+                ${label} <span style="font-size: 11px; margin-left: 6px;">🔒</span>
+              </button>`).join('')}
           </nav>
           <section class="options-body">
             <div class="options-head"><h3>${title}</h3><button class="x" id="mclose" aria-label="Close">×</button></div>
@@ -1203,7 +1213,7 @@ async function openOptions() {
     const close = () => ($m.innerHTML = '');
     document.getElementById('mclose').onclick = close;
     document.getElementById('mclose-bg').onclick = (e) => e.target.id === 'mclose-bg' && close();
-    for (const b of $m.querySelectorAll('[data-otab]')) {
+    for (const b of $m.querySelectorAll('[data-otab]:not(.locked)')) {
       b.onclick = () => {
         optionsTab = b.dataset.otab;
         draw();
@@ -1211,7 +1221,13 @@ async function openOptions() {
     }
     for (const box of $m.querySelectorAll('[data-key]')) {
       box.onchange = async () => {
-        Object.assign(settings, await run(api.setSettings({ [box.dataset.key]: box.checked })));
+        try {
+          const res = await api.setSettings({ [box.dataset.key]: box.checked });
+          if (res?.ok && res.data) Object.assign(settings, res.data);
+          else if (!res?.ok && res?.error) toast(res.error, 'error');
+        } catch (e) {
+          console.error('Failed to save setting:', e);
+        }
       };
     }
   };

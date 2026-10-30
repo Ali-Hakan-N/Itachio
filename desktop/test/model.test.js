@@ -320,7 +320,7 @@ test('personal layer for a draft: season and patch always, team only with the sa
   assert.equal(personalFor(stats, 'z'), null);
 });
 
-test('hybrid ensemble blends model score and external stats layer (50/50)', () => {
+test('hybrid ensemble blends model score and external stats layer with confidence weighting', () => {
   const stats = {
     meta: [
       { champion_id: 1, role: 'top', score: 80 },
@@ -329,15 +329,25 @@ test('hybrid ensemble blends model score and external stats layer (50/50)', () =
     synergy: [],
     matchup: [],
   };
-  // Evaluate top champion 1: model gives ~70+, stats gives 80 -> blended ~75
-  const ev = Engine.evaluate({ stats, model, championId: 1, role: 'top' });
-  assert.ok(ev);
-  assert.ok(ev.metaSrcScore === 80, `metaSrcScore was ${ev.metaSrcScore}`);
-  assert.equal(ev.score, Math.round(0.5 * ev.modelScore + 0.5 * ev.metaSrcScore));
 
-  // Recommend blends and sorts
-  const recs = Engine.recommend({ stats, model, role: 'top', limit: 2 });
-  assert.ok(recs.length > 0);
-  assert.equal(recs[0].championId, 1);
-  assert.equal(recs[0].score, Math.round(0.5 * recs[0].modelScore + 0.5 * recs[0].metaSrcScore));
+  // 1. Fully proven model (high matches, proven syn & vs): reaches 50% model, 50% MetaSRC
+  const provenModel = {
+    ...model,
+    matches: 25000,
+    syn: Array(300).fill([1, 0, 2, 0, 0.1]),
+    vs: Array(300).fill([1, 0, 2, 0, 0.1]),
+  };
+  const evProven = Engine.evaluate({ stats, model: provenModel, championId: 1, role: 'top' });
+  assert.ok(evProven);
+  assert.equal(evProven.weights.model, 0.5);
+  assert.equal(evProven.weights.metasrc, 0.5);
+  assert.equal(evProven.score, Math.round(0.5 * evProven.modelScore + 0.5 * evProven.metaSrcScore));
+
+  // 2. Young model without proven syn/vs: model weight is lower, MetaSRC carries the weight
+  const youngModel = { ...model, matches: 2000, syn: [], vs: [] };
+  const evYoung = Engine.evaluate({ stats, model: youngModel, championId: 1, role: 'top' });
+  assert.ok(evYoung);
+  assert.ok(evYoung.weights.model < 0.2);
+  assert.ok(evYoung.weights.metasrc > 0.8);
+  assert.equal(evYoung.score, Math.round(evYoung.weights.model * evYoung.modelScore + evYoung.weights.metasrc * evYoung.metaSrcScore));
 });

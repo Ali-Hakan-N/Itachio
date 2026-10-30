@@ -183,7 +183,13 @@ app.whenReady().then(async () => {
     for (const key of ['autoRunes', 'autoItems']) if (key in changes) saved[key] = !!changes[key];
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
     fs.writeFileSync(settingsFile(), JSON.stringify(saved));
-    if ('openAtLogin' in changes) app.setLoginItemSettings({ openAtLogin: !!changes.openAtLogin });
+    if ('openAtLogin' in changes) {
+      try {
+        app.setLoginItemSettings({ openAtLogin: !!changes.openAtLogin });
+      } catch (err) {
+        fileLog?.('setLoginItemSettings error', err.message);
+      }
+    }
     core?.setSettings(saved);
     return settingsView(saved);
   });

@@ -794,14 +794,40 @@
   // Older engine (recommend.js) takes allies as champion ids
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
-  // Weights for hybrid ensemble: 50% learned ML model, 50% external layer (MetaSRC)
-  const W_MODEL = 0.5;
-  const W_METASRC = 0.5;
+  // Dynamic confidence-based weighting:
+  // Model weight is bounded between 0.0 and 0.50, scaling with how proven each layer is.
+  // MetaSRC gets the remainder (50% to 100%).
+  function modelConfidence(m) {
+    if (!m) return 0;
+    // 1. Meta / Strength confidence: based on matches collected, reaches 1.0 at 20,000 matches
+    const matches = m.matches || 0;
+    const cMeta = matches > 0 ? Math.min(1.0, Math.max(0.2, matches / 20000)) : 0.5;
 
-  function blendScore(modelScore, metaScore) {
+    // 2. Synergy confidence: based on proven synergy weights in model
+    const synCount = Array.isArray(m.syn) ? m.syn.length : 0;
+    const cSyn = synCount > 0 ? Math.min(1.0, synCount / 200) : 0.0;
+
+    // 3. Matchup confidence: based on proven matchup weights in model
+    const vsCount = Array.isArray(m.vs) ? m.vs.length : 0;
+    const cVs = vsCount > 0 ? Math.min(1.0, vsCount / 200) : 0.0;
+
+    // Layer-weighted average confidence: strength 40%, synergy 30%, matchup 30%
+    return 0.4 * cMeta + 0.3 * cSyn + 0.3 * cVs;
+  }
+
+  function getWeights(m) {
+    const conf = modelConfidence(m);
+    // Model weight is bounded between 0.0 and 0.50
+    const wModel = Math.max(0.0, Math.min(0.50, 0.50 * conf));
+    const wMeta = 1.0 - wModel;
+    return { wModel, wMeta, conf };
+  }
+
+  function blendScore(modelScore, metaScore, m) {
     if (modelScore === null || modelScore === undefined) return metaScore;
     if (metaScore === null || metaScore === undefined) return modelScore;
-    return Math.round(W_MODEL * modelScore + W_METASRC * metaScore);
+    const { wModel, wMeta } = getWeights(m);
+    return Math.round(wModel * modelScore + wMeta * metaScore);
   }
 
   function hybridEvaluate(args) {
@@ -813,11 +839,13 @@
       const metaRes = root.Recommend.evaluate(legacy(args));
       if (!modelRes) return metaRes;
       if (!metaRes) return modelRes;
+      const { wModel, wMeta } = getWeights(args.model);
       return {
         ...modelRes,
-        score: blendScore(modelRes.score, metaRes.score),
+        score: blendScore(modelRes.score, metaRes.score, args.model),
         metaSrcScore: metaRes.score,
         modelScore: modelRes.score,
+        weights: { model: Number(wModel.toFixed(2)), metasrc: Number(wMeta.toFixed(2)) },
         allies: modelRes.allies?.length ? modelRes.allies : metaRes.allies,
         enemies: modelRes.enemies?.length ? modelRes.enemies : metaRes.enemies,
       };
@@ -833,16 +861,18 @@
       const modelList = recommend(args);
       const metaList = root.Recommend.recommend(legacy(args));
       const metaMap = new Map(metaList.map((m) => [`${m.championId}:${m.role}`, m]));
+      const { wModel, wMeta } = getWeights(args.model);
 
       const blended = modelList.map((m) => {
         const metaItem = metaMap.get(`${m.championId}:${m.role}`);
         if (!metaItem) return m;
-        const finalScore = blendScore(m.score, metaItem.score);
+        const finalScore = blendScore(m.score, metaItem.score, args.model);
         return {
           ...m,
           score: finalScore,
           metaSrcScore: metaItem.score,
           modelScore: m.score,
+          weights: { model: Number(wModel.toFixed(2)), metasrc: Number(wMeta.toFixed(2)) },
           allies: m.allies?.length ? m.allies : metaItem.allies,
           enemies: m.enemies?.length ? m.enemies : metaItem.enemies,
         };
