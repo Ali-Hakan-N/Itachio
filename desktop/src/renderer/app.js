@@ -500,7 +500,7 @@ function pickOrderHtml(d, blocked) {
       : null;
     return { p, championId, risk: ev?.counterRisk ?? 0 };
   });
-  const suggested = [...rated].sort((a, b) => a.risk - b.risk);
+  const suggested = Engine.orderPickSuggestions(rated);
   const trades = [];
   rated.forEach((r, i) => {
     const s2 = suggested[i];
@@ -510,7 +510,7 @@ function pickOrderHtml(d, blocked) {
   return `
     <div class="pick-order">
       <h3 class="sub">Pick Order</h3>
-      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk of the likely champion: points it loses once the enemy answers it">${riskText(r.risk)}</span></li>`).join('')}</ol>
+      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk of the likely champion; role blind-pick priority also affects this order">${riskText(r.risk)}</span></li>`).join('')}</ol>
       ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
     </div>`;
 }

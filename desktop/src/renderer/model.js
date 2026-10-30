@@ -530,6 +530,15 @@
     return { ...row, logit: final, score, counterRisk: Math.round(toScore(ix, withFuture)) - score };
   }
 
+  function orderPickSuggestions(rated) {
+    const roleBias = { jungle: 0, utility: 0, bottom: 1, middle: 3, top: 5 };
+    return [...rated].sort((a, b) => {
+      const riskA = (a.risk ?? 0) + (roleBias[a.p.position] ?? 0);
+      const riskB = (b.risk ?? 0) + (roleBias[b.p.position] ?? 0);
+      return riskA - riskB;
+    });
+  }
+
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
   function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10, personal = null }) {
     const ix = index(model);
@@ -795,8 +804,8 @@
   const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
 
   // Dynamic confidence-based weighting:
-  // Model weight is bounded between 0.0 and 0.50, scaling with how proven each layer is.
-  // MetaSRC gets the remainder (50% to 100%).
+  // Model weight is bounded between 0.0 and 0.40, scaling with how proven each layer is.
+  // MetaSRC gets the remainder (60% to 100%).
   function modelConfidence(m) {
     if (!m) return 0;
     // 1. Meta / Strength confidence: based on matches collected, reaches 1.0 at 20,000 matches
@@ -817,8 +826,8 @@
 
   function getWeights(m) {
     const conf = modelConfidence(m);
-    // Model weight is bounded between 0.0 and 0.50
-    const wModel = Math.max(0.0, Math.min(0.50, 0.50 * conf));
+    // Model weight is bounded between 0.0 and 0.40
+    const wModel = Math.max(0.0, Math.min(0.40, 0.40 * conf));
     const wMeta = 1.0 - wModel;
     return { wModel, wMeta, conf };
   }
@@ -887,6 +896,7 @@
   const Engine = {
     recommend: hybridRecommend,
     evaluate: hybridEvaluate,
+    orderPickSuggestions,
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),
     guessRoles: (args) => (has(args.model) && args.players.length === 5 ? guessRoles(args) : null),

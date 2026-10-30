@@ -330,7 +330,7 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
     matchup: [],
   };
 
-  // 1. Fully proven model (high matches, proven syn & vs): reaches 50% model, 50% MetaSRC
+  // 1. Fully proven model (high matches, proven syn & vs): reaches 40% model, 60% MetaSRC
   const provenModel = {
     ...model,
     matches: 25000,
@@ -339,9 +339,9 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
   };
   const evProven = Engine.evaluate({ stats, model: provenModel, championId: 1, role: 'top' });
   assert.ok(evProven);
-  assert.equal(evProven.weights.model, 0.5);
-  assert.equal(evProven.weights.metasrc, 0.5);
-  assert.equal(evProven.score, Math.round(0.5 * evProven.modelScore + 0.5 * evProven.metaSrcScore));
+  assert.equal(evProven.weights.model, 0.4);
+  assert.equal(evProven.weights.metasrc, 0.6);
+  assert.equal(evProven.score, Math.round(0.4 * evProven.modelScore + 0.6 * evProven.metaSrcScore));
 
   // 2. Young model without proven syn/vs: model weight is lower, MetaSRC carries the weight
   const youngModel = { ...model, matches: 2000, syn: [], vs: [] };
@@ -350,4 +350,19 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
   assert.ok(evYoung.weights.model < 0.2);
   assert.ok(evYoung.weights.metasrc > 0.8);
   assert.equal(evYoung.score, Math.round(evYoung.weights.model * evYoung.modelScore + evYoung.weights.metasrc * evYoung.metaSrcScore));
+});
+
+test('pick order delays top and mid when counter risk is tied, but respects a strong counter risk', () => {
+  const picks = [
+    { p: { position: 'top' }, risk: 0 },
+    { p: { position: 'middle' }, risk: 0 },
+    { p: { position: 'bottom' }, risk: 0 },
+    { p: { position: 'utility' }, risk: 0 },
+    { p: { position: 'jungle' }, risk: 0 },
+  ];
+  assert.deepEqual(Engine.orderPickSuggestions(picks).map((x) => x.p.position), ['utility', 'jungle', 'bottom', 'middle', 'top']);
+
+  const riskyBlindPick = picks.map((x) => x.p.position === 'utility' ? { ...x, risk: 8 } : x);
+  const withRisk = Engine.orderPickSuggestions(riskyBlindPick).map((x) => x.p.position);
+  assert.ok(withRisk.indexOf('top') < withRisk.indexOf('utility'));
 });
