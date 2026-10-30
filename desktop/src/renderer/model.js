@@ -856,8 +856,11 @@
 
   function getWeights(m) {
     const conf = modelConfidence(m);
-    // Model weight is bounded between 0.0 and 0.50
-    const wModel = Math.max(0.0, Math.min(0.50, 0.50 * conf));
+    // Use a supported out-of-time blend; until then, fall back to source confidence.
+    const tuned = m?.ensemble?.supported && Number.isFinite(m.ensemble.modelWeight)
+      ? Math.max(0, Math.min(0.5, m.ensemble.modelWeight))
+      : null;
+    const wModel = tuned ?? Math.max(0.0, Math.min(0.50, 0.50 * conf));
     const wMeta = 1.0 - wModel;
     return { wModel, wMeta, conf };
   }

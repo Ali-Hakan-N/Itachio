@@ -9,7 +9,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { createClient } = require('@supabase/supabase-js');
 const { toRows } = require('./normalize');
-const { writeRows, loadChampions, startRun, finishRun } = require('./writer');
+const { writeRows, writeMetaSourceSnapshot, loadChampions, startRun, finishRun } = require('./writer');
 
 // Fewer meta rows than this means the data is incomplete: keep the current scores
 const MIN_META_ROWS = 50;
@@ -87,6 +87,14 @@ async function main() {
         return { written: false, note };
       }
       const stats = await writeRows(client, rows, { source: source.name, collectedAt });
+      if (source.name === 'metasrc' && output.patch) {
+        try {
+          await writeMetaSourceSnapshot(client, { patch: output.patch, collectedAt, rows });
+          log(`metasrc snapshot saved for patch ${output.patch}`);
+        } catch (err) {
+          log(`warning: MetaSrc snapshot not saved (${err.message}); apply migration 0016 to enable ensemble tuning`);
+        }
+      }
       log('scores updated', JSON.stringify(stats));
       return { written: true, ...stats, problems: rows.problems.length };
     };

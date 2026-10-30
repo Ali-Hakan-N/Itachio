@@ -9,8 +9,8 @@ const ctx = { share: new Map(), tagOf: (id) => (id % 2 ? 'Mage' : 'Tank') };
 test('compact match needs every role once per team', () => {
   const p = (c, r, t, w) => ({ c, r, t, w });
   const roles = ['top', 'jungle', 'middle', 'bottom', 'utility'];
-  const full = { id: 'X_1', queue: 440, p: [...roles.map((r, i) => p(i + 1, r, 100, true)), ...roles.map((r, i) => p(i + 11, r, 200, false))] };
-  assert.deepEqual(toCompact(full), { id: 'X_1', q: 440, w: 1, b: [1, 2, 3, 4, 5], r: [11, 12, 13, 14, 15] });
+  const full = { id: 'X_1', patch: '16.21', start: 1790000000000, queue: 440, p: [...roles.map((r, i) => p(i + 1, r, 100, true)), ...roles.map((r, i) => p(i + 11, r, 200, false))] };
+  assert.deepEqual(toCompact(full), { id: 'X_1', q: 440, w: 1, b: [1, 2, 3, 4, 5], r: [11, 12, 13, 14, 15], t: 1790000000000, patch: '16.21' });
   const missing = { ...full, p: full.p.map((x, i) => (i === 0 ? { ...x, r: '' } : x)) };
   assert.equal(toCompact(missing), null);
 });

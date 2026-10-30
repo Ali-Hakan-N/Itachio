@@ -56,6 +56,8 @@ function toCompact(m) {
   }
   if (b.includes(0) || r.includes(0) || blueWon === null) return null;
   const out = { id: m.id, q: m.queue, w: blueWon ? 1 : 0, b, r };
+  if (Number.isFinite(m.start) && m.start > 0) out.t = m.start;
+  if (m.patch) out.patch = m.patch;
   if (Array.isArray(m.b)) out.x = m.b;
   if (lb.some(Boolean) || lr.some(Boolean)) Object.assign(out, { lb, lr });
   if (m.first) out.f = m.first.map((t) => (t === 100 ? 1 : t === 200 ? -1 : 0));

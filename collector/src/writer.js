@@ -34,6 +34,20 @@ async function writeRows(client, rows, { source, collectedAt }) {
   return stats;
 }
 
+async function writeMetaSourceSnapshot(client, { patch, collectedAt, rows }) {
+  if (!patch || !rows.meta.length) return false;
+  const cutoff = new Date(Date.parse(collectedAt) - 120 * 86400000).toISOString();
+  const project = (list, fields) => list.map((row) => Object.fromEntries(fields.map((field) => [field, row[field]])));
+  const data = {
+    meta: project(rows.meta, ['champion_id', 'role', 'score']),
+    synergy: project(rows.synergy, ['champion_id', 'role', 'ally_id', 'strength']),
+    matchup: project(rows.matchup, ['champion_id', 'role', 'opponent_id', 'opponent_role', 'strength']),
+  };
+  check(await client.from('meta_source_snapshots').insert({ source: 'metasrc', patch, collected_at: collectedAt, data }));
+  check(await client.from('meta_source_snapshots').delete().lt('collected_at', cutoff));
+  return true;
+}
+
 async function loadChampions(client) {
   return check(await client.from('champions').select('id,slug,name'));
 }
@@ -46,4 +60,4 @@ async function finishRun(client, id, fields) {
   check(await client.from('collector_runs').update({ ...fields, finished_at: new Date().toISOString() }).eq('id', id));
 }
 
-module.exports = { writeRows, loadChampions, startRun, finishRun };
+module.exports = { writeRows, writeMetaSourceSnapshot, loadChampions, startRun, finishRun };

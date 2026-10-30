@@ -17,6 +17,7 @@ const idle = require('./idle');
 const { counterpickTendency } = require('./choice');
 const { exportComp } = require('./comp');
 const { analyzeBuilds, analyzeSituations, loadDdragon } = require('./builds');
+const { makeOutOfTimeObservations, selectModelWeight } = require('./ensemble');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
@@ -33,6 +34,8 @@ const PRUNE = 0.002; // pair weights smaller than this are left out of the uploa
 const MIN_MATCHES = 2000;
 const MAX_TRAIN_MATCHES = 150000; // newest matches only, keeps training memory around 500 MB
 const KEEP_SNAPSHOTS = 3;
+const ENSEMBLE_OBSERVATION_LIMIT = 5000;
+const ENSEMBLE_OBSERVATION_DAYS = 180;
 const BAN_MIN_MATCHES = 500; // ban rates are exported from this many matches with bans
 const IDLE_CHECK_MS = 60_000; // while waiting for a free computer
 const BUSY_POLL_MS = 20_000; // while training: stop if a game starts
@@ -230,13 +233,69 @@ function check({ data, error }) {
   return data;
 }
 
+async function loadNewestModelSnapshot(client) {
+  return check(await client.from('model_snapshots').select('id,patch,created_at,data')
+    .eq('source', 'riot-model').order('created_at', { ascending: false }).limit(1).maybeSingle());
+}
+
+async function loadMetaSourceSnapshots(client, log) {
+  try {
+    return check(await client.from('meta_source_snapshots').select('id,patch,collected_at,data')
+      .eq('source', 'metasrc').order('collected_at', { ascending: false }).limit(180));
+  } catch (err) {
+    log(`model: MetaSrc snapshots unavailable (${err.message}); keeping confidence-based ensemble`);
+    return [];
+  }
+}
+
+async function loadEnsembleObservations(client, log) {
+  try {
+    const rows = [];
+    for (let from = 0; from < ENSEMBLE_OBSERVATION_LIMIT; from += 1000) {
+      const page = check(await client.from('ensemble_observations')
+        .select('match_id,started_at,model_logit,meta_features,win')
+        .order('started_at', { ascending: false }).range(from, from + 999));
+      rows.push(...page);
+      if (page.length < 1000) break;
+    }
+    return rows.map((row) => ({
+      matchId: row.match_id,
+      startedAt: Date.parse(row.started_at),
+      modelLogit: Number(row.model_logit),
+      features: row.meta_features,
+      win: row.win,
+    })).filter((row) => Number.isFinite(row.startedAt) && Number.isFinite(row.modelLogit) && Array.isArray(row.features));
+  } catch (err) {
+    log(`model: ensemble observations unavailable (${err.message}); keeping confidence-based ensemble`);
+    return [];
+  }
+}
+
+async function writeEnsembleObservations(client, rows, log) {
+  if (!rows.length) return false;
+  try {
+    for (let i = 0; i < rows.length; i += 500) {
+      check(await client.from('ensemble_observations').upsert(rows.slice(i, i + 500).map(({ startedAt, modelLogit, features, ...row }) => row), {
+        onConflict: 'match_id', ignoreDuplicates: true,
+      }));
+    }
+    const cutoff = new Date(Date.now() - ENSEMBLE_OBSERVATION_DAYS * 86400000).toISOString();
+    check(await client.from('ensemble_observations').delete().lt('started_at', cutoff));
+    log(`model: saved ${rows.length} out-of-time ensemble observations`);
+    return true;
+  } catch (err) {
+    log(`model: ensemble observations not saved (${err.message}); keeping confidence-based ensemble`);
+    return false;
+  }
+}
+
 async function loadNames(client) {
   const rows = check(await client.from('champions').select('id,name'));
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
 /** Human-readable training report: log lines and data/model-report.json */
-function writeReport({ data, metrics: m, champions, seconds, log }) {
+function writeReport({ data, metrics: m, champions, seconds, ensemble, log }) {
   const scoreOf = (w, role, share) =>
     50 + 50 * Math.tanh((data.pointsPerLogit * (w + data.off[role] * -Math.log(Math.max(share, SHARE_FLOOR)) - data.center)) / 50);
   const top = {};
@@ -274,6 +333,7 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
     alwaysFiftyLogloss: m.baseLogloss,
     layers: m.layers.map((l) => ({ name: l.name, kept: l.accepted, proven: l.proven ?? true, gain: l.improvement, se: l.se })),
     calibration: m.calibration,
+    ensemble,
     pointsPerLogit: data.pointsPerLogit,
     weights: { synergy: data.syn.length, matchup: data.vs.length, latent: data.fm ? Object.keys(data.fm.S).length : 0 },
     topByRole: top,
@@ -296,6 +356,11 @@ function writeReport({ data, metrics: m, champions, seconds, log }) {
     /* the report is optional */
   }
   log(`model: ${m.matches} matches, ${seconds}s · proven: ${m.layers.filter((l) => l.proven ?? true).map((l) => l.name).join(', ')}`);
+  if (ensemble?.supported) {
+    log(`model: ensemble ${Math.round(ensemble.modelWeight * 100)}% model / ${Math.round((1 - ensemble.modelWeight) * 100)}% MetaSrc · ${ensemble.validationMatches} validation matches, logloss ${ensemble.candidateLogloss.toFixed(5)} vs ${ensemble.baselineLogloss.toFixed(5)}`);
+  } else {
+    log(`model: ensemble not tuned (${ensemble?.matches || 0}/${ensemble?.minimum || 500} out-of-time matches); confidence weighting remains active`);
+  }
   for (const role of ROLES) log(`model: top ${role.padEnd(7)} ${top[role].map((t) => `${t.champion} ${t.score}`).join(', ') || '(not enough games yet)'}`);
 }
 
@@ -463,13 +528,30 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const m = model.metrics;
   const provenAt = recordProven(m);
   if (provenAt) log(`model: every layer proven; ${provenAt} matches are enough, older patches fill up to that`);
+  const [previousSnapshot, sourceSnapshots, previousObservations] = await Promise.all([
+    loadNewestModelSnapshot(client).catch((err) => (log(`model: previous snapshot unavailable (${err.message})`), null)),
+    loadMetaSourceSnapshots(client, log),
+    loadEnsembleObservations(client, log),
+  ]);
+  const existingMatchIds = new Set(previousObservations.map((row) => row.matchId));
+  const newObservations = makeOutOfTimeObservations(matches, {
+    modelSnapshot: previousSnapshot,
+    sourceSnapshots,
+    existingMatchIds,
+  });
+  const observationsSaved = await writeEnsembleObservations(client, newObservations, log);
+  const ensembleHistory = [...previousObservations, ...(observationsSaved ? newObservations : [])]
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .slice(-ENSEMBLE_OBSERVATION_LIMIT);
+  const ensemble = selectModelWeight(ensembleHistory);
   const data = exportModel(model, { share, games, tags, patch, matches: matches.length, banRate: banRates(matches) });
+  data.ensemble = ensemble;
   data.counterpick = counterpickTendency(data, matches);
   if (data.counterpick) {
     const c = data.counterpick;
     log(`model: counterpicks  λ = ${c.lambda.toFixed(2)} ± ${(c.se ?? 0).toFixed(2)} over ${c.picks} picks (0 = picks follow popularity only)`);
   }
-  writeReport({ data, metrics: m, champions: await loadNames(client), seconds: Math.round((Date.now() - t0) / 1000), log });
+  writeReport({ data, metrics: m, champions: await loadNames(client), seconds: Math.round((Date.now() - t0) / 1000), ensemble, log });
   check(
     await client.from('model_snapshots').insert({ source: 'riot-model', patch, matches: matches.length, metrics: m, data }).select('id'),
   );

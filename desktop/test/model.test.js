@@ -343,6 +343,11 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
   assert.equal(evProven.weights.metasrc, 0.5);
   assert.equal(evProven.score, Math.round(0.5 * evProven.modelScore + 0.5 * evProven.metaSrcScore));
 
+  const tunedModel = { ...provenModel, ensemble: { supported: true, modelWeight: 0.25 } };
+  const evTuned = Engine.evaluate({ stats, model: tunedModel, championId: 1, role: 'top' });
+  assert.equal(evTuned.weights.model, 0.25);
+  assert.equal(evTuned.weights.metasrc, 0.75);
+
   // 2. Young model without proven syn/vs: model weight is lower, MetaSRC carries the weight
   const youngModel = { ...model, matches: 2000, syn: [], vs: [] };
   const evYoung = Engine.evaluate({ stats, model: youngModel, championId: 1, role: 'top' });
