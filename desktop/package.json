@@ -1,7 +1,7 @@
 {
   "name": "itachio",
   "productName": "Itachio",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Itachio: League of Legends draft assistant for teams",
   "main": "src/main/main.js",
   "private": true,

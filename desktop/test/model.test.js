@@ -533,3 +533,29 @@ test('pick order updates at enemy picks and teammate hover changes, not on local
   assert.deepEqual(frozen, { order: [1, 2], pending: null });
   assert.deepEqual(Engine.stabilizePickOrder(null, null, [2, 1], 500, 1500, false), { order: [], pending: null });
 });
+
+test('lane penalty: losing the lane hard costs extra, a small loss does not', () => {
+  const withEarly = (v) => ({
+    ...model,
+    champ: { ...model.champ, '7:0': [0.0, 900, 0.95] },
+    tags: { ...model.tags, 7: 'Fighter' },
+    early: { laneMean: { '1:0': 0, '7:0': 0 }, laneVs: [[0, 1, 7, v, 100]] },
+  });
+  const enemy = [{ championId: 7, position: 'top' }];
+  const none = evaluate({ model: withEarly(0), championId: 1, role: 'top', enemies: enemy });
+  const hard = evaluate({ model: withEarly(-0.3), championId: 1, role: 'top', enemies: enemy });
+  const small = evaluate({ model: withEarly(-0.01), championId: 1, role: 'top', enemies: enemy });
+  assert.equal(none.lane, 0);
+  assert.equal(small.lane, 0);
+  assert.ok(hard.lane < 0 && hard.score < none.score, `lane ${hard.lane}`);
+});
+
+test('pick order: a solo lane with a narrow pool picks later, a deep pool earlier', () => {
+  assert.equal(Engine.poolDepth([{ games: 20, delta: 0.1, mastery: 0 }, { games: 5, delta: -0.1, mastery: 0.8 }, { games: 20, delta: -0.1, mastery: 0 }]), 1.5);
+  const pick = (cellId, position, poolDepth) => ({ p: { cellId, position }, championId: 0, risk: 0, matchup: 0, personal: 0, poolDepth });
+  const order = (rated) => Engine.orderPickSuggestions(rated).map((r) => r.p.cellId);
+  // Without pool data the order follows the role (mid before top)
+  assert.deepEqual(order([pick(1, 'top', null), pick(2, 'middle', null)]), [2, 1]);
+  // Mid with nothing safe is hidden behind a top with a deep pool
+  assert.deepEqual(order([pick(1, 'top', 8), pick(2, 'middle', 0)]), [1, 2]);
+});

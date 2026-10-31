@@ -94,9 +94,15 @@
   const SCALE_MIN_GAMES = 100; // champion:role pairs that define the scale
   const UNSURE_GAMES = 100; // fewer games than this in the role: rough estimate
   const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
-  const LANE_CALL = 0.6; // game plan: a lane is ahead or behind beyond this many standard deviations of its role
+  const LANE_CALL = 0.6; // a lane is ahead or behind beyond this many standard deviations of its role (game plan and lane penalty)
   const EDGE_PCT = 1; // game plan: an edge counts from this many percentage points of win chance
   const PERSONAL_WEIGHT = 0.5;
+  const POOL_GAMES = 10; // games on a champion for it to count fully in a player's pool
+  const POOL_MASTERY = 0.4; // mastery (0-1) that makes a champion comfortable without results
+  const POOL_NORMAL = 4; // a pool of this size changes nothing in the pick order
+  const POOL_WEIGHT = 6; // pick order points between a pool of none and a pool of POOL_NORMAL
+  const LANE_PENALTY = 0.5; // share of a lane loss beyond the threshold that is taken off the logit
+  const LANE_AMORTIZE = 1.5; // a lane loss is forgiven once the composition gain is this many times the loss
   const PERSONAL_CAP = 0.4; // in standard deviations of strength
   const PERSONAL_CLASS_PRIOR = 40; // pseudo-games before class-level comfort transfers to an unseen champion
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
@@ -151,6 +157,7 @@
       tags: new Map(Object.entries(model.tags || {}).map(([id, t]) => [Number(id), t])),
       off: model.off || [0, 0, 0, 0, 0],
       floor: model.shareFloor || 0.002,
+      early: model.early || null,
       fm: model.fm ? { S: vectors(model.fm.S), P: vectors(model.fm.P), Q: vectors(model.fm.Q) } : null,
     };
     // Scale from the spread of strength among well-played champion:role pairs
@@ -410,6 +417,31 @@
       + (ix.pillars.adIntoFrontline || 0) * (ours.adHeavy * theirs.frontline - theirs.adHeavy * ours.frontline);
   }
 
+  /**
+   * Lane tools from the early game model: sdOf (spread of lane results per role, over
+   * champions played there often) and laneOf(role, a, b) -> { diff, games }, the lane
+   * result of a against b (the learned pairing when it has games, else the average lanes).
+   */
+  function laneTools(ix) {
+    if (ix.laneTools !== undefined) return ix.laneTools;
+    const lane = ix.early?.laneMean;
+    if (!lane) return (ix.laneTools = null);
+    const sdOf = [0, 1, 2, 3, 4].map((r) => {
+      const v = Object.entries(lane).filter(([k]) => Number(k.split(':')[1]) === r && (ix.champ.get(k)?.games || 0) >= SCALE_MIN_GAMES).map(([, x]) => x);
+      if (v.length < 5) return 0.05;
+      const m = v.reduce((a, x) => a + x, 0) / v.length;
+      return Math.sqrt(v.reduce((a, x) => a + (x - m) ** 2, 0) / v.length) || 0.05;
+    });
+    const vs = new Map((ix.early.laneVs || []).map(([k, a, b, v, n]) => [`${k}:${a}:${b}`, { v, n }]));
+    const laneOf = (r, a, b) => {
+      const [x, y, sign] = a < b ? [a, b, 1] : [b, a, -1];
+      const learned = vs.get(`${r}:${x}:${y}`);
+      if (learned) return { diff: sign * learned.v, games: learned.n };
+      return { diff: (lane[`${a}:${r}`] ?? 0) - (lane[`${b}:${r}`] ?? 0), games: 0 };
+    };
+    return (ix.laneTools = { sdOf, laneOf });
+  }
+
   // future: { allyStyle, enemyStyle } expected styles of the picks still to come (or null)
   function scoreOne(ix, championId, r, allies, enemies, future = null) {
     const self = `${championId}:${r}`;
@@ -436,9 +468,11 @@
     }
 
     let mu = 0;
+    let laneDiff = 0; // expected lane result against the enemies who may be in this lane, log-odds
     const enemyHits = [];
     const enemyPicks = enemies.map(asPick);
     const assignments = roleAssignments(ix, enemyPicks, [...allies, { championId, position: ROLES[r] }]);
+    const tools = laneTools(ix);
     for (let i = 0; i < enemyPicks.length; i++) {
       const p = enemyPicks[i];
       const roleProbabilities = new Map();
@@ -449,6 +483,8 @@
         expectedMatchup += assignment.probability * matchup(ix, championId, r, p.championId, enemyRole);
       }
       mu += expectedMatchup;
+      const inLane = roleProbabilities.get(r) || 0;
+      if (tools && inLane) laneDiff += inLane * tools.laneOf(r, championId, p.championId).diff;
       if (expectedMatchup) enemyHits.push({
         championId: p.championId,
         value: expectedMatchup,
@@ -468,7 +504,16 @@
         [...allies.map((p) => asPick(p).championId).filter((id) => id !== championId), championId],
         enemies.map((p) => asPick(p).championId));
 
-    const logit = base + syn + mu + comp;
+    // Losing the lane hard (beyond LANE_CALL standard deviations of the role) costs extra
+    // unless the composition gain makes it up by LANE_AMORTIZE times the excess loss
+    let lanePenalty = 0;
+    if (tools && laneDiff < 0) {
+      const excess = -laneDiff - LANE_CALL * tools.sdOf[r];
+      if (excess > 0) lanePenalty = LANE_PENALTY * Math.max(0, excess - Math.max(0, comp) / LANE_AMORTIZE);
+    }
+
+    const before = base + syn + mu + comp;
+    const logit = before - lanePenalty;
     const score = toScore(ix, logit);
     const baseScore = toScore(ix, base);
     return {
@@ -477,7 +522,8 @@
       base: Math.round(baseScore),
       synergy: Math.round(toScore(ix, base + syn) - baseScore),
       matchup: Math.round(toScore(ix, base + syn + mu) - toScore(ix, base + syn)),
-      composition: Math.round(score - toScore(ix, base + syn + mu)),
+      composition: Math.round(toScore(ix, before) - toScore(ix, base + syn + mu)),
+      lane: Math.round(score - toScore(ix, before)),
       score: Math.round(score),
       logit,
       baseLogit: base,
@@ -687,6 +733,23 @@
     return { ...row, logit: final, score, counterRisk: Math.round(toScore(ix, withFuture)) - score };
   }
 
+  /**
+   * How many champions a player can safely play in a role: those with results above their
+   * own level (delta > 0) or high mastery, each counted by how many games back it up
+   * (POOL_GAMES for a full one). entries: [{ games, delta, mastery }] for that role.
+   */
+  function poolDepth(entries) {
+    return (entries || []).reduce((n, e) => n + ((e.delta > 0 || e.mastery >= POOL_MASTERY) ? Math.min(1, e.games / POOL_GAMES) : 0), 0);
+  }
+
+  // Solo lanes (top, middle) with a narrow pool pick later, with a deep one earlier; no
+  // data on the player, no shift
+  function poolShift(pick) {
+    if (pick.poolDepth === null || pick.poolDepth === undefined) return 0;
+    if (pick.p.position !== 'top' && pick.p.position !== 'middle') return 0;
+    return POOL_WEIGHT * (1 / (1 + pick.poolDepth) - 1 / (1 + POOL_NORMAL));
+  }
+
   function orderPickSuggestions(rated, enemyPicks = [], model = null, knownAllies = []) {
     const roleBias = { jungle: 0, utility: 0, bottom: 2, middle: 8, top: 10 };
     const ix = has(model) ? index(model) : null;
@@ -707,7 +770,7 @@
         ? 4 + Math.min(6, matchup)
         : 12 + matchup);
       const personalProtection = Math.min(4, Math.max(0, (pick.personal || 0) * 0.5));
-      return (pick.risk ?? 0) + (roleBias[pick.p.position] ?? 0) + personalProtection - counterBonus;
+      return (pick.risk ?? 0) + (roleBias[pick.p.position] ?? 0) + personalProtection + poolShift(pick) - counterBonus;
     };
     return rated.map((pick) => ({ ...pick, orderPriority: priority(pick) }))
       .sort((a, b) => a.orderPriority - b.orderPriority);
@@ -860,24 +923,9 @@
    */
   function gamePlan({ model, allies, enemies, damage = null }) {
     const ix = index(model);
-    const lane = model.early?.laneMean;
-    if (!lane) return null;
-    // Spread of lane results per role, over champions played there often (rare ones are extreme)
-    const sdOf = [0, 1, 2, 3, 4].map((r) => {
-      const v = Object.entries(lane).filter(([k]) => Number(k.split(':')[1]) === r && (ix.champ.get(k)?.games || 0) >= SCALE_MIN_GAMES).map(([, x]) => x);
-      if (v.length < 5) return 0.05;
-      const m = v.reduce((a, x) => a + x, 0) / v.length;
-      return Math.sqrt(v.reduce((a, x) => a + (x - m) ** 2, 0) / v.length) || 0.05;
-    });
-    if (!ix.laneVs) {
-      ix.laneVs = new Map((model.early.laneVs || []).map(([k, a, b, v, n]) => [`${k}:${a}:${b}`, { v, n }]));
-    }
-    const laneOf = (r, a, b) => {
-      const [x, y, sign] = a < b ? [a, b, 1] : [b, a, -1];
-      const learned = ix.laneVs.get(`${r}:${x}:${y}`);
-      if (learned) return { diff: sign * learned.v, games: learned.n };
-      return { diff: (lane[`${a}:${r}`] ?? 0) - (lane[`${b}:${r}`] ?? 0), games: 0 };
-    };
+    const tools = laneTools(ix);
+    if (!tools) return null;
+    const { sdOf, laneOf } = tools;
     const roleOf = (p) => roleIndex(ix, asPick(p).championId, asPick(p).position);
     const byRole = (list) => {
       const out = new Array(5).fill(null);
@@ -1283,6 +1331,7 @@
     shouldUpdatePickOrder,
     shouldUpdatePickOrderForHover,
     answerShare,
+    poolDepth,
     stabilizePickOrder,
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),

@@ -465,7 +465,7 @@ function banRow(r, i, { canHover, hoverId }) {
 function playedEntries(playerId) {
   const own = S.playerStats?.[playerId] || {};
   const byKey = (own.season || own.history)?.byKey || {};
-  return Object.entries(byKey).map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games, mastery: v.mastery || 0 }));
+  return Object.entries(byKey).map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games, delta: v.delta, mastery: v.mastery || 0 }));
 }
 
 // Our side for ban suggestions: picks and pick intents, and for a teammate who has not
@@ -491,6 +491,12 @@ function banAllies(d, blocked) {
 // Who should pick first: teammates still to pick, ordered by role (which lanes the enemy
 // can counter, which the jungle and bot lanes need to see first) and, for a teammate who
 // hovers a champion, by how easily the enemy can answer it. No guess about who plays what.
+
+// Safe champions a player has in a role (null without statistics, so nothing is assumed)
+function poolDepthOf(playerId, role) {
+  const entries = playedEntries(playerId);
+  return entries.length ? Engine.poolDepth(entries.filter((e) => e.role === role)) : null;
+}
 
 const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null };
 const PICK_ORDER_STABILITY_MS = 1500;
@@ -543,7 +549,7 @@ function pickOrderHtml(d, blocked) {
     const ev = championId
       ? Engine.evaluate({ stats: S.stats, model: S.model, championId, role: p.position, ...draftContext(d, p.cellId), lookAhead: true, unavailable: blocked, personal: personalOf(playerId, d) })
       : null;
-    return { p, championId, risk: ev?.counterRisk ?? 0, matchup: ev?.matchup ?? 0, personal: ev?.personal ?? 0 };
+    return { p, championId, risk: ev?.counterRisk ?? 0, matchup: ev?.matchup ?? 0, personal: ev?.personal ?? 0, poolDepth: poolDepthOf(playerId, p.position) };
   });
   const enemyPicks = d.enemy.filter((p) => p.locked && p.championId);
   const suggested = stabilizedPickOrder(d, rated, Engine.orderPickSuggestions(rated, enemyPicks, S.model, draftContext(d).allies), teammateHoverChanged);
