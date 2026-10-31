@@ -332,10 +332,10 @@ app.whenReady().then(async () => {
   });
 
   // A team member's ranked games (default: mine)
-  handle('history:list', async (playerId) => {
+  handle('history:list', async (playerId, offset = 0, count = 11) => {
     const me = core.state.me;
     const player = core.state.members.find((m) => m.id === playerId) || me;
-    return player ? data.listHistory(player) : [];
+    return player ? data.listHistory(player, Math.max(0, Number(offset) || 0), Math.min(51, Math.max(1, Number(count) || 11))) : [];
   });
   handle('history:clear', async () => {
     await data.clearHistory(requireTeamMember());

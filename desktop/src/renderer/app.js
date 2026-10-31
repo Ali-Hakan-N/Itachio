@@ -45,7 +45,8 @@ const STAT_SOURCES = [
   ['team', 'With the Team'], // their games with five team members on their side, per line-up
 ];
 // Whose games the History tab shows (default: me)
-const historyUi = { player: null };
+const historyUi = { player: null, rows: [], more: false, html: new Map() };
+const HISTORY_PAGE = 10;
 
 const $view = document.getElementById('view');
 const $status = document.getElementById('status');
@@ -1281,13 +1282,22 @@ function renderTeam() {
 // both teams in role order with every champion's score on the final board. Only for
 // looking back; the champion statistics are in the Champions tab.
 const QUEUE_NAME = { 420: 'Solo/Duo', 440: 'Flex' };
-async function renderHistory() {
+async function renderHistory(more = false) {
   const members = S.members || [];
   const id = historyUi.player && members.some((m) => m.id === historyUi.player) ? historyUi.player : S.me?.id;
   const mine = id === S.me?.id;
-  $view.innerHTML = '<p class="note">Loading…</p>';
-  const rows = await run(api.listHistory(id));
+  if (!more) {
+    $view.innerHTML = '<p class="note">Loading…</p>';
+    historyUi.rows = [];
+    historyUi.html = new Map();
+  }
+  // One more than shown tells whether there is another page
+  const page = await run(api.listHistory(id, more ? historyUi.rows.length : 0, HISTORY_PAGE + 1));
   if (tab !== 'history') return;
+  historyUi.more = page.length > HISTORY_PAGE;
+  historyUi.rows = [...historyUi.rows, ...page.slice(0, HISTORY_PAGE)];
+  const rows = historyUi.rows;
+  const keepScroll = $view.scrollTop;
   const roleList = ROLES.map(([r]) => r);
   const team = (ids) => ids.map((championId, i) => ({ championId, position: roleList[i] }));
   // Every champion scored on the final board, from its own team's side, and the team's average
@@ -1311,13 +1321,15 @@ async function renderHistory() {
     </div>`;
   const body = rows.length
     ? `<div class="hist">${rows.map((r) => {
+        const cached = historyUi.html.get(r.match_id);
+        if (cached) return cached;
         const ours = r.side === 'red' ? r.red : r.blue;
         const theirs = r.side === 'red' ? r.blue : r.red;
         const us = scored(team(ours), team(theirs));
         const them = scored(team(theirs), team(ours));
         const kda = r.kills === null ? '' : `${r.kills}/${r.deaths}/${r.assists}`;
         const time = r.duration_s ? `${Math.floor(r.duration_s / 60)}:${String(r.duration_s % 60).padStart(2, '0')}` : '';
-        return `
+        const html = `
         <div class="hrow ${r.win ? 'won' : 'lost'}">
           <span class="hwhen"><b>${new Date(r.started_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</b><small>${QUEUE_NAME[r.queue_id] || ''}${time ? ` · ${time}` : ''}</small></span>
           <span class="hres ${r.win ? 'win' : 'loss'}">${r.win ? 'Win' : 'Loss'}<small class="tag ${r.side}">${r.side === 'red' ? 'Red' : 'Blue'}</small></span>
@@ -1326,9 +1338,20 @@ async function renderHistory() {
           <div class="hscore">${avgHtml(us)}<span class="hvs">vs</span>${avgHtml(them)}</div>
           ${teamHtml(them, null)}
         </div>`;
-      }).join('')}</div>`
+        historyUi.html.set(r.match_id, html);
+        return html;
+      }).join('')}</div>${historyUi.more ? '<div class="hist-more"><button class="btn ghost" id="hmore">Load More</button></div>' : ''}`
     : `<div class="empty-state"><h2>No Games Yet</h2><p>${mine ? 'Your ranked games of the season show up here once the collector reads them from Riot.' : 'No ranked games to show.'}</p></div>`;
   $view.innerHTML = toolbar + body;
+  $view.scrollTop = keepScroll;
+  const moreBtn = document.getElementById('hmore');
+  if (moreBtn) {
+    moreBtn.onclick = () => {
+      moreBtn.disabled = true;
+      moreBtn.textContent = 'Loading…';
+      renderHistory(true);
+    };
+  }
   document.getElementById('hwho').onchange = (e) => {
     historyUi.player = e.target.value;
     renderHistory();

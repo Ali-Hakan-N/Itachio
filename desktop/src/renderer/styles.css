@@ -748,3 +748,5 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .pval.down, .hint b.down { color: var(--red); }
 .plan-advice { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .plan-advice li::marker { color: var(--gold); }
+
+.hist-more { display: flex; justify-content: center; padding: 14px 0 6px; }

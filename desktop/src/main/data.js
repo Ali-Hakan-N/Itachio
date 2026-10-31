@@ -317,14 +317,14 @@ class DataStore {
     check(await this.client.from('match_results').upsert(row, { onConflict: 'game_id,player_id', ignoreDuplicates: true }));
   }
   // A player's ranked games (collector/src/players), newest first, after they last cleared
-  // their history
-  async listHistory(player, limit = 100) {
+  // their history. offset and count page through it (the app asks for one more than it shows)
+  async listHistory(player, offset = 0, count = 11) {
     let q = this.client
       .from('player_games')
       .select('match_id,started_at,queue_id,duration_s,side,role,champion_id,win,kills,deaths,assists,cs,blue,red,lineup')
       .eq('player_id', player.id);
     if (player.history_cleared_at) q = q.gt('started_at', player.history_cleared_at);
-    return check(await q.order('started_at', { ascending: false }).limit(limit));
+    return check(await q.order('started_at', { ascending: false }).order('match_id').range(offset, offset + count - 1));
   }
 
   // ---------- Live updates ----------
