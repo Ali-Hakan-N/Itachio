@@ -32,6 +32,10 @@ function normalizeSession(session, now = Date.now()) {
       .filter((a) => a?.type === 'pick' && a.isAllyAction)
       .map((a) => a.actorCellId))
     .filter((group) => group.length > 1);
+  // Every pick action in session order; picks of one round happen at the same time
+  const pickSequence = (session.actions || []).flatMap((group, round) => (Array.isArray(group) ? group : [group])
+    .filter((a) => a?.type === 'pick')
+    .map((a) => ({ cellId: a.actorCellId, ally: !!a.isAllyAction, completed: !!a.completed, round })));
 
   const pickDone = new Map(); // cellId -> championId
   for (const a of actions) {
@@ -111,6 +115,7 @@ function normalizeSession(session, now = Date.now()) {
     // Our team's cells in the order they pick
     allyPickOrder: [...new Set(actions.filter((a) => a.type === 'pick' && a.isAllyAction).map((a) => a.actorCellId))],
     allyPickGroups,
+    pickSequence,
     banHoverId: myBan && myBan.championId > 0 ? myBan.championId : 0,
     turn,
     ally,

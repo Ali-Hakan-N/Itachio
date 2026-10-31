@@ -142,11 +142,16 @@ function forEachFeature(m, { share, tagOf }, emit) {
       control: controlShare,
       highDamageLowControl: damageLoad * (1 - controlShare),
       frontlineMarksman: frontlineShare * (marksman / 5),
+      adHeavy: Math.max(0, Math.log((ad + 0.5) / (ap + 0.5))),
     };
   };
   const bluePillars = pillars(m.b);
   const redPillars = pillars(m.r);
-  for (const pillar of Object.keys(bluePillars)) emit(`a:${pillar}`, bluePillars[pillar] - redPillars[pillar]);
+  for (const pillar of Object.keys(bluePillars)) {
+    if (pillar !== 'adHeavy') emit(`a:${pillar}`, bluePillars[pillar] - redPillars[pillar]);
+  }
+  // A team of mostly physical damage into the other team's frontline (armor), both ways
+  emit('a:adIntoFrontline', bluePillars.adHeavy * redPillars.frontline - redPillars.adHeavy * bluePillars.frontline);
   for (let i = 0; i < 5; i++) {
     for (let j = 0; j < 5; j++) {
       const [x, y] = [m.b[i], m.r[j]];

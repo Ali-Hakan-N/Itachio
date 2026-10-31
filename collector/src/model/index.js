@@ -140,7 +140,7 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
   const vs = [];
   const ts = {};
   const tv = {};
-  const pillars = { damageImbalance: 0, frontline: 0, control: 0, highDamageLowControl: 0, frontlineMarksman: 0 };
+  const pillars = { damageImbalance: 0, frontline: 0, control: 0, highDamageLowControl: 0, frontlineMarksman: 0, adIntoFrontline: 0 };
   const se = (i) => (model.se ? round(model.se[i], 5) : null);
   const on = new Set(model.groups || ['c', 'o', 's', 'ts', 'v', 'tv']);
   model.keys.forEach((key, i) => {
@@ -422,6 +422,7 @@ const patchOrder = (a, b) => {
 const STATE_FILE = path.join(DATA_DIR, '..', 'model-state.json');
 const PROVEN_LAYERS = ['strength', 'early game', 'synergy', 'matchup'];
 const DEFAULT_ENOUGH = 60000;
+const OLD_PATCH_WEIGHT = [0.6, 0.4]; // an older patch's match counts this at the start of a patch, and this once the new patch has enough
 const MIN_ENOUGH = 20000;
 
 function readState() {
@@ -459,9 +460,10 @@ function recordProven(metrics) {
  * has fewer than enough, the newest matches of the older patches fill it up to enough.
  * Pure. Returns [{ patch, matches }] in training order (oldest first).
  */
-function pickTraining(current, older, { enough, max }) {
+function pickTraining(current, older, { enough, max, oldWeight = 1 }) {
   const own = current.matches.length > max ? current.matches.slice(-max) : current.matches;
-  let room = Math.max(0, Math.min(enough, max) - own.length);
+  // Older patches count oldWeight each: their share of the room is thinned to that
+  let room = Math.floor(Math.max(0, Math.min(enough, max) - own.length) * oldWeight);
   const parts = [{ patch: current.patch, matches: own }];
   for (const o of older) {
     if (room <= 0) break;
@@ -484,10 +486,14 @@ function loadTrainingMatches(patch, { enough = enoughMatches() } = {}) {
     : [];
   const older = patches.filter((p) => patchOrder(p, current) < 0).sort((a, b) => patchOrder(b, a));
   const own = loadMatches(current);
+  // Older patches weigh less than the new one, 0.6 at first and 0.4 once the new patch has
+  // enough matches of its own (nerfs and buffs make old games a worse guide)
+  const oldWeight = OLD_PATCH_WEIGHT[0] - (OLD_PATCH_WEIGHT[0] - OLD_PATCH_WEIGHT[1]) * Math.min(1, own.length / enough);
   // Older patches are only read when they are needed
   const parts = pickTraining({ patch: current, matches: own }, own.length >= enough ? [] : older.map((p) => ({ patch: p, matches: loadMatches(p) })), {
     enough,
     max: MAX_TRAIN_MATCHES,
+    oldWeight,
   });
   return { matches: parts.flatMap((p) => p.matches), byPatch: Object.fromEntries(parts.map((p) => [p.patch, p.matches.length])) };
 }

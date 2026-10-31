@@ -394,6 +394,7 @@
       control: controlShare,
       highDamageLowControl: damageLoad * (1 - controlShare),
       frontlineMarksman: frontlineShare * (marksman / 5),
+      adHeavy: Math.max(0, Math.log((ad + 0.5) / (ap + 0.5))),
     };
   }
 
@@ -405,7 +406,8 @@
       + (ix.pillars.frontline || 0) * (ours.frontline - theirs.frontline)
       + (ix.pillars.control || 0) * (ours.control - theirs.control)
       + (ix.pillars.highDamageLowControl || 0) * (ours.highDamageLowControl - theirs.highDamageLowControl)
-      + (ix.pillars.frontlineMarksman || 0) * (ours.frontlineMarksman - theirs.frontlineMarksman);
+      + (ix.pillars.frontlineMarksman || 0) * (ours.frontlineMarksman - theirs.frontlineMarksman)
+      + (ix.pillars.adIntoFrontline || 0) * (ours.adHeavy * theirs.frontline - theirs.adHeavy * ours.frontline);
   }
 
   // future: { allyStyle, enemyStyle } expected styles of the picks still to come (or null)
@@ -545,49 +547,54 @@
    * The rest of the draft for a candidate in role r, built once per board: the enemy's
    * answers, our own picks to come (with probabilities) and the expected styles.
    */
-  function restOfDraft(ix, r, allies, enemies, unavailable) {
+  function restOfDraft(ix, r, allies, enemies, unavailable, answerShare = 1) {
     const ids = (list) => list.map((p) => `${asPick(p).championId}:${asPick(p).position || ''}`).join(',');
     const key = `${r}|${ids(allies)}|${ids(enemies)}|${[...unavailable].sort().join(',')}`;
     ix.rest ||= new Map();
     if (ix.rest.has(key)) return ix.rest.get(key);
     if (ix.rest.size > 100) ix.rest.clear();
-    const out = buildRest(ix, r, allies, enemies, unavailable);
+    const out = buildRest(ix, r, allies, enemies, unavailable, answerShare);
     ix.rest.set(key, out);
     return out;
   }
 
-  function buildRest(ix, r, allies, enemies, unavailable) {
+  function buildRest(ix, r, allies, enemies, unavailable, answerShare = 1) {
     const enemyOpen = answers(ix, allies, enemies, unavailable);
     const allyOpen = probabilities(openPicks(ix, allies, enemies, unavailable, r));
     const future = ix.comp ? { allyStyle: expectedStyle(ix, allyOpen), enemyStyle: expectedStyle(ix, probabilities(enemyOpen)) } : null;
-    return { enemyOpen, allyOpen, future };
+    return { enemyOpen, allyOpen, future, answerShare };
   }
 
-  /** Expected log-odds the candidate loses once the enemy answers it in every open role */
-  function exposure(ix, championId, r, open) {
+  /**
+   * Expected log-odds the candidate loses once the enemy answers it in every open role.
+   * answered: share of the open enemy picks that come after ours and can see it; the rest
+   * pick without knowing it (lambda 0 for the candidate's matchups), so only the answers count.
+   */
+  function exposure(ix, championId, r, open, answered = 1) {
     let total = 0;
     for (const { q, list } of open) {
-      let max = -Infinity;
       const m = new Float64Array(list.length);
-      const w = new Float64Array(list.length);
       list.forEach((ans, i) => {
-        if (ans.y === championId) {
-          w[i] = -Infinity;
-          return;
-        }
-        m[i] = matchup(ix, ans.y, q, championId, r);
-        w[i] = ans.w + ix.lambda * m[i];
-        if (w[i] > max) max = w[i];
+        m[i] = ans.y === championId ? 0 : matchup(ix, ans.y, q, championId, r);
       });
-      let sum = 0;
-      let acc = 0;
-      for (let i = 0; i < list.length; i++) {
-        if (w[i] === -Infinity) continue;
-        const p = Math.exp(w[i] - max);
-        sum += p;
-        acc += p * m[i];
-      }
-      if (sum) total += acc / sum;
+      const expect = (lambda) => {
+        let max = -Infinity;
+        const w = new Float64Array(list.length);
+        list.forEach((ans, i) => {
+          w[i] = ans.y === championId ? -Infinity : ans.w + lambda * m[i];
+          if (w[i] > max) max = w[i];
+        });
+        let sum = 0;
+        let acc = 0;
+        for (let i = 0; i < list.length; i++) {
+          if (w[i] === -Infinity) continue;
+          const p = Math.exp(w[i] - max);
+          sum += p;
+          acc += p * m[i];
+        }
+        return sum ? acc / sum : 0;
+      };
+      total += (answered > 0 ? answered * expect(ix.lambda) : 0) + (answered < 1 ? (1 - answered) * expect(0) : 0);
     }
     return total;
   }
@@ -607,7 +614,7 @@
   function assess(ix, championId, r, allies, enemies, rest) {
     const row = scoreOne(ix, championId, r, allies, enemies, rest ? rest.future : null);
     if (!rest) return { row, ahead: 0, exposure: 0 };
-    return { row, ahead: futureSynergy(ix, championId, r, rest.allyOpen), exposure: exposure(ix, championId, r, rest.enemyOpen) };
+    return { row, ahead: futureSynergy(ix, championId, r, rest.allyOpen), exposure: exposure(ix, championId, r, rest.enemyOpen, rest.answerShare) };
   }
 
   // The player's own layer on top of the model; personal is what it adds in points
@@ -638,7 +645,7 @@
    */
   function typical(ix, r, allies, enemies, rest, unavailable) {
     const ids = (list) => list.map((p) => `${asPick(p).championId}:${asPick(p).position || ''}`).join(',');
-    const key = `${r}|${ids(allies)}|${ids(enemies)}|${rest ? 1 : 0}|${[...unavailable].sort().join(',')}`;
+    const key = `${r}|${ids(allies)}|${ids(enemies)}|${rest ? 1 : 0}|${rest?.answerShare ?? 1}|${[...unavailable].sort().join(',')}`;
     ix.typical ||= new Map();
     if (ix.typical.has(key)) return ix.typical.get(key);
     const onBoard = new Set([...allies, ...enemies].map((p) => asPick(p).championId));
@@ -746,13 +753,13 @@
   }
 
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
-  function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10, personal = null }) {
+  function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10, personal = null, answerShare = 1 }) {
     const ix = index(model);
     const allowed = pickable ? new Set(pickable) : null;
     const inPool = new Set(pool);
     const rests = new Map();
     const restFor = (r) => {
-      if (!rests.has(r)) rests.set(r, restOfDraft(ix, r, allies, enemies, unavailable));
+      if (!rests.has(r)) rests.set(r, restOfDraft(ix, r, allies, enemies, unavailable, answerShare));
       return rests.get(r);
     };
     const out = [];
@@ -774,11 +781,11 @@
    * Same arguments and result as Recommend.evaluate, plus model. With lookAhead the score
    * takes the rest of the draft into account like recommend() (for a pick not locked yet).
    */
-  function evaluate({ model, championId, role = '', allies = [], enemies = [], lookAhead: ahead = false, unavailable = new Set(), personal = null }) {
+  function evaluate({ model, championId, role = '', allies = [], enemies = [], lookAhead: ahead = false, unavailable = new Set(), personal = null, answerShare = 1 }) {
     const ix = index(model);
     if (!ix.bestRole.has(championId)) return null;
     const r = role ? ROLE_INDEX[role] : ix.bestRole.get(championId).r;
-    const rest = ahead && ix.matches ? restOfDraft(ix, r, allies, enemies, unavailable) : null;
+    const rest = ahead && ix.matches ? restOfDraft(ix, r, allies, enemies, unavailable, answerShare) : null;
     const typ = typical(ix, r, allies, enemies, rest, unavailable);
     const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);
     return personalize(ix, ahead ? { counterRisk: 0, ...row } : row, personal);
@@ -1254,6 +1261,18 @@
     return hasModel ? recommend(args) : (root.Recommend ? root.Recommend.recommend(legacy(args)) : []);
   }
 
+  /**
+   * Share of the enemy's picks still to come that happen after this cell's pick, so they
+   * can see it (1 when unknown: assume every answer is possible). sequence: pickSequence
+   * of the draft, [{ cellId, ally, completed, round }].
+   */
+  function answerShare(sequence, cellId) {
+    const mine = (sequence || []).find((x) => x.cellId === cellId && x.ally && !x.completed);
+    const pending = (sequence || []).filter((x) => !x.ally && !x.completed);
+    if (!mine || !pending.length) return 1;
+    return pending.filter((x) => x.round > mine.round).length / pending.length;
+  }
+
   const Engine = {
     recommend: hybridRecommend,
     evaluate: hybridEvaluate,
@@ -1263,6 +1282,7 @@
     pickOrderTrades,
     shouldUpdatePickOrder,
     shouldUpdatePickOrderForHover,
+    answerShare,
     stabilizePickOrder,
     // Bans need the learned model; without one there are no suggestions
     recommendBans: (args) => (has(args.model) ? recommendBans(args) : []),

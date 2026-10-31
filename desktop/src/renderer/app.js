@@ -395,6 +395,8 @@ function draftContext(d, exceptCell = null) {
   return {
     allies: others(d.ally).map((p) => ({ championId: shownChamp(p), position: p.position })),
     enemies: others(d.enemy).map((p) => ({ championId: shownChamp(p), position: p.position })),
+    // Enemy picks that come after this slot's can answer it; the others cannot
+    answerShare: Engine.answerShare?.(d.pickSequence, exceptCell) ?? 1,
   };
 }
 

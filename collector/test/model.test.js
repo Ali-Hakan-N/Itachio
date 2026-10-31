@@ -55,7 +55,7 @@ test('composition pillars are side-symmetric and capture damage balance, frontli
   const forward = new Map(features(blue, { share: new Map(), tagOf }));
   const reverse = new Map(features({ b: blue.r, r: blue.b }, { share: new Map(), tagOf }));
 
-  for (const key of ['a:damageImbalance', 'a:frontline', 'a:control', 'a:highDamageLowControl', 'a:frontlineMarksman']) {
+  for (const key of ['a:damageImbalance', 'a:frontline', 'a:control', 'a:highDamageLowControl', 'a:frontlineMarksman', 'a:adIntoFrontline']) {
     assert.ok(forward.has(key));
     assert.equal(reverse.get(key), -forward.get(key));
   }
@@ -63,6 +63,7 @@ test('composition pillars are side-symmetric and capture damage balance, frontli
   assert.ok(forward.get('a:control') > 0);
   assert.notEqual(forward.get('a:highDamageLowControl'), 0);
   assert.notEqual(forward.get('a:frontlineMarksman'), 0);
+  assert.notEqual(forward.get('a:adIntoFrontline'), 0);
 });
 
 test('out-of-time model prediction includes composition styles and learned pillars', () => {
@@ -145,7 +146,7 @@ test('training proves the planted strength, synergy and matchup', () => {
   const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
   assert.ok(data.champ['1:0'][0] > 0.3 && data.champ['1:0'][3] > 0);
   assert.ok(data.vs.some(([a, ra, b, rb, wt]) => a === 4 && ra === 3 && b === 5 && rb === 3 && wt > 0.3));
-  assert.deepEqual(Object.keys(data.pillars).sort(), ['control', 'damageImbalance', 'frontline', 'frontlineMarksman', 'highDamageLowControl']);
+  assert.deepEqual(Object.keys(data.pillars).sort(), ['adIntoFrontline', 'control', 'damageImbalance', 'frontline', 'frontlineMarksman', 'highDamageLowControl']);
 });
 
 test('every layer is kept by default; noise pairs stay small', () => {
@@ -290,6 +291,19 @@ test('training set: the current patch, filled from older patches only up to enou
   assert.deepEqual(sizes(pickTraining(list('16.22', 80), [list('16.21', 100)], { enough: 50, max: 200 })), { '16.22': 80 });
   // Never more than max
   assert.deepEqual(sizes(pickTraining(list('16.22', 300), [], { enough: 50, max: 200 })), { '16.22': 200 });
+  // Older patches weigh less: half the room is used with a weight of 0.5
+  assert.deepEqual(sizes(pickTraining(list('16.22', 10), [list('16.21', 100)], { enough: 50, max: 200, oldWeight: 0.5 })), { '16.21': 20, '16.22': 10 });
+});
+
+test('live draft: only the enemy picks after ours can answer it', () => {
+  const { Engine } = require('../../desktop/src/renderer/model.js');
+  const seq = [
+    { cellId: 0, ally: true, completed: true, round: 0 }, { cellId: 5, ally: false, completed: true, round: 1 },
+    { cellId: 6, ally: false, completed: false, round: 2 }, { cellId: 1, ally: true, completed: false, round: 3 },
+    { cellId: 7, ally: false, completed: false, round: 4 },
+  ];
+  assert.equal(Engine.answerShare(seq, 1), 0.5); // one of two pending enemy picks comes after
+  assert.equal(Engine.answerShare(seq, 9), 1); // not in the sequence: assume the worst
 });
 
 test('composition: finds a team-level style, and never makes the model worse', () => {

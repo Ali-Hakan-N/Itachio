@@ -77,6 +77,7 @@ function matchLogit(data) {
       control: controlShare,
       highDamageLowControl: damageLoad * (1 - controlShare),
       frontlineMarksman: frontlineShare * (marksman / 5),
+      adHeavy: Math.max(0, Math.log((ad + 0.5) / (ap + 0.5))),
     };
   };
   const pillarsTerm = (blue, red) => {
@@ -88,7 +89,8 @@ function matchLogit(data) {
       + (weights.frontline || 0) * (b.frontline - r.frontline)
       + (weights.control || 0) * (b.control - r.control)
       + (weights.highDamageLowControl || 0) * (b.highDamageLowControl - r.highDamageLowControl)
-      + (weights.frontlineMarksman || 0) * (b.frontlineMarksman - r.frontlineMarksman);
+      + (weights.frontlineMarksman || 0) * (b.frontlineMarksman - r.frontlineMarksman)
+      + (weights.adIntoFrontline || 0) * (b.adHeavy * r.frontline - r.adHeavy * b.frontline);
   };
   const strength = (c, r) => {
     const e = data.champ[`${c}:${r}`];
