@@ -392,10 +392,10 @@ class AppCore extends EventEmitter {
     const reasons = [...new Set(situational.flatMap((x) => x.reasons))];
     const shown = new Set([...build.items.core, build.items.boots, ...situational.map((x) => x.id)]);
     // In buying order: what is bought towards each item, then the item
-    const path = (build.items.path || []).map((s, i) => ({ type: `${i + 1}. ${s.parts.length ? 'Components, then item' : 'Item'}`, items: items([...s.parts, s.id]) }));
+    const steps = (build.items.path || []).map((s, i) => ({ type: `${i + 1}. ${s.parts.length ? 'Components, then item' : 'Item'}`, items: items([...s.parts, s.id]) }));
     const blocks = [
       { type: 'Starting Items', items: items(build.items.start || []) },
-      ...(path.length ? path : [
+      ...(steps.length ? steps : [
         { type: 'Core', items: items(build.items.core) },
         ...(build.items.boots ? [{ type: 'Boots', items: items([build.items.boots]) }] : []),
       ]),

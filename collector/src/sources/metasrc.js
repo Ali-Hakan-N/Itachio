@@ -14,13 +14,15 @@ puppeteer.use(StealthPlugin());
 const BASE_URL = 'https://www.metasrc.com/lol';
 const RANKS = 'diamond+';
 const { parseBuild } = require('./metasrc-builds');
-const BUILD_MIN_PICK = 0.5; // % of games: roles played less than this get no build page read
+const BUILD_MIN_ROLE = 2; // % of a champion's games: roles played less than this are left out
 const BUILD_PAGES_AT_ONCE = 3;
 const ROLE_URL = { top: 'top', jungle: 'jungle', middle: 'mid', bottom: 'adc', utility: 'support' };
+const { championResolver } = require('../normalize');
+const slugKey = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
 
 /** Token lists of a build page's widgets, found by their headings (see metasrc-builds.js) */
 function readBuildWidgets() {
-  const widgets = { slots: [] };
+  const widgets = { slots: [], rolePct: Number((document.body.innerText.match(/Role %:\s*([\d.]+)%/) || [])[1]) };
   for (const h of document.querySelectorAll('h2')) {
     const title = h.textContent.trim();
     const section = h.closest('header')?.nextElementSibling || h.parentElement.nextElementSibling;
@@ -81,7 +83,7 @@ function parsePct(str) {
 module.exports = {
   name: 'metasrc',
 
-  async collect({ env, log, dryRun, publish }) {
+  async collect({ env, log, client, dryRun, publish }) {
     const executablePath = findBrowserPath();
     log(`starting browser at ${executablePath || 'default'}...`);
 
@@ -339,28 +341,41 @@ module.exports = {
 
       log(`scrape complete: ${meta.length} meta, ${synergy.length} synergies, ${matchup.length} matchups`);
 
-      // 3. Runes, summoner spells, starting items, items and build paths of every played role
+      // 3. Runes, summoner spells, starting items, items and build paths of every champion
+      // in every role it is played (the tier lists only show the top of each role)
       const builds = [];
       if (env.METASRC_BUILDS !== '0') {
-        const roles = meta.filter((m) => (m.pick_rate ?? 0) >= BUILD_MIN_PICK && ROLE_URL[m.role]);
-        log(`scraping builds for ${roles.length} champion roles...`);
+        const known = await client.from('champions').select('id,slug,name');
+        const champions = known.data || [];
+        const resolve = championResolver(champions);
+        const urlSlug = new Map(); // champion id -> slug MetaSRC uses, learned from its tier lists
+        for (const m of meta) urlSlug.set(resolve(m.champion), m.champion);
+        const targets = champions.flatMap((c) => Object.keys(ROLE_URL).map((role) => ({ c, role })));
+        log(`scraping builds for ${champions.length} champions in 5 roles...`);
         let next = 0;
         const worker = async () => {
           const tab = await browser.newPage();
           await tab.setViewport({ width: 1920, height: 1080 });
           await tab.setRequestInterception(true);
           tab.on('request', (req) => (['image', 'media', 'font', 'stylesheet'].includes(req.resourceType()) ? req.abort() : req.continue()));
-          while (next < roles.length) {
-            const m = roles[next++];
-            try {
-              await tab.goto(`${BASE_URL}/champions/${m.champion}/${ROLE_URL[m.role]}/build?ranks=${RANKS}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-              await tab.waitForSelector('img[src*="/static/items/"]', { timeout: 10000 }).catch(() => {});
-              const entry = parseBuild(await tab.evaluate(readBuildWidgets));
-              if (entry) builds.push({ champion: m.champion, role: m.role, ...entry });
-            } catch (err) {
-              log(`warning: build of ${m.champion} ${m.role}: ${err.message}`);
+          while (next < targets.length) {
+            const { c, role } = targets[next++];
+            const slugs = [...new Set([urlSlug.get(c.id), slugKey(c.slug), slugKey(c.name), slugKey(String(c.name).split(/[\s&.']/)[0])].filter(Boolean))];
+            for (const slug of slugs) {
+              try {
+                await tab.goto(`${BASE_URL}/champions/${slug}/${ROLE_URL[role]}/build?ranks=${RANKS}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                await tab.waitForSelector('img[src*="/static/items/"]', { timeout: 8000 }).catch(() => {});
+                const widgets = await tab.evaluate(readBuildWidgets);
+                const entry = parseBuild(widgets);
+                if (!entry) continue;
+                urlSlug.set(c.id, slug);
+                if (widgets.rolePct >= BUILD_MIN_ROLE) builds.push({ champion: c.id, role, ...entry });
+                break;
+              } catch (err) {
+                log(`warning: build of ${slug} ${role}: ${err.message}`);
+              }
             }
-            if (next % 50 === 0) log(`progress: ${next}/${roles.length} builds read (${builds.length} usable)`);
+            if (next % 100 === 0) log(`progress: ${next}/${targets.length} builds read (${builds.length} usable)`);
           }
           await tab.close();
         };

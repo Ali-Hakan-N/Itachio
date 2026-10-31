@@ -55,6 +55,25 @@ test('player analysis: few games are shrunk toward the player average', () => {
   assert.ok(many.early > few.early, `${few.early} -> ${many.early}`);
 });
 
+test('mastery: loosens the shrinkage of a champion, so its results count earlier; fades with time', () => {
+  const { masteryWeights } = require('../src/players/mastery');
+  const games = [];
+  for (let i = 0; i < 40; i++) games.push(game(`B${i}`, 20, 0, i % 2 === 0, i));
+  for (let i = 0; i < 4; i++) games.push(game(`A${i}`, 1, 20, true, 100 + i));
+  const plain = analyzePlayers(data, new Map([['p1', games]])).rows.find((r) => r.champion_id === 1);
+  const withMastery = analyzePlayers(data, new Map([['p1', games]]), new Map([['p1', new Map([[1, 1]])]])).rows.find((r) => r.champion_id === 1);
+  assert.ok(withMastery.early > plain.early, `${plain.early} -> ${withMastery.early}`);
+  assert.equal(withMastery.mastery, 1);
+  const now = Date.now();
+  const w = masteryWeights([
+    { championId: 1, championPoints: 450000, lastPlayTime: now },
+    { championId: 2, championPoints: 400000, lastPlayTime: now - 360 * 86400000 },
+    { championId: 3, championPoints: 2000, lastPlayTime: now },
+  ], now);
+  assert.ok(w.get(1) > w.get(2) * 3 && w.get(1) > w.get(3));
+  assert.ok(w.get(1) <= 1);
+});
+
 test('match logit from an exported model follows strength, pairs and matchups', () => {
   const m = { b: [1, 2, 3, 4, 5], r: [11, 12, 13, 14, 15] };
   const strong = { ...data, champ: { ...champ, '1:0': [0.5, 500, 1] } };

@@ -153,7 +153,7 @@ class DataStore {
     const rows = [];
     for (let from = 0; ; from += 1000) {
       const page = check(
-        await this.client.from('player_champion_stats').select('player_id,champion_id,role,source,lineup,games,wins,early,late,delta')
+        await this.client.from('player_champion_stats').select('*')
           .in('player_id', playerIds).order('player_id').order('champion_id').order('role').order('source').order('lineup').range(from, from + 999),
       );
       rows.push(...page);
@@ -168,7 +168,7 @@ class DataStore {
       if (r.champion_id === 0) p.unplayed = Number(r.delta);
       else {
         p.byKey[`${r.champion_id}:${r.role}`] = {
-          delta: Number(r.delta), games: r.games, wins: r.wins, early: Number(r.early), late: Number(r.late),
+          delta: Number(r.delta), games: r.games, wins: r.wins, early: Number(r.early), late: Number(r.late), mastery: Number(r.mastery) || 0,
         };
       }
     }

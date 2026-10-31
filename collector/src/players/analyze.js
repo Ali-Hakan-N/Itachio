@@ -31,6 +31,7 @@ const TAU_LATE = 50; // in units of p(1-p): about 200 games
 const FIRST_GAMES = 3;
 const N_FAM = 10;
 const F_PRIOR = 20; // games of evidence before the familiarity estimate moves freely
+const MASTERY_GAIN = 1.5; // full mastery makes a champion's games count 2.5 times as much against the priors
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 
@@ -91,10 +92,11 @@ function earlyShrinkage(groups) {
 
 /**
  * @param data     exported model
- * @param byPlayer Map playerId -> games (see scoreGames)
- * @returns { rows: [{ player_id, champion_id, role, games, wins, early, late, delta }], nE, familiarity }
+ * @param byPlayer Map playerId -> games (see scoreGames); a key may be "<player>|<lineup>"
+ * @param mastery  optional Map player id -> Map champion id -> 0..1 (mastery.js)
+ * @returns { rows: [{ player_id, champion_id, role, games, wins, early, late, delta, mastery }], nE, familiarity }
  */
-function analyzePlayers(data, byPlayer) {
+function analyzePlayers(data, byPlayer, mastery = new Map()) {
   const scored = new Map([...byPlayer].map(([id, games]) => [id, scoreGames(data, games)]));
   // Player means, then every game relative to them
   const rel = new Map();
@@ -132,8 +134,11 @@ function analyzePlayers(data, byPlayer) {
   const rows = [];
   for (const g of groups) {
     const n = g.games.length;
-    const early = g.e.reduce((a, b) => a + b, 0) / (g.e.length + nE);
-    const late = g.games.reduce((a, x) => a + x.l, 0) / (g.games.reduce((a, x) => a + x.weight, 0) + TAU_LATE);
+    // Mastery counts the player's own games for more: the priors weigh less against them
+    const m = mastery.get(String(g.id).split('|')[0])?.get(g.champion) || 0;
+    const f = 1 + MASTERY_GAIN * m;
+    const early = g.e.reduce((a, b) => a + b, 0) / (g.e.length + nE / f);
+    const late = g.games.reduce((a, x) => a + x.l, 0) / (g.games.reduce((a, x) => a + x.weight, 0) + TAU_LATE / f);
     rows.push({
       player_id: g.id,
       champion_id: g.champion,
@@ -142,11 +147,12 @@ function analyzePlayers(data, byPlayer) {
       wins: g.games.filter((x) => x.win).length,
       early,
       late,
-      delta: early + late + (familiarity * N_FAM) / (N_FAM + n),
+      delta: early + late + (familiarity * N_FAM) / (N_FAM + n * f),
+      mastery: Math.round(m * 1000) / 1000,
     });
   }
   for (const id of rel.keys()) {
-    rows.push({ player_id: id, champion_id: 0, role: '', games: 0, wins: 0, early: famEarly, late: famLate, delta: familiarity });
+    rows.push({ player_id: id, champion_id: 0, role: '', games: 0, wins: 0, early: famEarly, late: famLate, delta: familiarity, mastery: 0 });
   }
   return { rows, nE, familiarity };
 }

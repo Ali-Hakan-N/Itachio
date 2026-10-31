@@ -463,11 +463,11 @@ function banRow(r, i, { canHover, hoverId }) {
 function playedEntries(playerId) {
   const own = S.playerStats?.[playerId] || {};
   const byKey = (own.season || own.history)?.byKey || {};
-  return Object.entries(byKey).map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games }));
+  return Object.entries(byKey).map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], games: v.games, mastery: v.mastery || 0 }));
 }
 
 // Our side for ban suggestions: picks and pick intents, and for a teammate who has not
-// shown one yet, the champion they play most in their role (their season statistics),
+// shown one yet, the champion they know best in their role (games, weighted by mastery),
 // so bans go to what beats the champions our players actually play
 function banAllies(d, blocked) {
   const out = draftContext(d).allies;
@@ -477,7 +477,7 @@ function banAllies(d, blocked) {
     const id = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
     const usual = playedEntries(id)
       .filter((x) => x.role === p.position && !blocked.has(x.championId) && !taken.has(x.championId))
-      .sort((a, b) => b.games - a.games)[0];
+      .sort((a, b) => b.games * (1 + b.mastery) - a.games * (1 + a.mastery))[0];
     if (usual) {
       out.push({ championId: usual.championId, position: p.position });
       taken.add(usual.championId);

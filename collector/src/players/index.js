@@ -16,7 +16,8 @@
 const { analyzePlayers } = require('./analyze');
 const { RiotKeyError } = require('../riot/client');
 const { currentPatch } = require('../riot/store');
-const { seasonGames } = require('./history');
+const { seasonGames, masteryOf } = require('./history');
+const { masteryWeights } = require('./mastery');
 
 // Set to false to pause the analysis (the app reads player_champion_stats with PLAYER_STATS)
 const ENABLED = true;
@@ -58,15 +59,21 @@ function byLineup(byPlayer, lineups) {
 }
 
 /** Replaces the rows of one source for these players; a key is a player id, or "<player>|<lineup>" */
-async function writeStats(client, source, byKey, model, log, playerIds) {
-  const { rows, nE, familiarity } = analyzePlayers(model, byKey);
+async function writeStats(client, source, byKey, model, log, playerIds, mastery) {
+  const { rows, nE, familiarity } = analyzePlayers(model, byKey, mastery);
   check(await client.from('player_champion_stats').delete().in('player_id', playerIds).eq('source', source));
   const stamp = new Date().toISOString();
-  const out = rows.map(({ player_id: key, ...r }) => {
+  let out = rows.map(({ player_id: key, ...r }) => {
     const [player, lineup = ''] = key.split('|');
     return { ...r, player_id: player, lineup, source, updated_at: stamp };
   });
   for (let i = 0; i < out.length; i += 500) {
+    const { error } = await client.from('player_champion_stats').insert(out.slice(i, i + 500));
+    if (!error) continue;
+    // Migration 0017 (mastery column) not applied yet: write without it
+    if (!/mastery/i.test(error.message)) throw new Error(error.message);
+    log('players: apply migration 0017 to store mastery; writing without it');
+    out = out.map(({ mastery: _m, ...r }) => r);
     check(await client.from('player_champion_stats').insert(out.slice(i, i + 500)));
   }
   const count = [...byKey.values()].reduce((a, g) => a + g.length, 0);
@@ -119,12 +126,14 @@ async function updatePlayers({ client, api, log, data = null }) {
 
   const byPlayer = new Map();
   const account = new Map(); // player id -> Riot account
+  const mastery = new Map(); // player id -> Map champion id -> 0..1
   for (const p of players.filter((x) => x.riot_id)) {
     try {
       const res = await seasonGames(api, p.riot_id, patch, log);
       if (!res) continue;
       account.set(p.id, res.puuid);
       if (res.games.length) byPlayer.set(p.id, res.games);
+      if (res.region) mastery.set(p.id, masteryWeights(await masteryOf(api, res.puuid, res.region)));
     } catch (err) {
       if (err instanceof RiotKeyError) throw err;
       log(`players: could not load a player's matches (${err.message}), skipped`);
@@ -142,11 +151,11 @@ async function updatePlayers({ client, api, log, data = null }) {
 
   const ids = [...byPlayer.keys()];
   const patchGames = new Map([...byPlayer].map(([id, games]) => [id, games.filter((g) => g.patch === patch)]).filter(([, g]) => g.length));
-  await writeStats(client, 'season', byPlayer, model, log, ids);
-  if (patchGames.size) await writeStats(client, 'history', patchGames, model, log, ids);
+  await writeStats(client, 'season', byPlayer, model, log, ids, mastery);
+  if (patchGames.size) await writeStats(client, 'history', patchGames, model, log, ids, mastery);
   else log(`players: history: no games of patch ${patch} yet`);
   const team = byLineup(byPlayer, lineups);
-  if (team.size) await writeStats(client, 'team', team, model, log, ids);
+  if (team.size) await writeStats(client, 'team', team, model, log, ids, mastery);
   else log('players: team: no games of five team members together yet');
   await writeGames(client, byPlayer, lineups);
 }

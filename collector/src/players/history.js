@@ -88,6 +88,15 @@ async function resolveAccount(api, riotId) {
   return { puuid: account.puuid, region: null };
 }
 
+/** Champion mastery of an account, from the platform server of its region: [{ championId, championPoints, lastPlayTime }] */
+async function masteryOf(api, puuid, region) {
+  for (const platform of Object.keys(PLATFORMS).filter((p) => PLATFORMS[p] === region)) {
+    const list = await api.get(platform, `/lol/champion-mastery/v4/champion-masteries/by-puuid/${puuid}`);
+    if (list?.length) return list;
+  }
+  return [];
+}
+
 /** "16.21" -> 16 */
 const seasonOf = (patch) => Number(String(patch).split('.')[0]);
 
@@ -128,7 +137,7 @@ async function seasonGames(api, riotId, patch, log) {
       }
     }
   }
-  return { puuid, games: [...cache.values()].filter((g) => !g.skip && seasonOf(g.patch) === season) };
+  return { puuid, region, games: [...cache.values()].filter((g) => !g.skip && seasonOf(g.patch) === season) };
 }
 
-module.exports = { seasonGames, historyGame, resolveAccount };
+module.exports = { seasonGames, historyGame, resolveAccount, masteryOf };
