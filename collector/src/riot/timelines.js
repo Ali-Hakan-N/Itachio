@@ -5,19 +5,21 @@
 // Results go next to the matches (model/index.js storeStarts) and reach the builds with
 // the next training.
 
-const { startingItems } = require('./parse');
+const { startingItems, purchaseOrder } = require('./parse');
 const { PLATFORMS } = require('./crawl');
 const { RiotKeyError } = require('./client');
 
 const MAX_PER_RUN = 40000;
 const FLUSH_EVERY = 50;
 
-/** Starting items of a stored match from its timeline: { id, sb, sr } or null */
+/** Starting items and purchase order of a stored match from its timeline: { id, sb, sr, ob, or } or null */
 function startsOf(m, timeline) {
   const items = startingItems(timeline);
   if (!items.size) return null;
+  const bought = purchaseOrder(timeline);
   const side = (ids) => ids.map((pid) => items.get(pid) || null);
-  return { id: m.id, sb: side(m.ib), sr: side(m.ir) };
+  const order = (ids) => ids.map((pid) => bought.get(pid) || null);
+  return { id: m.id, sb: side(m.ib), sr: side(m.ir), ob: order(m.ib), or: order(m.ir) };
 }
 
 /**

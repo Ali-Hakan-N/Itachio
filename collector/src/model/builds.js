@@ -2,12 +2,14 @@
 //
 // Every player's runes, final items and spells are recorded with the match (riot/parse.js
 // gearOf, GEAR below). For each champion and role:
-//   runes   the keystone (with its tree) among those used in at least MIN_SHARE of games,
-//           chosen by win rate shrunk toward the champion's own (PRIOR games), so a page
-//           that won a few games cannot beat a common one; then for that keystone the most
+//   runes   the most used keystone (with its tree) among those used in at least MIN_SHARE of
+//           games, replaced only by a common one that wins clearly more (RUNE_Z standard
+//           errors), so a page that happened to win cannot beat the standard one; then for
+//           that keystone the most
 //           used rune in every slot, the most used secondary tree and pair, and shards
 //   items   the completed items players end with most often (popularity first: the
-//           core is what most players build), and the most common boots when at least
+//           core is what most players build), listed in the order players buy them (from
+//           timelines, else by price), and the most common boots when at least
 //           BOOTS_SHARE of players end with boots (many sell them late)
 //   spells  the most common pair
 //   start   the most common set of starting items (matches read with their timeline),
@@ -40,7 +42,8 @@ const GEAR = { primary: 0, keystone: 1, sub: 5, shards: 8, items: 11, spells: 17
 const MIN_GAMES = 30; // general build
 const BUCKET_MIN = 80; // build against one kind of damage
 const MIN_SHARE = 0.25; // a keystone must be this common to be chosen (popularity first)
-const PRIOR = 200; // games of the champion's own win rate a keystone starts from
+const RUNE_Z = 3; // standard errors a less used keystone must win by over the most used one
+const ORDER_MIN = 10; // games with a purchase order for an item to be placed by it
 const BOOTS_SHARE = 0.2;
 const CORE = 3;
 const MORE = 4;
@@ -66,8 +69,10 @@ async function loadDdragon(version, fetchFn = globalThis.fetch) {
   const completed = new Set();
   const boots = new Set();
   const shop = new Set(); // anything that can start a game (potions too), trinkets aside
+  const cost = {};
   for (const [id, it] of Object.entries(items.data)) {
     if (!it.maps?.['11'] || it.tags?.includes('Trinket')) continue;
+    cost[Number(id)] = it.gold?.total || 0;
     if (it.gold?.purchasable !== false) shop.add(Number(id));
     if (it.tags?.includes('Consumable')) continue;
     if (it.tags?.includes('Boots') && (it.depth || 1) >= 2) boots.add(Number(id));
@@ -81,7 +86,18 @@ async function loadDdragon(version, fetchFn = globalThis.fetch) {
     const { attack = 0, magic: m = 0 } = c.info || {};
     magic[Number(c.key)] = attack + m ? m / (attack + m) : 0.5;
   }
-  return { completed, boots, shop, magic, assassin };
+  const tree = new Map();
+  const below = (id, set) => {
+    for (const f of items.data[id]?.from || []) {
+      if (!set.has(Number(f))) {
+        set.add(Number(f));
+        below(f, set);
+      }
+    }
+    return set;
+  };
+  for (const id of [...completed, ...boots]) tree.set(id, below(id, new Set()));
+  return { completed, boots, shop, magic, assassin, cost, tree };
 }
 
 const mode = (values) => {
@@ -92,33 +108,146 @@ const mode = (values) => {
   return best ? best.v : null;
 };
 
-function pickRunes(games) {
-  const base = games.reduce((a, g) => a + g.win, 0) / games.length;
+// What MetaSRC's pages say (sources/metasrc.js) counts for meta.weight (0.5-1, the rest is
+// this model's own games): a choice's score is weight x its share on MetaSRC + (1 - weight)
+// x its share of the games here.
+function pickRunes(games, meta = null) {
   const byKey = new Map();
   for (const g of games) {
     const k = `${g.gear[GEAR.primary]}:${g.gear[GEAR.keystone]}`;
     if (!byKey.has(k)) byKey.set(k, []);
     byKey.get(k).push(g);
   }
+  const w = meta?.runes?.length ? meta.weight : 0;
   let best = null;
-  for (const [k, list] of byKey) {
-    if (list.length < MIN_SHARE * games.length) continue;
-    const wins = list.reduce((a, g) => a + g.win, 0);
-    const shrunk = (wins + PRIOR * base) / (list.length + PRIOR);
-    if (!best || shrunk > best.shrunk) best = { k, list, shrunk };
+  if (w) {
+    // Keystone: shares on MetaSRC (its pages) and here, blended
+    const total = meta.runes.reduce((a, r) => a + r.pick, 0) || 1;
+    for (const [k, list] of byKey) {
+      if (list.length < 5) continue;
+      const keystone = Number(k.split(':')[1]);
+      const onMeta = meta.runes.filter((r) => r.keystone === keystone).reduce((a, r) => a + r.pick, 0) / total;
+      const s = w * onMeta + (1 - w) * (list.length / games.length);
+      if (!best || s > best.s) best = { k, list, s };
+    }
+  } else {
+    // The most used keystone, unless a common one clearly wins more (not just by chance)
+    for (const [k, list] of byKey) {
+      if (list.length < MIN_SHARE * games.length) continue;
+      const rate = list.reduce((a, g) => a + g.win, 0) / list.length;
+      if (!best || list.length > best.list.length) best = { k, list, rate };
+    }
+    if (best) {
+      for (const [k, list] of byKey) {
+        if (k === best.k || list.length < MIN_SHARE * games.length) continue;
+        const rate = list.reduce((a, g) => a + g.win, 0) / list.length;
+        const se = Math.sqrt(0.25 * (1 / list.length + 1 / best.list.length));
+        if ((rate - best.rate) / se >= RUNE_Z) best = { k, list, rate };
+      }
+    }
   }
   if (!best) return null;
   const list = best.list;
   const [primary, keystone] = best.k.split(':').map(Number);
   const slot = (i) => mode(list.map((g) => g.gear[i]));
-  const sub = slot(GEAR.sub);
+  let sub = slot(GEAR.sub);
+  const onMetaSub = w ? meta.runes.filter((r) => r.keystone === keystone) : [];
+  if (onMetaSub.length) {
+    const total = onMetaSub.reduce((a, r) => a + r.pick, 0) || 1;
+    const subs = new Set([...list.map((g) => g.gear[GEAR.sub]), ...onMetaSub.map((r) => r.sub)]);
+    let top = null;
+    for (const s of subs) {
+      const onMeta = onMetaSub.filter((r) => r.sub === s).reduce((a, r) => a + r.pick, 0) / total;
+      const here = list.filter((g) => g.gear[GEAR.sub] === s).length / list.length;
+      const score = w * onMeta + (1 - w) * here;
+      if (!top || score > top.score) top = { s, score };
+    }
+    sub = top.s;
+  }
   const withSub = list.filter((g) => g.gear[GEAR.sub] === sub);
-  const pair = mode(withSub.map((g) => `${g.gear[6]}:${g.gear[7]}`)).split(':').map(Number);
+  const pair = mode((withSub.length ? withSub : list).map((g) => `${g.gear[6]}:${g.gear[7]}`)).split(':').map(Number);
   const shards = mode(list.map((g) => g.gear.slice(GEAR.shards, GEAR.shards + 3).join(':'))).split(':').map(Number);
   return { primary, sub, perks: [keystone, slot(2), slot(3), slot(4), ...pair, ...shards] };
 }
 
-function pickItems(games, { completed, boots, shop }) {
+/** Sorts items by the order players buy them: mean place among completed items, else by price */
+function orderBy(games, { completed, boots, cost }) {
+  const places = new Map();
+  for (const g of games) {
+    if (!g.order) continue;
+    g.order.filter((id) => completed.has(id) || boots.has(id)).forEach((id, i) => {
+      const p = places.get(id) || [0, 0];
+      p[0] += i;
+      p[1]++;
+      places.set(id, p);
+    });
+  }
+  const mean = (id) => (places.get(id)?.[1] >= ORDER_MIN ? places.get(id)[0] / places.get(id)[1] : null);
+  return (ids) => {
+    if (ids.every((id) => mean(id) !== null)) return [...ids].sort((a, b) => mean(a) - mean(b));
+    return cost ? [...ids].sort((a, b) => (cost[a] || 0) - (cost[b] || 0)) : ids;
+  };
+}
+
+/**
+ * What a player bought towards each of their final items, from the purchases in order:
+ * Map item -> the components of its recipe bought since the previous finished item.
+ */
+function stepsOf(order, finals, { completed, boots, tree }) {
+  const steps = new Map();
+  const pending = [];
+  for (const id of order) {
+    const done = completed.has(id) || boots.has(id);
+    if (!done) {
+      pending.push(id);
+      continue;
+    }
+    if (!finals.has(id) || steps.has(id)) continue;
+    const below = tree?.get(id);
+    const parts = [];
+    for (let i = 0; i < pending.length; i++) {
+      if (!below?.has(pending[i])) continue;
+      parts.push(pending[i]);
+      pending.splice(i--, 1);
+    }
+    steps.set(id, parts);
+  }
+  return steps;
+}
+
+/** For each of the items, the components most players buy before it: Map item -> ids (ORDER_MIN games needed) */
+function modelParts(games, ids, facts) {
+  const tally = new Map(ids.map((id) => [id, new Map()]));
+  for (const g of games) {
+    if (!g.order) continue;
+    const finals = new Set(g.gear.slice(GEAR.items, GEAR.items + 6));
+    for (const [id, parts] of stepsOf(g.order, finals, facts)) {
+      const t = tally.get(id);
+      if (t) t.set(parts.join(':'), (t.get(parts.join(':')) || 0) + 1);
+    }
+  }
+  const out = new Map();
+  for (const [id, t] of tally) {
+    const seen = [...t.values()].reduce((a, n) => a + n, 0);
+    if (seen < ORDER_MIN) continue;
+    out.set(id, mode([...t].flatMap(([k, n]) => Array(n).fill(k)))?.split(':').filter(Boolean).map(Number) || []);
+  }
+  return out;
+}
+
+/** Items in the order both sources buy them: ranks from the games here and from MetaSRC's item path, blended */
+function mixOrder(ids, modelSorted, meta) {
+  const rank = (list) => new Map(list.map((id, i) => [id, list.length > 1 ? i / (list.length - 1) : 0.5]));
+  const here = rank(modelSorted);
+  const onMeta = rank((meta?.path || []).map((s) => s.id).filter((id) => ids.includes(id)));
+  const key = (id) => (onMeta.has(id) ? meta.weight * onMeta.get(id) + (1 - meta.weight) * here.get(id) : here.get(id));
+  return [...ids].sort((a, b) => key(a) - key(b));
+}
+
+function pickItems(games, facts, meta = null) {
+  const { completed, boots, shop } = facts;
+  const w = meta?.weight || 0;
+  const n = games.length;
   const count = new Map();
   const bootCount = new Map();
   for (const g of games) {
@@ -127,18 +256,49 @@ function pickItems(games, { completed, boots, shop }) {
       else if (boots.has(id)) bootCount.set(id, (bootCount.get(id) || 0) + 1);
     }
   }
-  const ranked = [...count].sort((a, b) => b[1] - a[1]).map(([id]) => id);
-  const withBoots = [...bootCount.values()].reduce((a, n) => a + n, 0);
-  const topBoots = withBoots >= BOOTS_SHARE * games.length ? [...bootCount].sort((a, b) => b[1] - a[1])[0] : null;
-  const pool = [...count, ...bootCount].filter(([, n]) => n >= POOL_SHARE * games.length).map(([id]) => id);
-  return { core: ranked.slice(0, CORE), more: ranked.slice(CORE, CORE + MORE), boots: topBoots ? topBoots[0] : null, start: pickStart(games, shop), pool };
+  const onMeta = new Map();
+  for (const it of meta?.items || []) if (completed.has(it.id)) onMeta.set(it.id, Math.max(onMeta.get(it.id) || 0, it.buy));
+  const bootsOnMeta = new Map((meta?.boots || []).filter((b) => boots.has(b.id)).map((b) => [b.id, b.pick]));
+  const scored = (here, there) => [...new Set([...here.keys(), ...there.keys()])]
+    .map((id) => [id, w * (there.get(id) || 0) + (1 - w) * ((here.get(id) || 0) / n)])
+    .sort((a, b) => b[1] - a[1]);
+  const items = scored(count, onMeta);
+  const shoes = scored(bootCount, bootsOnMeta);
+  const topBoots = shoes.length && shoes.reduce((a, [, s]) => a + s, 0) >= BOOTS_SHARE ? shoes[0][0] : null;
+  const pool = [...items, ...shoes].filter(([, s]) => s >= POOL_SHARE).map(([id]) => id);
+  const ranked = items.map(([id]) => id);
+  const top = ranked.slice(0, CORE);
+  const chosen = [...top, ...(topBoots ? [topBoots] : []), ...ranked.slice(CORE, CORE + MORE)];
+  const ordered = mixOrder(chosen, orderBy(games, facts)(chosen), meta);
+  const parts = modelParts(games, chosen, facts);
+  const metaParts = new Map((meta?.path || []).map((s) => [s.id, s.parts]));
+  // MetaSRC's path counts for at least half, so it wins where it has one
+  const path = ordered.filter((id) => top.includes(id) || id === topBoots)
+    .map((id) => ({ id, parts: metaParts.get(id) ?? parts.get(id) ?? [] }));
+  return {
+    core: ordered.filter((id) => top.includes(id)),
+    more: ordered.filter((id) => !top.includes(id) && id !== topBoots),
+    boots: topBoots,
+    start: pickStart(games, shop, meta),
+    pool,
+    path,
+  };
 }
 
 /** The most common set of starting items, or null with too few games read with a timeline */
-function pickStart(games, shop) {
+function pickStart(games, shop, meta = null) {
+  const w = meta?.start?.length ? meta.weight : 0;
   const sets = games.filter((g) => g.start).map((g) => g.start.filter((id) => !shop || shop.has(id)).join(':')).filter(Boolean);
-  if (sets.length < START_MIN) return null;
-  return mode(sets).split(':').map(Number);
+  if (!w) return sets.length < START_MIN ? null : mode(sets).split(':').map(Number);
+  const share = new Map();
+  if (sets.length >= START_MIN) for (const s of sets) share.set(s, (share.get(s) || 0) + (1 - w) / sets.length);
+  const total = meta.start.reduce((a, s) => a + s.pick, 0) || 1;
+  for (const s of meta.start) {
+    const key = s.items.filter((id) => !shop || shop.has(id)).sort((a, b) => a - b).join(':');
+    if (key) share.set(key, (share.get(key) || 0) + (w * s.pick) / total);
+  }
+  const best = [...share].sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0].split(':').map(Number) : null;
 }
 
 /**
@@ -295,9 +455,21 @@ function analyzeSituations(matches, facts) {
   return { features: PROFILE, profile, center: center.map((v) => Math.round(v * 1000) / 1000), items };
 }
 
-function pickSpells(games) {
-  return mode(games.map((g) => [g.gear[GEAR.spells], g.gear[GEAR.spells + 1]].sort((a, b) => a - b).join(':')))
-    .split(':').map(Number);
+function pickSpells(games, meta = null) {
+  const key = (a, b) => [a, b].sort((x, y) => x - y).join(':');
+  const w = meta?.spells?.length ? meta.weight : 0;
+  if (!w) return mode(games.map((g) => key(g.gear[GEAR.spells], g.gear[GEAR.spells + 1]))).split(':').map(Number);
+  const share = new Map();
+  for (const g of games) {
+    const k = key(g.gear[GEAR.spells], g.gear[GEAR.spells + 1]);
+    share.set(k, (share.get(k) || 0) + (1 - w) / games.length);
+  }
+  const total = meta.spells.reduce((a, s) => a + s.pick, 0) || 1;
+  for (const s of meta.spells) {
+    const k = key(...s.ids);
+    share.set(k, (share.get(k) || 0) + (w * s.pick) / total);
+  }
+  return [...share].sort((a, b) => b[1] - a[1])[0][0].split(':').map(Number);
 }
 
 /** Lower and upper third of teams' magic share: [low, high] */
@@ -321,9 +493,10 @@ const bucketOf = (team, magic, [low, high]) => {
 /**
  * @param matches compact matches (those with gear count)
  * @param facts   loadDdragon() result
+ * @param metaBuilds optional { weight, builds: { "champion:role": entry } } read from MetaSRC
  * @returns { rows: [{ champion_id, role, bucket, games, runes, items, spells }], thresholds }
  */
-function analyzeBuilds(matches, facts) {
+function analyzeBuilds(matches, facts, metaBuilds = null) {
   const ROLES = ['top', 'jungle', 'middle', 'bottom', 'utility'];
   const cut = thresholds(matches, facts.magic);
   const groups = new Map();
@@ -338,7 +511,8 @@ function analyzeBuilds(matches, facts) {
       team.forEach((c, r) => {
         if (!gear[r]) return;
         const sets = team === m.b ? m.sb : m.sr;
-        const g = { gear: gear[r], win: won ? 1 : 0, start: sets?.[r] || null };
+        const orders = team === m.b ? m.ob : m.or;
+        const g = { gear: gear[r], win: won ? 1 : 0, start: sets?.[r] || null, order: orders?.[r] || null };
         add(`${c}:${r}:any`, g);
         add(`${c}:${r}:${bucket}`, g);
       });
@@ -348,11 +522,13 @@ function analyzeBuilds(matches, facts) {
   for (const [key, games] of groups) {
     const [c, r, bucket] = key.split(':');
     if (games.length < (bucket === 'any' ? MIN_GAMES : BUCKET_MIN)) continue;
-    const runes = pickRunes(games);
+    const entry = metaBuilds?.builds?.[`${c}:${ROLES[Number(r)]}`];
+    const meta = entry ? { ...entry, weight: metaBuilds.weight } : null;
+    const runes = pickRunes(games, meta);
     if (!runes) continue;
     rows.push({
       champion_id: Number(c), role: ROLES[Number(r)], bucket, games: games.length,
-      runes, items: pickItems(games, facts), spells: pickSpells(games),
+      runes, items: pickItems(games, facts, meta), spells: pickSpells(games, meta),
     });
   }
   return { rows, thresholds: cut };

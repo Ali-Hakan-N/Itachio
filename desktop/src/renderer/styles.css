@@ -672,6 +672,10 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .item-group { display: flex; flex-direction: column; gap: 3px; margin-right: 10px; }
 .item-group small { font-size: 10px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
 .item-group > span { display: flex; gap: 3px; }
+.item-path > span { gap: 8px; flex-wrap: wrap; }
+.item-path .step { display: flex; align-items: center; gap: 2px; }
+.item-path .part img { width: 20px; height: 20px; opacity: 0.8; }
+.item-path .step i { font-style: normal; color: var(--faint); margin: 0 2px; }
 .sit-note { margin: 8px 0 0; }
 .sit-note b { color: var(--ink); font-weight: 600; }
 

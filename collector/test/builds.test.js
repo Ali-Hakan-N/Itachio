@@ -27,6 +27,71 @@ test('builds: a common keystone beats a rare one that won a few games; items by 
   assert.deepEqual(any.spells, [4, 14]);
 });
 
+test('builds: the most used keystone stays unless another wins clearly more; items in purchase order', () => {
+  const ms = matches(400, (i) => (i < 100
+    ? { gear: gear(8008, [3031, 3072, 0, 0, 0, 0]), win: i % 20 === 0 ? 0 : 1 }
+    : { gear: gear(8010, [3072, 3031, 0, 0, 0, 0]), win: i % 2 }));
+  ms.forEach((m) => (m.ob = [[3031, 3072], null, null, null, null]));
+  const { rows } = analyzeBuilds(ms, facts);
+  const any = rows.find((r) => r.champion_id === 1 && r.bucket === 'any');
+  assert.equal(any.runes.perks[0], 8008, 'a keystone winning 95% vs 50% over 100 games is clearly better');
+  assert.deepEqual(any.items.core, [3031, 3072]);
+  const close = matches(400, (i) => ({ gear: gear(i < 100 ? 8008 : 8010, [3072, 3031, 0, 0, 0, 0]), win: i < 100 ? (i % 2 ? 1 : 0) : (i % 10 < 4 ? 1 : 0) }));
+  assert.equal(analyzeBuilds(close, facts).rows.find((r) => r.bucket === 'any').runes.perks[0], 8010);
+});
+
+test('metasrc builds: widgets become runes, spells, starting items, items and a path', () => {
+  const { parseBuild } = require('../src/sources/metasrc-builds');
+  const img = (alt, file) => `I:${alt}|${file}`;
+  const e = parseBuild({
+    runes: ['T:Win %', 'T:Pick %', img('Lethal Tempo', 'runes/lethal-tempo-8008.png'), img('Inspiration', 'keystones/inspiration-8300.png'), 'T:52%', 'T:71%',
+      img('Conqueror', 'runes/conqueror-8010.png'), img('Inspiration', 'keystones/inspiration-8300.png'), 'T:52%', 'T:16%'],
+    spells: [img('Flash', 'spells/SummonerFlash.png'), img('Barrier', 'spells/SummonerBarrier.png'), 'T:52%', 'T:78%', img('Exhaust', 'spells/SummonerExhaust.png'), 'T:54%', 'T:10%'],
+    start: [img("Doran's Bow", 'items/dorans-bow-1086.png'), img('Health Potion', 'items/health-potion-2003.png'), 'T:2', 'T:52%', 'T:78%', img('Stealth Ward', 'items/stealth-ward-3340.png'), 'T:52%', 'T:44%'],
+    items: ['T:Core', img('A', 'items/a-3032.png'), img('Boots', 'items/b-3006.png'), 'T:53%', 'T:76%', img('LDR', 'items/ldr-3036.png'), 'T:62%', 'T:47%'],
+    slots: [[img('GA', 'items/ga-3026.png'), 'T:63%', 'T:36%']],
+    boots: [img('Berserker', 'items/berserkers-3006.png'), 'T:51%', 'T:76%'],
+    path: [img("Doran's Bow", 'items/dorans-bow-1086.png'), img('Long Sword', 'items/ls-1036.png'), img('A', 'items/a-3032.png'), img('gold coin', 'icons/coin.png'), 'T:3000',
+      img('Dagger', 'items/dagger-1042.png'), img('Boots', 'items/b-3006.png'), img('gold coin', 'icons/coin.png')],
+  });
+  assert.deepEqual(e.runes[1], { keystone: 8010, sub: 8300, pick: 0.16 });
+  assert.deepEqual(e.spells.map((s) => s.ids), [[4, 21], [4, 3]]);
+  assert.deepEqual(e.start[0].items, [1086, 2003, 2003]);
+  assert.equal(e.items.find((i) => i.id === 3026).buy, 0.36);
+  assert.deepEqual(e.path, [{ id: 3032, parts: [1036] }, { id: 3006, parts: [1042] }]);
+});
+
+test('builds: MetaSRC counts for its weight in spells and starting items; path in buying order', () => {
+  const ms = matches(200, (i) => ({ gear: gear(8008, [3031, 3072, 0, 0, 0, 0], [4, 14]), win: i % 2 }));
+  ms.forEach((m) => (m.ob = [[1036, 3072, 3031], null, null, null, null]));
+  const meta = {
+    weight: 0.8,
+    builds: { '1:top': {
+      runes: [{ keystone: 8010, sub: 8300, pick: 0.9 }, { keystone: 8008, sub: 8300, pick: 0.1 }],
+      spells: [{ ids: [4, 3], pick: 0.9 }],
+      start: [{ items: [1055, 2003], pick: 1 }],
+      items: [{ id: 3031, buy: 0.9 }, { id: 3072, buy: 0.5 }],
+      boots: [],
+      path: [{ id: 3031, parts: [1038] }, { id: 3072, parts: [1053] }],
+    } },
+  };
+  const f = { ...facts, shop: new Set([1055, 2003]) };
+  const any = analyzeBuilds(ms, f, meta).rows.find((r) => r.champion_id === 1 && r.bucket === 'any');
+  assert.equal(any.runes.perks[0], 8008, 'MetaSRC prefers 8010 but there are no games here to build its page from');
+  assert.deepEqual(any.spells, [3, 4]);
+  assert.deepEqual(any.items.start, [1055, 2003]);
+  assert.deepEqual(any.items.path.map((s) => s.id), [3031, 3072]);
+  assert.deepEqual(any.items.path.map((s) => s.parts), [[1038], [1053]]);
+});
+
+test('builds: components bought before each finished item, from the purchases in order', () => {
+  const tree = new Map([[3031, new Set([1038, 1037])], [3006, new Set([1001, 1042])]]);
+  const ms = matches(40, () => ({ gear: gear(8008, [3031, 0, 0, 0, 0, 0]), win: 1 }));
+  ms.forEach((m) => (m.ob = [[1038, 2003, 1037, 3031], null, null, null, null]));
+  const any = analyzeBuilds(ms, { ...facts, tree }).rows.find((r) => r.bucket === 'any');
+  assert.deepEqual(any.items.path, [{ id: 3031, parts: [1038, 1037] }]);
+});
+
 test('builds: enemy damage buckets by magic share', () => {
   const magic = { 1: 0, 2: 1 };
   assert.equal(bucketOf([2, 2, 2, 2, 2], magic, [0.3, 0.6]), 'ap');

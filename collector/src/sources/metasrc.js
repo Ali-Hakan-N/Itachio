@@ -13,6 +13,39 @@ puppeteer.use(StealthPlugin());
 
 const BASE_URL = 'https://www.metasrc.com/lol';
 const RANKS = 'diamond+';
+const { parseBuild } = require('./metasrc-builds');
+const BUILD_MIN_PICK = 0.5; // % of games: roles played less than this get no build page read
+const BUILD_PAGES_AT_ONCE = 3;
+const ROLE_URL = { top: 'top', jungle: 'jungle', middle: 'mid', bottom: 'adc', utility: 'support' };
+
+/** Token lists of a build page's widgets, found by their headings (see metasrc-builds.js) */
+function readBuildWidgets() {
+  const widgets = { slots: [] };
+  for (const h of document.querySelectorAll('h2')) {
+    const title = h.textContent.trim();
+    const section = h.closest('header')?.nextElementSibling || h.parentElement.nextElementSibling;
+    if (!section) continue;
+    const tokens = [];
+    const walk = (n) => {
+      if (n.nodeType === 3) {
+        const s = n.textContent.trim();
+        if (s) tokens.push(`T:${s}`);
+      } else if (n.nodeType === 1) {
+        if (n.tagName === 'IMG') tokens.push(`I:${n.alt}|${(n.src || '').split('/').slice(-2).join('/').split('?')[0]}`);
+        else n.childNodes.forEach(walk);
+      }
+    };
+    walk(section);
+    if (/Runes$/.test(title)) widgets.runes = tokens;
+    else if (/^Summoner Spells/.test(title)) widgets.spells = tokens;
+    else if (/^Starting Items/.test(title)) widgets.start = tokens;
+    else if (/^Slot \d+ Item Options/.test(title)) widgets.slots.push(tokens);
+    else if (/Items$/.test(title)) widgets.items = tokens;
+    else if (/Boots$/.test(title)) widgets.boots = tokens;
+    else if (/^Item Build Order/.test(title)) widgets.path = tokens;
+  }
+  return widgets;
+}
 
 // Find Chrome or Edge executable on Windows
 function findBrowserPath() {
@@ -306,11 +339,41 @@ module.exports = {
 
       log(`scrape complete: ${meta.length} meta, ${synergy.length} synergies, ${matchup.length} matchups`);
 
+      // 3. Runes, summoner spells, starting items, items and build paths of every played role
+      const builds = [];
+      if (env.METASRC_BUILDS !== '0') {
+        const roles = meta.filter((m) => (m.pick_rate ?? 0) >= BUILD_MIN_PICK && ROLE_URL[m.role]);
+        log(`scraping builds for ${roles.length} champion roles...`);
+        let next = 0;
+        const worker = async () => {
+          const tab = await browser.newPage();
+          await tab.setViewport({ width: 1920, height: 1080 });
+          await tab.setRequestInterception(true);
+          tab.on('request', (req) => (['image', 'media', 'font', 'stylesheet'].includes(req.resourceType()) ? req.abort() : req.continue()));
+          while (next < roles.length) {
+            const m = roles[next++];
+            try {
+              await tab.goto(`${BASE_URL}/champions/${m.champion}/${ROLE_URL[m.role]}/build?ranks=${RANKS}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await tab.waitForSelector('img[src*="/static/items/"]', { timeout: 10000 }).catch(() => {});
+              const entry = parseBuild(await tab.evaluate(readBuildWidgets));
+              if (entry) builds.push({ champion: m.champion, role: m.role, ...entry });
+            } catch (err) {
+              log(`warning: build of ${m.champion} ${m.role}: ${err.message}`);
+            }
+            if (next % 50 === 0) log(`progress: ${next}/${roles.length} builds read (${builds.length} usable)`);
+          }
+          await tab.close();
+        };
+        await Promise.all(Array.from({ length: BUILD_PAGES_AT_ONCE }, worker));
+        log(`builds: ${builds.length} champion roles`);
+      }
+
       return {
         patch,
         meta,
         synergy,
         matchup,
+        builds,
       };
     } finally {
       await browser.close();

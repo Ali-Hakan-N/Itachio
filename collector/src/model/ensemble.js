@@ -207,6 +207,7 @@ function selectModelWeight(observations) {
 
 module.exports = {
   MIN_OBSERVATIONS,
+  MAX_MODEL_WEIGHT,
   prepareMetaSource,
   metaFeatures,
   makeOutOfTimeObservations,

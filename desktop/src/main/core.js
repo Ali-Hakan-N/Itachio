@@ -317,6 +317,7 @@ class AppCore extends EventEmitter {
         ...selected.items,
         start: selected.items.start?.length ? selected.items.start : general?.items?.start,
         boots: selected.items.boots || general?.items?.boots,
+        path: selected.items.path?.length ? selected.items.path : general?.items?.path,
       },
     };
     return { build, bucket: build.bucket, championId: me.championId, role, situational: situationalItems(build, enemies, this.state.situations) };
@@ -390,10 +391,14 @@ class AppCore extends EventEmitter {
     const items = (ids) => ids.filter(Boolean).map((id) => ({ id: String(id), count: 1 }));
     const reasons = [...new Set(situational.flatMap((x) => x.reasons))];
     const shown = new Set([...build.items.core, build.items.boots, ...situational.map((x) => x.id)]);
+    // In buying order: what is bought towards each item, then the item
+    const path = (build.items.path || []).map((s, i) => ({ type: `${i + 1}. ${s.parts.length ? 'Components, then item' : 'Item'}`, items: items([...s.parts, s.id]) }));
     const blocks = [
       { type: 'Starting Items', items: items(build.items.start || []) },
-      { type: 'Core', items: items(build.items.core) },
-      ...(build.items.boots ? [{ type: 'Boots', items: items([build.items.boots]) }] : []),
+      ...(path.length ? path : [
+        { type: 'Core', items: items(build.items.core) },
+        ...(build.items.boots ? [{ type: 'Boots', items: items([build.items.boots]) }] : []),
+      ]),
       { type: `Situational${reasons.length ? `: vs ${reasons.join(', ')}` : ''}`, items: items(situational.map((x) => x.id)) },
       { type: 'Also built', items: items((build.items.more || []).filter((id) => !shown.has(id))) },
     ].filter((b) => b.items.length);

@@ -486,16 +486,9 @@ function banAllies(d, blocked) {
   return out;
 }
 
-// Who should pick first: teammates still to pick, ordered by how easily the enemy can
-// answer their likely champion (their hover, else what they play most in that role this
-// season). Low counter risk picks early, high risk last; trades where the lobby order differs.
-function usualChampion(p, blocked) {
-  const id = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
-  const best = playedEntries(id)
-    .filter((x) => x.role === p.position && !blocked.has(x.championId))
-    .sort((a, b) => b.games - a.games)[0];
-  return best ? best.championId : 0;
-}
+// Who should pick first: teammates still to pick, ordered by role (which lanes the enemy
+// can counter, which the jungle and bot lanes need to see first) and, for a teammate who
+// hovers a champion, by how easily the enemy can answer it. No guess about who plays what.
 
 const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null };
 const PICK_ORDER_STABILITY_MS = 1500;
@@ -543,7 +536,7 @@ function pickOrderHtml(d, blocked) {
   pickOrderUi.hoverSignature = hoverSignature;
   const nameOf = (p) => (p.isLocal ? S.me?.nickname : memberByPuuid(p.puuid)?.nickname) || ROLE_NAME[p.position];
   const rated = remaining.map((p) => {
-    const championId = !p.isLocal && p.hoverId ? p.hoverId : usualChampion(p, blocked);
+    const championId = !p.isLocal && p.hoverId ? p.hoverId : 0;
     const playerId = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
     const ev = championId
       ? Engine.evaluate({ stats: S.stats, model: S.model, championId, role: p.position, ...draftContext(d, p.cellId), lookAhead: true, unavailable: blocked, personal: personalOf(playerId, d) })
@@ -556,7 +549,7 @@ function pickOrderHtml(d, blocked) {
   const riskText = (n) => (n > 0 ? `<b class="down">−${n}</b>` : n < 0 ? `<b class="up">+${-n}</b>` : '<b>0</b>');
   return `
     <div class="pick-order">
-      <h3 class="sub" title="Champion icon is the player's most-played pick in that role; hovering another champion does not change order">Pick Order</h3>
+      <h3 class="sub" title="By role; a teammate's hovered champion also counts. Nobody's usual champion is assumed">Pick Order</h3>
       <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk shown; order also saves solo lanes for CT opportunities">${riskText(r.risk)}</span></li>`).join('')}</ol>
       ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
     </div>`;
@@ -666,6 +659,7 @@ function buildHtml() {
   const spells = S.gameData?.summoner || {};
   const perkImg = (id) => (perks[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/img/${perks[id].icon}" alt="" title="${esc(perks[id].name)}">` : '');
   const itemImg = (id, title) => `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/item/${id}.png" alt="" title="${esc(title || S.gameData?.items?.[id] || '')}">`;
+  const pathHtml = (steps) => (steps?.length ? `<span class="item-group item-path"><small>Build Order</small><span>${steps.map((s) => `<span class="step">${s.parts.map((p) => `<span class="part">${itemImg(p)}</span>`).join('')}${s.parts.length ? '<i>→</i>' : ''}${itemImg(s.id)}</span>`).join('')}</span></span>` : '');
   const spellImg = (id) => (spells[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/spell/${spells[id].image}" alt="" title="${esc(spells[id].name)}">` : '');
   const applied = S.applied?.gameId === S.draft?.gameId ? S.applied.parts || {} : {};
   const state = (part) => (applied[part] === true ? '<span class="ok">Applied</span>' : applied[part] === false ? '<span class="fail">Failed</span>' : '');
@@ -680,8 +674,7 @@ function buildHtml() {
         <div class="build-part runes">${perkImg(keystone)}<span>${esc(perks[keystone]?.name || '')}<small>${esc(perks[build.runes.primary]?.name || '')} · ${esc(perks[build.runes.sub]?.name || '')}</small></span>${state('runes')}<button class="btn ghost" data-apply="runes">Apply Runes</button></div>
         <div class="build-part items">
           ${group('Starting Items', build.items.start)}
-          ${group('Core', build.items.core)}
-          ${group('Boots', build.items.boots ? [build.items.boots] : [])}
+          ${build.items.path?.length ? pathHtml(build.items.path) : `${group('Core', build.items.core)}${group('Boots', build.items.boots ? [build.items.boots] : [])}`}
           ${group('Situational', situational.map((x) => x.id), (id) => why.get(id))}
           ${state('items')}<button class="btn ghost" data-apply="items">Apply Items</button>
         </div>

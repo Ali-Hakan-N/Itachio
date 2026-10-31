@@ -17,7 +17,7 @@ const idle = require('./idle');
 const { counterpickTendency } = require('./choice');
 const { exportComp } = require('./comp');
 const { analyzeBuilds, analyzeSituations, loadDdragon } = require('./builds');
-const { makeOutOfTimeObservations, selectModelWeight } = require('./ensemble');
+const { makeOutOfTimeObservations, selectModelWeight, MAX_MODEL_WEIGHT } = require('./ensemble');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
@@ -97,7 +97,7 @@ function loadMatches(patch) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
       const st = starts.get(m.id);
-      if (st && !m.sb) Object.assign(m, { sb: st.sb, sr: st.sr });
+      if (st && !m.sb) Object.assign(m, { sb: st.sb, sr: st.sr, ob: st.ob, or: st.or });
       out.push(m);
     } catch {
       /* a line cut off by a crash: skip it */
@@ -569,7 +569,7 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const ids = check(await client.from('model_snapshots').select('id').order('id', { ascending: false }));
   const old = ids.slice(KEEP_SNAPSHOTS).map((r) => r.id);
   if (old.length) check(await client.from('model_snapshots').delete().in('id', old));
-  await publishBuilds(client, matches, patch, log).catch((err) => log(`builds: failed (${err.message})`));
+  await publishBuilds(client, matches, patch, log, ensemble?.modelWeight ?? undefined).catch((err) => log(`builds: failed (${err.message})`));
   log(`model: uploaded (${data.syn.length} synergy and ${data.vs.length} matchup weights, early game ${data.synE.length} + ${data.vsE.length})`);
   return m;
 }
@@ -580,10 +580,19 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
  * app can tell which build fits the enemy team, and the situational items (what each item
  * is worth against each enemy champion) to app_meta 'item_situations'.
  */
-async function publishBuilds(client, matches, patch, log) {
+async function publishBuilds(client, matches, patch, log, modelWeight = MAX_MODEL_WEIGHT) {
   const meta = check(await client.from('app_meta').select('value').eq('key', 'current_patch').maybeSingle());
   const facts = await loadDdragon(meta?.value || `${patch}.1`);
-  const { rows, thresholds } = analyzeBuilds(matches, facts);
+  const scraped = check(await client.from('app_meta').select('value').eq('key', 'metasrc_builds').maybeSingle());
+  let metaBuilds = null;
+  try {
+    const parsed = scraped?.value ? JSON.parse(scraped.value) : null;
+    // MetaSRC counts for at least half, like in the draft ensemble (ensemble.js MAX_MODEL_WEIGHT)
+    if (parsed?.builds) metaBuilds = { weight: 1 - Math.min(MAX_MODEL_WEIGHT, modelWeight), builds: parsed.builds };
+  } catch {
+    /* unreadable: the model's own builds */
+  }
+  const { rows, thresholds } = analyzeBuilds(matches, facts, metaBuilds);
   if (!rows.length) return log('builds: no games with runes and items yet');
   check(await client.from('champion_builds').delete().neq('bucket', ''));
   const stamp = new Date().toISOString();
@@ -599,4 +608,14 @@ async function publishBuilds(client, matches, patch, log) {
   log(`builds: ${general} champion builds, ${rows.length - general} against one kind of damage, ${rows.filter((r) => r.items.start).length} with starting items · situational items: ${Object.keys(situations.items).length} items (by part: ${learned})`);
 }
 
-module.exports = { banRates, publishBuilds, pickTraining, storeMatches, storeStarts, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT, MAX_TRAIN_MATCHES, resolveTrainMatchLimit };
+/** Builds again from the stored matches of the current patch, e.g. after MetaSRC's builds changed */
+async function republishBuilds(client, log) {
+  const meta = check(await client.from('app_meta').select('value').eq('key', 'current_patch').maybeSingle());
+  const patch = /^(\d+\.\d+)/.exec(meta?.value || '')?.[1];
+  if (!patch) return log('builds: no current patch');
+  const matches = loadMatches(patch).filter((m) => m.gb && m.gr);
+  const snapshot = await loadNewestModelSnapshot(client).catch(() => null);
+  await publishBuilds(client, matches, patch, log, snapshot?.data?.ensemble?.modelWeight ?? undefined);
+}
+
+module.exports = { banRates, publishBuilds, republishBuilds, pickTraining, storeMatches, storeStarts, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT, MAX_TRAIN_MATCHES, resolveTrainMatchLimit };

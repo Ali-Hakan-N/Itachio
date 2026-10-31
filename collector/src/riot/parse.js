@@ -77,6 +77,29 @@ function startingItems(timeline) {
   return out;
 }
 
+// Potions, elixirs, wards and trinkets: bought again and again, no part of a build
+const NOT_BUILD = new Set([2003, 2010, 2031, 2033, 2055, 2138, 2139, 2140, 2150, 2151, 2152, 3330, 3340, 3363, 3364]);
+const MAX_PURCHASES = 40;
+
+/** Items every player bought after the first minute, in order (components too): Map participantId -> item ids */
+function purchaseOrder(timeline) {
+  const out = new Map();
+  for (const frame of timeline?.info?.frames || []) {
+    for (const e of frame.events || []) {
+      if (e.timestamp < START_MS) continue;
+      const list = out.get(e.participantId) || [];
+      if (e.type === 'ITEM_PURCHASED' && e.itemId >= 1000 && !NOT_BUILD.has(e.itemId)) {
+        if (list.length < MAX_PURCHASES) list.push(e.itemId);
+      } else if (e.type === 'ITEM_UNDO' && e.beforeId) {
+        const i = list.lastIndexOf(e.beforeId);
+        if (i >= 0) list.splice(i, 1);
+      } else continue;
+      out.set(e.participantId, list);
+    }
+  }
+  return out;
+}
+
 /**
  * What a player did to the other team (ITEM_FACTS in model/builds.js names the entries):
  * magic and physical damage to champions, healing done, seconds of crowd control on others.
@@ -133,4 +156,4 @@ function parseMatch(match, timeline = null) {
   };
 }
 
-module.exports = { parseMatch, patchOf, startingItems };
+module.exports = { parseMatch, patchOf, startingItems, purchaseOrder };

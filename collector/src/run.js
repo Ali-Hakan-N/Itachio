@@ -9,7 +9,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { createClient } = require('@supabase/supabase-js');
 const { toRows } = require('./normalize');
-const { writeRows, writeMetaSourceSnapshot, loadChampions, startRun, finishRun } = require('./writer');
+const { writeRows, writeMetaSourceSnapshot, writeMetaBuilds, loadChampions, startRun, finishRun } = require('./writer');
 
 // Fewer meta rows than this means the data is incomplete: keep the current scores
 const MIN_META_ROWS = 50;
@@ -96,6 +96,16 @@ async function main() {
         }
       }
       log('scores updated', JSON.stringify(stats));
+      if (source.name === 'metasrc' && output.builds?.length) {
+        try {
+          const stored = await writeMetaBuilds(client, { builds: output.builds, patch: output.patch, collectedAt }, champions);
+          log(`metasrc builds saved: ${stored} champion roles`);
+          // The app reads the blend, so make it now instead of at the next training
+          await require('./model').republishBuilds(client, log);
+        } catch (err) {
+          log(`warning: MetaSrc builds not saved (${err.message})`);
+        }
+      }
       return { written: true, ...stats, problems: rows.problems.length };
     };
 
