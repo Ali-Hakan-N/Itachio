@@ -423,8 +423,9 @@ test('draft predictions retain MetaSRC as a confidence-weighted cold-start prior
 
   const provenModel = { ...model, matches: 25000, syn: Array(200).fill([]), vs: Array(200).fill([]) };
   const proven = Engine.evaluate({ stats, model: provenModel, championId: 1, role: 'top' });
-  assert.equal(proven.weights.model, 0.5);
-  assert.equal(proven.weights.metasrc, 0.5);
+  // 900 games on this champion in the role: mostly the model
+  assert.ok(proven.weights.model > 0.85 && proven.weights.model < 1, `${proven.weights.model}`);
+  assert.ok(Math.abs(proven.weights.model + proven.weights.metasrc - 1) < 1e-12);
 
   const tunedModel = {
     ...provenModel,
@@ -478,11 +479,16 @@ test('adaptive draft weights favor MetaSRC early and increase model share with c
     role: 'top',
   });
 
-  assert.deepEqual(fresh.weights, { model: 0.2, metasrc: 0.8 });
-  assert.deepEqual(grown.weights, { model: 0.5, metasrc: 0.5 });
-  assert.equal(mature.weights.model, 0.8);
-  assert.ok(Math.abs(mature.weights.metasrc - 0.2) < 1e-12);
+  assert.ok(fresh.weights.model < grown.weights.model);
+  assert.ok(grown.weights.model < mature.weights.model);
+  assert.ok(fresh.weights.model < 0.3);
   assert.deepEqual(validatedButUnsupported.weights, { model: 0.5, metasrc: 0.5 });
+
+  // Where the model has seen the pick often it is used alone; where it has not, MetaSRC takes over
+  const plenty = { ...confident, champ: { ...confident.champ, '1:0': [0.15, 20000, 0.95] } };
+  assert.deepEqual(Engine.evaluate({ stats, model: plenty, championId: 1, role: 'top' }).weights, { model: 1, metasrc: 0 });
+  const rare = { ...confident, champ: { ...confident.champ, '1:0': [0.15, 5, 0.95] } };
+  assert.ok(Engine.evaluate({ stats, model: rare, championId: 1, role: 'top' }).weights.metasrc > 0.9);
 });
 
 test('pick order delays top and mid when counter risk is tied, but respects a strong counter risk', () => {

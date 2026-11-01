@@ -308,6 +308,44 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .explain-risk { color: var(--muted); font-size: 10px; }
 .explain-risk b { margin-left: 4px; color: var(--red); }
 .blind-summary { display: flex; gap: 12px; color: var(--muted); font-size: 10px; }
+
+.recs.tiers { gap: 10px; }
+.tier-group { padding: 8px 10px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.tier-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tier-head small { color: var(--faint); font-size: 10.5px; }
+.tier-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 6px 4px; }
+.tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px 0 2px; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; min-width: 0; }
+.tile:disabled { cursor: default; }
+.tile:not(:disabled):hover { background: var(--panel-2); border-color: var(--line-2); }
+.tile.hovering { border-color: var(--cue); background: var(--cue-dim); }
+.tile .champ { width: 38px; height: 38px; }
+.tile .tname { max-width: 100%; overflow: hidden; color: var(--muted); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.tile .tscore { font-family: var(--display); font-size: 12px; line-height: 1; }
+.tile .tscore.sc-S { color: var(--gold); }
+.tile .tscore.sc-A { color: var(--cue); }
+.tile .tscore.sc-B { color: #8fb4ff; }
+.tile .tscore.sc-C { color: var(--muted); }
+.tile .tscore.sc-D { color: var(--faint); }
+.tile.unsure .champ, .tile.unsure .tscore { opacity: 0.55; }
+
+.wf-note { margin: 0 0 6px; color: var(--faint); font-size: 10.5px; }
+.wf-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 0 22px; }
+.wf-track { display: grid; grid-template-columns: 1fr 1fr; height: 6px; background: var(--panel-3); border-radius: 4px; overflow: hidden; }
+.wf-track span { display: flex; }
+.wf-track .neg { justify-content: flex-end; border-right: 1px solid var(--line-2); }
+.wf-track i { display: block; height: 100%; width: 0; }
+.wf-row.up .wf-track i { background: var(--cue); }
+.wf-row.down .wf-track i { background: var(--red); }
+.wf-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(40px, 1fr) 40px; align-items: center; gap: 10px; min-height: 32px; border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--ink); }
+.wf-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wf-label small { display: inline-flex; gap: 2px; color: var(--faint); font-size: 9.5px; }
+.wf-label .champ.s { width: 20px; height: 20px; }
+.wf-row b { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.wf-row.up b { color: var(--cue); }
+.wf-row.down b { color: var(--red); }
+.wf-foot { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.wf-foot b { color: var(--ink); }
+.wf-foot .champ.s { width: 22px; height: 22px; }
 .blind-summary b { margin-left: 4px; color: var(--ink); }
 
 /* ---------- Pool ---------- */
@@ -727,7 +765,7 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .options-body { padding: 18px 22px 22px; display: flex; flex-direction: column; gap: 10px; }
 .options-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .option {
-  flex-direction: row; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; cursor: pointer;
+  display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; cursor: pointer;
   background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-m); color: var(--ink);
 }
 .option:hover { border-color: var(--line-2); }

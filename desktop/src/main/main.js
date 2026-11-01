@@ -94,7 +94,16 @@ function loadSettings() {
   }
 }
 function settingsView(saved) {
-  return { autoRunes: !!saved.autoRunes, autoItems: !!saved.autoItems, openAtLogin: app.getLoginItemSettings().openAtLogin };
+  return { autoRunes: !!saved.autoRunes, autoItems: !!saved.autoItems, openAtLogin: saved.openAtLogin ?? app.getLoginItemSettings().openAtLogin };
+}
+// Only an installed app registers itself; a development run would register Electron itself
+function applyLoginItem(open) {
+  if (!app.isPackaged) return;
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!open });
+  } catch (err) {
+    fileLog?.('setLoginItemSettings error', err.message);
+  }
 }
 
 function loadConfig() {
@@ -189,6 +198,8 @@ function requireTeamMember() {
 app.whenReady().then(async () => {
   if (!hasInstanceLock) return;
   const config = loadConfig();
+  const savedSettings = loadSettings();
+  if ('openAtLogin' in savedSettings) applyLoginItem(savedSettings.openAtLogin);
   createWindow();
 
   const updater = setupUpdater({
@@ -243,16 +254,10 @@ app.whenReady().then(async () => {
   handle('settings:get', () => settingsView(loadSettings()));
   handle('settings:set', (changes) => {
     const saved = { ...loadSettings() };
-    for (const key of ['autoRunes', 'autoItems']) if (key in changes) saved[key] = !!changes[key];
+    for (const key of ['autoRunes', 'autoItems', 'openAtLogin']) if (key in changes) saved[key] = !!changes[key];
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
     fs.writeFileSync(settingsFile(), JSON.stringify(saved));
-    if ('openAtLogin' in changes) {
-      try {
-        app.setLoginItemSettings({ openAtLogin: !!changes.openAtLogin });
-      } catch (err) {
-        fileLog?.('setLoginItemSettings error', err.message);
-      }
-    }
+    if ('openAtLogin' in changes) applyLoginItem(changes.openAtLogin);
     core?.setSettings(saved);
     return settingsView(saved);
   });

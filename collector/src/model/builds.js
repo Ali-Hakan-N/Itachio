@@ -51,9 +51,12 @@ const START_MIN = 15; // games with starting items
 const POOL_SHARE = 0.03;
 const PROFILE = ['magic', 'heal', 'cc', 'assassin'];
 const PROFILE_MIN = 20; // games with damage, healing and crowd control numbers for a measured profile
-const SIT_MIN = 300; // buyer games to learn an item's situations
+const SIT_MIN = 1000; // buyer games to learn an item's situations
 const RIDGE = 200; // penalty on the profile weights, in games
-const Z_KEEP = 1.5;
+const Z_KEEP = 2.5;
+const FULL_ITEMS = 4; // completed items that make a finished build (short games say little about the core)
+const LIFT_PRIOR = 60; // buyer games of the champion's own win rate an item's results start from
+const LIFT_WEIGHT = 10; // popularity multiplier per unit of win rate above the champion's own
 const CELL_PRIOR = 20; // games of the champion's role win rate a cell starts from
 
 const DDRAGON = 'https://ddragon.leagueoflegends.com/cdn';
@@ -247,14 +250,28 @@ function mixOrder(ids, modelSorted, meta) {
 function pickItems(games, facts, meta = null) {
   const { completed, boots, shop } = facts;
   const w = meta?.weight || 0;
-  const n = games.length;
+  // Finished builds only (when there are enough): an item list cut short by a short game
+  // favors cheap early items, and winners buy more items than losers
+  const finalItems = (g) => [...new Set(g.gear.slice(GEAR.items, GEAR.items + 6))];
+  const finished = games.filter((g) => finalItems(g).filter((id) => completed.has(id)).length >= FULL_ITEMS);
+  const sample = finished.length >= MIN_GAMES ? finished : games;
+  const n = sample.length;
+  const base = sample.reduce((a, g) => a + g.win, 0) / n;
   const count = new Map();
+  const wins = new Map();
   const bootCount = new Map();
-  for (const g of games) {
+  for (const g of sample) {
     for (const id of new Set(g.gear.slice(GEAR.items, GEAR.items + 6))) {
-      if (completed.has(id)) count.set(id, (count.get(id) || 0) + 1);
-      else if (boots.has(id)) bootCount.set(id, (bootCount.get(id) || 0) + 1);
+      if (completed.has(id)) {
+        count.set(id, (count.get(id) || 0) + 1);
+        wins.set(id, (wins.get(id) || 0) + g.win);
+      } else if (boots.has(id)) bootCount.set(id, (bootCount.get(id) || 0) + 1);
     }
+  }
+  // Popularity first, nudged by how the item's buyers do compared with the champion's own games
+  for (const [id, c] of count) {
+    const lift = (wins.get(id) + LIFT_PRIOR * base) / (c + LIFT_PRIOR) - base;
+    count.set(id, c * Math.max(0.6, Math.min(1.4, 1 + LIFT_WEIGHT * lift)));
   }
   const onMeta = new Map();
   for (const it of meta?.items || []) if (completed.has(it.id)) onMeta.set(it.id, Math.max(onMeta.get(it.id) || 0, it.buy));

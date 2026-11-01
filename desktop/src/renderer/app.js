@@ -468,43 +468,70 @@ function recRow(r, i, { canHover, hoverId, rank }) {
     </button>`;
 }
 
-function modelExplanation(row) {
-  if (!row) return '';
-  const signed = (value) => `${value > 0 ? '+' : ''}${value}`;
-  const factors = [
-    ['Champion strength', row.base - 50],
-    ['Team synergy', row.synergy || 0],
-    ['Matchups', row.matchup || 0],
-    ['Composition', row.composition || 0],
-    ['Lane adjustment', row.lane || 0],
-    ['Personal fit', row.personal || 0],
-  ];
-  const factorRows = factors.map(([label, value]) => {
-    const direction = value > 0 ? 'up' : value < 0 ? 'down' : 'flat';
-    const width = Math.min(100, Math.abs(value) * 4);
-    return `<div class="explain-factor ${direction}">
-      <span>${label}</span><div class="factor-track"><i data-w="${width}"></i></div><b>${signed(value)}</b>
+// Recommendations as tiers of champion tiles, each with its score
+const TIER_BANDS = [['S+', 85], ['S', 75], ['A', 65], ['B', 55], ['C', 45], ['D', 0]];
+function tierGrid(recs, { canHover, hoverId }) {
+  const groups = TIER_BANDS.map(([label, min]) => ({ label, min, rows: [] }));
+  for (const r of recs) groups.find((g) => r.score >= g.min).rows.push(r);
+  return `<div class="recs tiers">${groups.filter((g) => g.rows.length).map((g) => {
+    const hi = Math.max(...g.rows.map((r) => r.score));
+    const lo = Math.min(...g.rows.map((r) => r.score));
+    return `<div class="tier-group">
+      <div class="tier-head"><span class="tier t-${g.label[0]}">${g.label}</span><small>${lo === hi ? lo : `${lo}–${hi}`} · ${g.rows.length}</small></div>
+      <div class="tier-tiles">${g.rows.map((r) => `
+        <button type="button" class="tile ${r.championId === hoverId ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}" ${canHover ? '' : 'disabled'} title="${esc(champName(r.championId))} · ${r.score}">
+          ${champImg(r.championId)}
+          <span class="tname">${esc(champName(r.championId))}</span>
+          <b class="tscore sc-${tierOf(r.score)}">${r.score}</b>
+        </button>`).join('')}</div>
     </div>`;
-  }).join('');
-  const signals = (items, type) => items?.length
-    ? items.slice(0, 4).map((item) => {
-        const favorable = item.value > 0;
-        const lane = type === 'matchup' && item.lane > 0 ? `<small>Lane likelihood ${Math.round(item.lane * 100)}%</small>` : '';
-        return `<li>${champImg(item.championId, 's')}<span>${esc(champName(item.championId))}${lane}</span><b class="${favorable ? 'up' : 'down'}" title="Learned pair weight, not win-rate points">${favorable ? 'Helps' : 'Hurts'}</b></li>`;
-      }).join('')
-    : '<li class="signal-empty">No material pair signal</li>';
-  const risk = row.counterRisk > 0 ? `<span class="explain-risk">Enemy answer exposure <b>−${row.counterRisk}</b></span>` : '';
+  }).join('')}</div>`;
+}
+
+const NEED_NAME = { fr: 'frontline', cc: 'CC', en: 'engage', wc: 'waveclear', ac: 'AoE', pk: 'poke', pe: 'peel', sc: 'scaling', pi: 'pick', sp: 'split push' };
+
+// Where the expected win chance of a pick comes from: each part in percentage points of win
+// chance, added one after another from an even game so they sum to the final number
+function modelExplanation(row) {
+  if (!row?.parts) return '';
+  const P = row.parts;
+  const win = (z) => 100 / (1 + Math.exp(-z)) - 50;
+  const icons = (items, sign) => (items || []).filter((x) => x.value * sign > 0).slice(0, 3).map((x) => champImg(x.championId, 's')).join('');
+  const items = [
+    { label: 'Champion strength', z: P.strength },
+    { label: 'Team synergy', z: P.synergy + P.ahead, detail: icons(row.allies, P.synergy >= 0 ? 1 : -1) },
+    { label: 'Enemy matchups', z: P.matchup, detail: icons(row.enemies, P.matchup >= 0 ? 1 : -1) },
+    { label: 'AP / AD balance', z: P.damage },
+    { label: 'CC, frontline, engage', z: P.needs, detail: row.lacking?.length ? `Missing ${row.lacking.map((k) => NEED_NAME[k] || k).join(', ')}` : '' },
+    { label: 'Team coordination', z: P.coherence },
+    { label: 'Enemy answers', z: P.exposure },
+    { label: 'Lane', z: P.lane },
+    { label: 'Personal fit', z: P.personal },
+    { label: 'Other factors', z: P.learned + P.typical },
+  ];
+  let cum = 0;
+  for (const it of items) {
+    const before = win(cum);
+    cum += it.z;
+    it.pp = win(cum) - before;
+  }
+  const fmt = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}`;
+  const line = (it) => `<div class="wf-row ${it.pp > 0 ? 'up' : 'down'}">
+    <span class="wf-label">${esc(it.label)}${it.detail ? `<small>${it.detail}</small>` : ''}</span>
+    <div class="wf-track"><span class="neg"><i data-w="${it.pp < 0 ? Math.min(100, Math.abs(it.pp) * 25) : 0}"></i></span><span class="pos"><i data-w="${it.pp > 0 ? Math.min(100, it.pp * 25) : 0}"></i></span></div>
+    <b>${fmt(it.pp)}</b>
+  </div>`;
+  const shown = items.filter((it) => Math.abs(it.pp) >= 0.05);
   const blind = Number.isFinite(row.blindSpread) && Number.isFinite(row.counterChance)
     ? `<div class="blind-summary"><span>Blind spread <b>${(row.blindSpread * 100).toFixed(1)}pp</b></span><span>7-pick pool counter <b>${Math.round(row.counterChance * 100)}%</b></span></div>`
     : '';
-  return `<section class="explanation" aria-label="Model breakdown for ${esc(champName(row.championId))}">
-    <div class="explanation-head"><div><span class="page-kicker">MODEL BREAKDOWN</span><h3>${esc(champName(row.championId))}</h3></div><strong>${row.score}<small>/100</small></strong></div>
-    <div class="explain-factors">${factorRows}</div>
-    <div class="pair-signals">
-      <div><h4>Team synergy</h4><ul>${signals(row.allies, 'synergy')}</ul></div>
-      <div><h4>Enemy matchups</h4><ul>${signals(row.enemies, 'matchup')}</ul></div>
-    </div>
-    ${risk || blind ? `<div class="explain-foot">${risk}${blind}</div>` : ''}
+  const name = champName(row.championId);
+  return `<section class="explanation" aria-label="Model breakdown for ${esc(name)}">
+    <div class="explanation-head"><div><span class="page-kicker">WHY ${esc(name.toUpperCase())} · EXPECTED WIN CHANCE ${(50 + win(cum)).toFixed(1)}%</span></div><strong>${row.score}<small>/100</small></strong></div>
+    <p class="wf-note">Each line moves the win chance, in percentage points: green up, red down.</p>
+    <div class="wf-list">${shown.map(line).join('') || '<p class="note">No material effect</p>'}</div>
+    <div class="wf-foot"><span>Even game <b>50.0%</b></span><span class="wf-arrow">›</span>${champImg(row.championId, 's')}<span>${esc(name)} <b>${(50 + win(cum)).toFixed(1)}%</b></span></div>
+    ${blind}
   </section>`;
 }
 
@@ -894,7 +921,7 @@ function renderDraft() {
         pickable: S.pickable,
         ...draftContext(d, local?.cellId),
         pool: myPool().map((p) => p.champion_id),
-        limit: 10,
+        limit: 80,
         personal: personalOf(S.me?.id, d),
       });
 
@@ -951,9 +978,7 @@ function renderDraft() {
   }) : null;
   const explanationBlock = modelExplanation(explanation);
   const recommendationList = recs.length
-    ? `<div class="recs">${recRow(recs[0], 0, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })}</div>${explanationBlock}${recs.length > 1
-        ? `<div class="recs recs-rest">${recs.slice(1).map((r, i) => recRow(r, i + 1, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>`
-        : ''}${hoverRow}`
+    ? `${tierGrid(recs, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })}${explanationBlock}${hoverRow}`
     : '';
   const recommendationContent = local?.locked
     ? pickRow + explanationBlock + buildBlock
@@ -1005,7 +1030,7 @@ function renderDraft() {
     list.onclick = async (e) => {
       const b = e.target.closest('[data-hover]');
       if (!b || b.disabled) return;
-      for (const x of list.querySelectorAll('.rec.hovering')) x.classList.remove('hovering');
+      for (const x of list.querySelectorAll('.rec.hovering, .tile.hovering')) x.classList.remove('hovering');
       b.classList.add('hovering', 'sending');
       try {
         await run(api.hoverChampion(Number(b.dataset.hover), b.dataset.kind === 'ban' ? 'ban' : 'pick'));
@@ -1462,9 +1487,7 @@ async function openOptions() {
           <nav class="options-nav">
             <h2>Options</h2>
             ${OPTION_TABS.map(([k, label]) => `
-              <button data-otab="${k}" class="${k === optionsTab ? 'active' : ''} locked" disabled title="Locked for now" style="pointer-events: none; opacity: 0.55; cursor: not-allowed;">
-                ${label} <span style="font-size: 11px; margin-left: 6px;">🔒</span>
-              </button>`).join('')}
+              <button data-otab="${k}" class="${k === optionsTab ? 'active' : ''}">${label}</button>`).join('')}
           </nav>
           <section class="options-body">
             <div class="options-head"><h3>${title}</h3><button class="x" id="mclose" aria-label="Close">×</button></div>
@@ -1479,7 +1502,7 @@ async function openOptions() {
     const close = () => ($m.innerHTML = '');
     document.getElementById('mclose').onclick = close;
     document.getElementById('mclose-bg').onclick = (e) => e.target.id === 'mclose-bg' && close();
-    for (const b of $m.querySelectorAll('[data-otab]:not(.locked)')) {
+    for (const b of $m.querySelectorAll('[data-otab]')) {
       b.onclick = () => {
         optionsTab = b.dataset.otab;
         draw();
@@ -1487,12 +1510,15 @@ async function openOptions() {
     }
     for (const box of $m.querySelectorAll('[data-key]')) {
       box.onchange = async () => {
+        const wanted = box.checked;
         try {
-          const res = await api.setSettings({ [box.dataset.key]: box.checked });
-          if (res?.ok && res.data) Object.assign(settings, res.data);
-          else if (!res?.ok && res?.error) toast(res.error, 'error');
+          const res = await api.setSettings({ [box.dataset.key]: wanted });
+          if (!res?.ok) throw new Error(res?.error || 'Could not save');
+          Object.assign(settings, res.data);
+          box.checked = !!settings[box.dataset.key];
         } catch (e) {
-          console.error('Failed to save setting:', e);
+          box.checked = !wanted;
+          toast(e.message, 'error');
         }
       };
     }

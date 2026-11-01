@@ -110,6 +110,7 @@
   const POOL_DEPTH = 0.3; // standard deviations between a deep and a shallow pool on the role
   const NEW_ROLE = 0.5; // standard deviations lost on a role a known player never plays
   const ROLE_CHOICE = 0.3; // standard deviations for the roles a player chose (Team tab) or queued for
+  const ROLE_EVIDENCE_GAMES = 400; // games of a champion in a role at which the model is trusted about 63% on it
   const PERSONAL_CLASS_PRIOR = 40; // pseudo-games before class-level comfort transfers to an unseen champion
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
@@ -521,7 +522,8 @@
     }
 
     const ourIds = [...allies.map((p) => asPick(p).championId).filter((id) => id && id !== championId), championId];
-    const comp = -ix.sd * teamFit(ix, ourIds).penalty + (ix.comp
+    const fit = teamFit(ix, ourIds);
+    const learned = (ix.comp
       ? compValue(
           ix,
           championId,
@@ -531,6 +533,7 @@
       : 0) + pillarValue(ix,
         [...allies.map((p) => asPick(p).championId).filter((id) => id !== championId), championId],
         enemies.map((p) => asPick(p).championId));
+    const comp = -ix.sd * fit.penalty + learned;
 
     // Losing the lane hard (beyond LANE_CALL standard deviations of the role) costs extra
     // unless the composition gain makes it up by LANE_AMORTIZE times the excess loss
@@ -555,6 +558,13 @@
       score: Math.round(score),
       logit,
       baseLogit: base,
+      // The logit as its parts (they add up to it once finalRow and personalize are done)
+      parts: {
+        strength: base, synergy: syn, matchup: mu, learned,
+        damage: -ix.sd * (fit.damage || 0), needs: -ix.sd * (fit.needs || 0), coherence: -ix.sd * (fit.coherence || 0),
+        lane: -lanePenalty, typical: 0, ahead: 0, exposure: 0, personal: 0,
+      },
+      lacking: fit.lacking || [],
       offRole: share < OFF_ROLE_SHARE,
       games: e ? e.games : 0,
       pickRate: e && ix.matches ? e.games / (2 * ix.matches) : 0,
@@ -709,7 +719,7 @@
     if (!delta) return { ...row, personal: 0, personalGames: games };
     const logit = row.logit + delta;
     const score = Math.round(toScore(ix, logit));
-    return { ...row, logit, score, personal: score - row.score, personalGames: games };
+    return { ...row, logit, score, personal: score - row.score, personalGames: games, parts: { ...row.parts, personal: delta } };
   }
 
   /**
@@ -751,14 +761,15 @@
    */
   function finalRow(ix, a, typ, rest) {
     const logit = a.row.logit - typ.board;
-    const row = { ...a.row, logit, score: Math.round(toScore(ix, logit)) };
+    const row = { ...a.row, logit, score: Math.round(toScore(ix, logit)), parts: { ...a.row.parts, typical: -typ.board } };
     if (!rest) return row;
     // Look-ahead terms count by the evidence behind this champion in this role
     const rel = a.row.games / (a.row.games + ix.priorGames);
     const withFuture = logit + rel * (a.ahead - typ.ahead);
     const final = withFuture - rel * (a.exposure - typ.exposure);
     const score = Math.round(toScore(ix, final));
-    return { ...row, logit: final, score, counterRisk: Math.round(toScore(ix, withFuture)) - score };
+    const parts = { ...row.parts, ahead: rel * (a.ahead - typ.ahead), exposure: -rel * (a.exposure - typ.exposure) };
+    return { ...row, logit: final, score, parts, counterRisk: Math.round(toScore(ix, withFuture)) - score };
   }
 
   /**
@@ -1218,25 +1229,33 @@
     return 0.4 * strength + 0.3 * synergy + 0.3 * matchup;
   }
 
-  function patchModelWeight(model) {
+  // How fresh the model is for the current patch, 0-1: a patch under two days old, or with
+  // few matches, leans on older patches. Unknown (no patch data): fully trusted.
+  function patchFreshness(model) {
     const matches = Number(model?.patchMatches);
-    if (!Number.isFinite(matches)) return null;
+    if (!Number.isFinite(matches)) return 1;
     const patchStartedAt = Date.parse(model.patchStartedAt || '');
-    if (Number.isFinite(patchStartedAt) && Math.max(0, Date.now() - patchStartedAt) < 48 * 60 * 60 * 1000) return 0.2;
-    return 0.2 + 0.6 * Math.min(1, Math.max(0, matches) / 10000);
+    if (Number.isFinite(patchStartedAt) && Math.max(0, Date.now() - patchStartedAt) < 48 * 60 * 60 * 1000) return 0.25;
+    return 0.25 + 0.75 * Math.min(1, Math.max(0, matches) / 10000);
   }
 
-  function sourceWeights(model) {
-    const patchTarget = patchModelWeight(model);
+  /**
+   * Share of the model against MetaSRC for one pick: how much the model knows about this
+   * champion in this role (its games there), times how well trained and current it is
+   * overall. A well-covered pick is the model alone (1); a pick it has barely seen, or a
+   * model that is small or new, hands over to MetaSRC (down to 0). Out-of-time evidence
+   * caps it: a model that did not beat MetaSRC counts for at most half, a tuned one for
+   * its tuned weight.
+   */
+  function sourceWeights(model, games = null) {
+    const evidence = games === null ? 1 : 1 - Math.exp(-Math.max(0, games) / ROLE_EVIDENCE_GAMES);
     const hasOotEvidence = Number(model?.ensemble?.matches) >= Number(model?.ensemble?.minimum || 500);
-    const validatedCeiling = hasOotEvidence && !model.ensemble.supported ? 0.5 : patchTarget;
-    const tuned = model?.ensemble?.supported && Number.isFinite(model.ensemble.modelWeight)
-      ? Math.max(0, Math.min(patchTarget ?? 0.5, model.ensemble.modelWeight))
-      : null;
-    const modelWeight = patchTarget === null
-      ? tuned ?? Math.max(0, Math.min(0.5, 0.5 * modelConfidence(model)))
-      : Math.min(validatedCeiling, tuned ?? patchTarget * modelConfidence(model));
-    return { model: modelWeight, metasrc: 1 - modelWeight };
+    const tuned = model?.ensemble?.supported && Number.isFinite(model.ensemble.modelWeight) ? model.ensemble.modelWeight : null;
+    const ceiling = tuned ?? (hasOotEvidence && !model.ensemble.supported ? 0.5 : 1);
+    let w = Math.min(ceiling, modelConfidence(model) * patchFreshness(model) * evidence);
+    if (w >= 0.95 && ceiling >= 0.95) w = 1;
+    if (w <= 0.05) w = 0;
+    return { model: w, metasrc: 1 - w };
   }
 
   function calibratedMetaScore(modelRow, args, weights) {
@@ -1310,7 +1329,7 @@
   function withMetaFallback(modelRow, metaRow, model, args) {
     if (!modelRow) return metaRow;
     if (!metaRow) return modelRow;
-    const weights = sourceWeights(model);
+    const weights = sourceWeights(model, modelRow.games ?? null);
     return {
       ...modelRow,
       score: calibratedMetaScore(modelRow, args, weights) ?? Math.round(weights.model * modelRow.score + weights.metasrc * metaRow.score),
