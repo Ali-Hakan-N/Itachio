@@ -232,6 +232,10 @@ Her maç oyuncunun erken lane sonucu ve draft’ın beklenen sonucuna göre late
 
 Renderer’da `personalFor()` season ve patch değerlerini her zaman, team değerini yalnızca aynı beşli lineup ile kullanır. Champion/class prior, az oynanan veya oynanmamış champion’lara kişisel sinyal aktarır. Kişisel logit katkısı `PERSONAL_WEIGHT=0.5` ile uygulanır, `PERSONAL_CAP=0.4 SD` ile sınırlanır. Veriler `player_champion_stats` ve History için `player_games` tablosundadır.
 
+### Lobby/queue rol dağılımı
+
+Lobby veya queue’dayken (`/lol-lobby/v2/lobby`, gameflow `Lobby/Matchmaking/ReadyCheck`) beş kişinin de team üyesi olduğu tespit edilirse (`puuid` eşleşmesi), `Engine.lineupRoles` kimin hangi rolde oynaması gerektiğini önerir ve Draft sekmesinin bekleme ekranında gösterir. Her oyuncu × rol hücresi şu kaynaklardan hesaplanır: season, patch (`history`) ve tam bu beş kişiyle oynanan `team` istatistikleri (ağırlıklar 1 / 0.8 / 1.6; kaynaklar yoksa ağırlıktan çıkar). Her kaynakta rol için oynanan champion’ların oyun ağırlıklı `delta` ortalaması `games + 15` ile shrink edilir; role’ün toplam oyun içindeki payı (`ROLE_EXPERIENCE` 0.4 sd), pool derinliği (`poolDepth`, 0.3 sd) ve hiç oynanmamış rol cezası (0.5 sd) eklenir. Team sekmesinde seçilen roller ±0.3 sd, lobby position tercihi +0.15 sd ekler. 120 rol permütasyonunun toplamı sıralanır; en iyi üç seçenek, aradaki fark (`margin < 3` “close call”) ve her oyuncunun en çok oynadığı champion’lar gösterilir. Puanlar modelin sd ölçeğindedir.
+
 ## 8. Builds ve Mevcut Item Mantığı
 
 Production build sistemi, deneysel pairwise scorer değildir. [collector/src/model/builds.js](../collector/src/model/builds.js) champion-role-damage bucket’larında rune/spell/item seçimlerini Riot maçlarından toplar; timeline verisi olan maçlardan start item ve purchase order öğrenir. Düşman magic damage profili, enemy damage bucket’ını `any/ap/ad/mixed` eşikleriyle seçer. MetaSRC builds, eldeki Riot build evidence’ı ile harmanlanır; `modelWeight` arttıkça dış build prior’ı azalır.

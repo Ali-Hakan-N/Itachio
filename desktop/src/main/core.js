@@ -3,7 +3,7 @@
 // Independent of Electron; tests run it with a mock LCU and a fake data layer.
 
 const { EventEmitter } = require('node:events');
-const { normalizeSession } = require('./champselect');
+const { normalizeSession, normalizeLobby } = require('./champselect');
 const { parseEndOfGame, parsePlayers } = require('./endofgame');
 // The UI's scoring engine also runs here, to record each pick's score
 globalThis.Recommend = globalThis.Recommend || require('../renderer/recommend');
@@ -70,6 +70,7 @@ class AppCore extends EventEmitter {
       model: null, // learned win model; when missing the older scoring is used
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
+      lobby: null, // the party waiting or queueing: { queueId, members: [{ puuid, isLocal, preferences }] }
       playerStats: {}, // how each player does on each champion
       builds: {}, // runes, items and spells per champion, role and enemy damage
       damage: null, // champions' magic share, to choose the build for the enemy team
@@ -207,6 +208,7 @@ class AppCore extends EventEmitter {
         },
       });
       await this.#linkRiotAccount();
+      this.#syncLobby(phase);
       if (phase === 'ChampSelect') {
         const session = await this.lcu.get('/lol-champ-select/v1/session');
         if (session) this.#onSession(session);
@@ -233,6 +235,8 @@ class AppCore extends EventEmitter {
     switch (ev.uri) {
       case '/lol-gameflow/v1/gameflow-phase':
         return this.#onPhase(ev.data);
+      case '/lol-lobby/v2/lobby':
+        return this.#emit({ lobby: ev.eventType === 'Delete' ? null : normalizeLobby(ev.data) });
       case '/lol-champ-select/v1/session':
         // Champ select is over: the draft stays until the game ends (or a dodge, #onPhase)
         if (ev.eventType === 'Delete') return this.#emit({ pickable: null });
@@ -243,9 +247,21 @@ class AppCore extends EventEmitter {
     }
   }
 
+  // The party is only kept before the game: read it when waiting starts, drop it after
+  #syncLobby(phase) {
+    if (!PRE_GAME_PHASES.has(phase) || phase === 'None') {
+      if (this.state.lobby) this.#emit({ lobby: null });
+      return;
+    }
+    this.lcu.get('/lol-lobby/v2/lobby')
+      .then((raw) => this.#emit({ lobby: normalizeLobby(raw) }))
+      .catch(() => this.#emit({ lobby: null }));
+  }
+
   #onPhase(phase) {
     const prev = this.state.lcu.phase;
     this.#emit({ lcu: { ...this.state.lcu, phase } });
+    this.#syncLobby(phase);
     const cur = this.current;
 
     if ((phase === 'GameStart' || phase === 'InProgress') && cur && cur.status === 'live') {

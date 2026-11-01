@@ -22,6 +22,7 @@ const DEFAULT_INSTALL_PATHS = [
 
 const SUBSCRIPTIONS = [
   'OnJsonApiEvent_lol-gameflow_v1_gameflow-phase',
+  'OnJsonApiEvent_lol-lobby_v2_lobby',
   'OnJsonApiEvent_lol-champ-select_v1_session',
   'OnJsonApiEvent_lol-end-of-game_v1_eog-stats-block',
 ];

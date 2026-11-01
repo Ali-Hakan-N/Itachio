@@ -105,6 +105,11 @@
   const LANE_PENALTY = 0.5; // share of a lane loss beyond the threshold that is taken off the logit
   const LANE_AMORTIZE = 1.5; // a lane loss is forgiven once the composition gain is this many times the loss
   const PERSONAL_CAP = 0.4; // in standard deviations of strength
+  const ROLE_PRIOR = 15; // pseudo-games shrinking a player's average on a role toward zero (line-up roles)
+  const ROLE_EXPERIENCE = 0.4; // standard deviations for a role that is most of a player's games
+  const POOL_DEPTH = 0.3; // standard deviations between a deep and a shallow pool on the role
+  const NEW_ROLE = 0.5; // standard deviations lost on a role a known player never plays
+  const ROLE_CHOICE = 0.3; // standard deviations for the roles a player chose (Team tab) or queued for
   const PERSONAL_CLASS_PRIOR = 40; // pseudo-games before class-level comfort transfers to an unseen champion
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
@@ -1124,6 +1129,78 @@
     };
   }
 
+  /**
+   * Who should play which role when the five on our side are all team members (in the
+   * lobby or queue). members: [{ id, roles?, preferences? }] (roles: what the player chose in
+   * the Team tab, preferences: what they picked in the lobby); playerStats as in personalFor.
+   * Every player gets a value for every role from their statistics there, each source
+   * weighted: the season, this patch, and the games with exactly this line-up (the heaviest,
+   * the same five on the same roles). Each source gives the games-weighted champion delta
+   * (shrunk by ROLE_PRIOR games), how much of their games the role is, and the depth of their
+   * pool in it. The best of all 120 assignments wins; points are on the model's scale.
+   * Returns { options: [{ total, picks: [{ id, role, points, games, champions, parts }] }], margin } or null.
+   */
+  function lineupRoles({ model, members, playerStats }) {
+    if (!Array.isArray(members) || members.length !== 5) return null;
+    const sd = has(model) ? index(model).sd : 0.1;
+    const toPoints = (x) => Math.round(50 * Math.tanh((SPREAD * x) / sd));
+    const key = members.map((m) => m.id).sort().join(',');
+    const WEIGHT = { season: 1, history: 0.8, team: 1.6 };
+
+    const cell = (m, role) => {
+      const own = playerStats?.[m.id] || {};
+      const parts = {};
+      let sum = 0;
+      let weight = 0;
+      const seen = new Map(); // champion -> games, to show their most played
+      for (const source of ['season', 'history', 'team']) {
+        const src = source === 'team' ? own.team?.[key] : own[source];
+        if (!src?.byKey) continue;
+        const all = Object.entries(src.byKey);
+        const total = all.reduce((a, [, e]) => a + e.games, 0);
+        const here = all.filter(([k]) => k.split(':')[1] === role).map(([k, e]) => ({ championId: Number(k.split(':')[0]), ...e }));
+        const games = here.reduce((a, e) => a + e.games, 0);
+        let value;
+        if (!games) {
+          // Known player, never on this role: what an unplayed champion costs, and a part for the role itself
+          value = (src.unplayed || 0) - (total >= 10 ? NEW_ROLE * sd * (total / (total + 10)) : 0);
+        } else {
+          const delta = here.reduce((a, e) => a + e.games * e.delta, 0) / (games + ROLE_PRIOR);
+          const share = (games / total - 0.2) / 0.4;
+          const depth = poolDepth(here);
+          value = delta + ROLE_EXPERIENCE * sd * Math.max(-0.5, Math.min(1, share)) + POOL_DEPTH * sd * (Math.min(depth, 5) - 2) / 3;
+        }
+        parts[source] = { points: toPoints(value), games };
+        sum += WEIGHT[source] * value;
+        weight += WEIGHT[source];
+        for (const e of here) seen.set(e.championId, (seen.get(e.championId) || 0) + e.games);
+      }
+      let value = weight ? sum / weight : 0;
+      const chosen = m.roles || [];
+      if (chosen.length) value += (chosen.includes(role) ? 1 : -1) * ROLE_CHOICE * sd;
+      if ((m.preferences || []).includes(role)) value += ROLE_CHOICE * 0.5 * sd;
+      const champions = [...seen].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id);
+      return { value, parts, games: Object.values(parts).reduce((a, p) => Math.max(a, p.games), 0), champions };
+    };
+
+    const cells = members.map((m) => ROLES.map((role) => cell(m, role)));
+    const ranked = PERMUTATIONS
+      .map((perm) => ({ perm, total: perm.reduce((a, r, i) => a + cells[i][r].value, 0) }))
+      .sort((a, b) => b.total - a.total);
+    const options = ranked.slice(0, 3).map(({ perm, total }) => ({
+      total: toPoints(total / 5) * 5,
+      picks: perm.map((r, i) => ({
+        id: members[i].id,
+        role: ROLES[r],
+        points: toPoints(cells[i][r].value),
+        games: cells[i][r].games,
+        champions: cells[i][r].champions,
+        parts: cells[i][r].parts,
+      })),
+    }));
+    return { options, margin: options.length > 1 ? options[0].total - options[1].total : 0 };
+  }
+
   function metaFallbackStats(stats) {
     if (!stats?.meta?.length) return null;
     const sourceRows = (rows) => (rows || []).filter((row) => !row.source || row.source === 'metasrc');
@@ -1298,10 +1375,11 @@
     // A change in log-odds as points around a typical pick (50), on the model's scale
     points: (model, delta) => (has(model) ? Math.round(toScore(index(model), delta) - 50) : 0),
     gamePlan: (args) => (has(args.model) ? gamePlan(args) : null),
+    lineupRoles,
     personalFor,
   };
 
-  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, winParts, personalFor, Engine, ROLES };
+  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, winParts, personalFor, lineupRoles, Engine, ROLES };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Engine = Engine;
 })(typeof window !== 'undefined' ? window : globalThis);

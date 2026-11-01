@@ -808,6 +808,40 @@ function lastGameHtml(g) {
     </div>`;
 }
 
+// ---------- Lineup roles (lobby / queue) ----------
+// When all five in the party are team members: who should play which role, from the
+// statistics of the Champions tab (season, patch, and the games with exactly these five)
+function lineupRolesHtml() {
+  const lobby = S.lobby;
+  if (!lobby || lobby.members.length !== 5 || !S.model) return '';
+  const people = lobby.members.map((m) => {
+    const member = (m.isLocal && S.me) || memberByPuuid(m.puuid);
+    return member ? { id: member.id, roles: member.roles || [], preferences: m.preferences } : null;
+  });
+  if (people.some((p) => !p) || new Set(people.map((p) => p.id)).size !== 5) return '';
+  const result = Engine.lineupRoles({ model: S.model, members: people, playerStats: S.playerStats });
+  if (!result) return '';
+  const [best, ...others] = result.options;
+  const signed = (n) => `<b class="${n > 0 ? 'up' : n < 0 ? 'down' : ''}">${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}</b>`;
+  const label = { season: 'Season', history: 'Patch', team: 'With team' };
+  const order = (option) => [...option.picks].sort((a, b) => ROLES.findIndex(([r]) => r === a.role) - ROLES.findIndex(([r]) => r === b.role));
+  const row = (p) => `
+    <div class="lr-row">
+      <span class="lr-role">${roleIcon(p.role)}${esc(ROLE_NAME[p.role])}</span>
+      <span class="lr-who"><b>${esc(nickOf(p.id))}</b><small>${Object.entries(p.parts).map(([k, v]) => `${label[k]} ${v.games}g`).join(' · ') || 'No games yet'}</small></span>
+      <span class="lr-champs">${p.champions.map((c) => champImg(c, 's')).join('')}</span>
+      ${signed(p.points)}
+    </div>`;
+  const close = result.margin < 3;
+  return `
+    <div class="lineup-roles">
+      <h3>Suggested Roles <small>${close ? 'close call' : 'for this five'}</small></h3>
+      ${order(best).map(row).join('')}
+      ${others.length ? `<details><summary>Other options</summary>${others.map((o) => `
+        <div class="lr-alt">${order(o).map((p) => `<span>${esc(ROLE_NAME[p.role])}: ${esc(nickOf(p.id))}</span>`).join('')}<b class="down">${o.total - best.total}</b></div>`).join('')}</details>` : ''}
+    </div>`;
+}
+
 function renderDraft() {
   clearInterval(timerHandle);
   const d = withRoles(S.draft);
@@ -830,6 +864,7 @@ function renderDraft() {
           ? 'Queue up. When champ select starts, the draft shows up here live with your picks, bans and build.'
           : 'Open the League of Legends client. Itachio finds it and connects on its own.'}</p>
         <div class="scan"><span class="scan-dot"></span>${connected ? esc(PHASE_TEXT[S.lcu?.phase] || 'Idle') : 'Searching for the client'}</div>
+        ${connected ? lineupRolesHtml() : ''}
         ${S.stats?.meta?.length ? '' : '<p class="waiting-text small">No meta data yet. Recommendations appear after the collector runs for the first time.</p>'}
       </div>`;
     return;

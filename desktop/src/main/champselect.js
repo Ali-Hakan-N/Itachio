@@ -133,4 +133,21 @@ function unavailableIds(draft) {
   return ids;
 }
 
-module.exports = { normalizeSession, unavailableIds, POSITIONS };
+/** The party in the lobby or queue: { queueId, members: [{ puuid, isLocal, preferences }] }, or null without one */
+function normalizeLobby(raw) {
+  const members = (raw?.members || []).filter((m) => m?.puuid);
+  if (!members.length) return null;
+  const own = raw.localMember?.puuid;
+  return {
+    queueId: raw.gameConfig?.queueId ?? null,
+    members: members.map((m) => ({
+      puuid: m.puuid,
+      isLocal: m.puuid === own,
+      preferences: [m.firstPositionPreference, m.secondPositionPreference]
+        .map((p) => String(p || '').toLowerCase())
+        .filter((p) => POSITIONS.includes(p)),
+    })),
+  };
+}
+
+module.exports = { normalizeSession, normalizeLobby, unavailableIds, POSITIONS };
