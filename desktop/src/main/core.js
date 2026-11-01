@@ -66,6 +66,7 @@ class AppCore extends EventEmitter {
       champions: [],
       patch: null,
       stats: { meta: [], synergy: [], matchup: [] },
+      metaSrcHealth: null,
       model: null, // learned win model; when missing the older scoring is used
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
@@ -104,15 +105,19 @@ class AppCore extends EventEmitter {
   async loadUserData() {
     const me = await this.data.loadMe();
     const { patch, champions } = await this.data.loadChampions();
-    const [stats, model] = await Promise.all([
+    const [stats, model, metaSrcHealth] = await Promise.all([
       this.data.loadStats(),
       this.data.loadModel().catch((err) => {
         this.log.error('[model]', err.message);
         return null;
       }),
+      this.data.loadMetaSrcHealth?.().catch((err) => {
+        this.log.error('[MetaSRC health]', err.message);
+        return null;
+      }) ?? null,
     ]);
     this.championIds = new Set(champions.map((c) => c.id));
-    this.#emit({ me, patch, champions, stats, model });
+    this.#emit({ me, patch, champions, stats, model, metaSrcHealth });
     this.#loadBuilds(patch);
     await this.refreshTeam();
     await this.#linkRiotAccount();
@@ -136,8 +141,17 @@ class AppCore extends EventEmitter {
   // lobby, who all enter at the same moment, scores the draft with the same model.
   #watchModel() {
     clearInterval(this._modelTimer);
-    this._modelTimer = setInterval(() => this.refreshModel().catch((err) => this.log.error('[model]', err.message)), MODEL_CHECK_MS);
+    this._modelTimer = setInterval(() => {
+      this.refreshModel().catch((err) => this.log.error('[model]', err.message));
+      this.refreshMetaSrcHealth().catch((err) => this.log.error('[MetaSRC health]', err.message));
+    }, MODEL_CHECK_MS);
     this._modelTimer.unref?.();
+  }
+  async refreshMetaSrcHealth() {
+    if (!this.data.loadMetaSrcHealth) return false;
+    const health = await this.data.loadMetaSrcHealth();
+    this.#emit({ metaSrcHealth: health });
+    return true;
   }
   async refreshModel({ atDraftStart = null } = {}) {
     // Between drafts, or at the very start of the draft with this game id

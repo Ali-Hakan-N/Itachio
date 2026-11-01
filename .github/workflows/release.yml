@@ -30,6 +30,13 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm test
+      - name: Test analytics package
+        working-directory: analytics
+        run: |
+          npm ci
+          npm run build
+          npm test
+          npm audit --audit-level=high
       - name: Create config.json
         shell: pwsh
         env:

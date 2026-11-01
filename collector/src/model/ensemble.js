@@ -1,7 +1,9 @@
 const ROLES = ['top', 'jungle', 'middle', 'bottom', 'utility'];
 const MIN_OBSERVATIONS = 500;
-const MAX_MODEL_WEIGHT = 0.5;
-const MODEL_WEIGHTS = Array.from({ length: 11 }, (_, i) => i * 0.05);
+const MAX_MODEL_WEIGHT = 0.5; // MetaSRC build blend ceiling; draft tuning has its own cap.
+const DEFAULT_DRAFT_MODEL_WEIGHT = 0.5;
+const MAX_DRAFT_MODEL_WEIGHT = 0.8;
+const MODEL_WEIGHTS = Array.from({ length: Math.round(MAX_DRAFT_MODEL_WEIGHT / 0.05) + 1 }, (_, i) => i * 0.05);
 const { matchLogit } = require('./predict');
 
 const average = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -187,18 +189,18 @@ function selectModelWeight(observations) {
 
   const candidateWeight = MODEL_WEIGHTS.reduce((best, weight) =>
     meanLoss(tuneRows, calibration, weight) < meanLoss(tuneRows, calibration, best) ? weight : best, MODEL_WEIGHTS[0]);
-  const validation = lossImprovement(validationRows, calibration, candidateWeight, MAX_MODEL_WEIGHT);
-  const supported = candidateWeight < MAX_MODEL_WEIGHT && validation.improvement > 2 * validation.se;
+  const validation = lossImprovement(validationRows, calibration, candidateWeight, DEFAULT_DRAFT_MODEL_WEIGHT);
+  const supported = candidateWeight !== DEFAULT_DRAFT_MODEL_WEIGHT && validation.improvement > 2 * validation.se;
   return {
     supported,
-    modelWeight: supported ? candidateWeight : MAX_MODEL_WEIGHT,
+    modelWeight: supported ? candidateWeight : DEFAULT_DRAFT_MODEL_WEIGHT,
     candidateWeight,
     metaCalibration: calibration,
     matches: rows.length,
     calibrationMatches: calibrationRows.length,
     tuningMatches: tuneRows.length,
     validationMatches: validationRows.length,
-    baselineLogloss: meanLoss(validationRows, calibration, MAX_MODEL_WEIGHT),
+    baselineLogloss: meanLoss(validationRows, calibration, DEFAULT_DRAFT_MODEL_WEIGHT),
     candidateLogloss: meanLoss(validationRows, calibration, candidateWeight),
     improvement: validation.improvement,
     se: validation.se,

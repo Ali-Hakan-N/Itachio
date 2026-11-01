@@ -155,6 +155,7 @@
       ts: classPair(model.ts, false),
       tv: classPair(model.tv, true),
       tags: new Map(Object.entries(model.tags || {}).map(([id, t]) => [Number(id), t])),
+      blindability: new Map(Object.entries(model.blindability?.byKey || {})),
       off: model.off || [0, 0, 0, 0, 0],
       floor: model.shareFloor || 0.002,
       early: model.early || null,
@@ -228,7 +229,6 @@
   const roleIndex = (ix, championId, position) =>
     position && ROLE_INDEX[position] !== undefined ? ROLE_INDEX[position] : ix.bestRole.get(championId)?.r ?? null;
   const toScore = (ix, x) => 50 + 50 * Math.tanh((SPREAD * x) / ix.sd);
-
   // A player on the board: { championId, position? } or a bare champion id
   const asPick = (p) => (typeof p === 'number' ? { championId: p, position: '' } : p);
 
@@ -835,7 +835,14 @@
       const rest = ix.matches ? restFor(r) : null;
       const typ = typical(ix, r, allies, enemies, rest, unavailable);
       const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);
-      out.push({ ...personalize(ix, { counterRisk: 0, ...row }, personal), inPool: inPool.has(championId) });
+      const blind = ix.blindability.get(`${championId}:${r}`);
+      out.push({
+        ...personalize(ix, { counterRisk: 0, ...row }, personal),
+        blindSpread: blind?.spread ?? null,
+        counterRate: blind?.counterRate ?? null,
+        counterChance: blind?.counterChance ?? null,
+        inPool: inPool.has(championId),
+      });
     }
     return out.sort((x, y) => y.logit - x.logit || y.games - x.games).slice(0, limit);
   }
@@ -851,7 +858,13 @@
     const rest = ahead && ix.matches ? restOfDraft(ix, r, allies, enemies, unavailable, answerShare) : null;
     const typ = typical(ix, r, allies, enemies, rest, unavailable);
     const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);
-    return personalize(ix, ahead ? { counterRisk: 0, ...row } : row, personal);
+    const blind = ix.blindability.get(`${championId}:${r}`);
+    return {
+      ...personalize(ix, ahead ? { counterRisk: 0, ...row } : row, personal),
+      blindSpread: blind?.spread ?? null,
+      counterRate: blind?.counterRate ?? null,
+      counterChance: blind?.counterChance ?? null,
+    };
   }
 
   /**
@@ -1088,76 +1101,84 @@
     };
   }
 
-  // Older engine (recommend.js) takes allies as champion ids
-  const legacy = (args) => ({ ...args, allies: (args.allies || []).map((p) => asPick(p).championId) });
-
-  const metaSourceCache = new WeakMap();
-  function metaSourceIndex(stats) {
-    if (metaSourceCache.has(stats)) return metaSourceCache.get(stats);
-    const meta = new Map();
-    const roleScores = Array.from({ length: 5 }, () => []);
+  function metaFallbackStats(stats) {
+    if (!stats?.meta?.length) return null;
     const sourceRows = (rows) => (rows || []).filter((row) => !row.source || row.source === 'metasrc');
-    for (const row of sourceRows(stats.meta)) {
+    const meta = sourceRows(stats.meta);
+    if (!meta.length) return null;
+    return { meta, synergy: sourceRows(stats.synergy), matchup: sourceRows(stats.matchup) };
+  }
+
+  function modelConfidence(model) {
+    if (!model) return 0;
+    const matches = model.matches || 0;
+    const strength = matches > 0 ? Math.min(1, Math.max(0.2, matches / 20000)) : 0.5;
+    const synergy = Math.min(1, (model.syn?.length || 0) / 200);
+    const matchup = Math.min(1, (model.vs?.length || 0) / 200);
+    return 0.4 * strength + 0.3 * synergy + 0.3 * matchup;
+  }
+
+  function patchModelWeight(model) {
+    const matches = Number(model?.patchMatches);
+    if (!Number.isFinite(matches)) return null;
+    const patchStartedAt = Date.parse(model.patchStartedAt || '');
+    if (Number.isFinite(patchStartedAt) && Math.max(0, Date.now() - patchStartedAt) < 48 * 60 * 60 * 1000) return 0.2;
+    return 0.2 + 0.6 * Math.min(1, Math.max(0, matches) / 10000);
+  }
+
+  function sourceWeights(model) {
+    const patchTarget = patchModelWeight(model);
+    const hasOotEvidence = Number(model?.ensemble?.matches) >= Number(model?.ensemble?.minimum || 500);
+    const validatedCeiling = hasOotEvidence && !model.ensemble.supported ? 0.5 : patchTarget;
+    const tuned = model?.ensemble?.supported && Number.isFinite(model.ensemble.modelWeight)
+      ? Math.max(0, Math.min(patchTarget ?? 0.5, model.ensemble.modelWeight))
+      : null;
+    const modelWeight = patchTarget === null
+      ? tuned ?? Math.max(0, Math.min(0.5, 0.5 * modelConfidence(model)))
+      : Math.min(validatedCeiling, tuned ?? patchTarget * modelConfidence(model));
+    return { model: modelWeight, metasrc: 1 - modelWeight };
+  }
+
+  function calibratedMetaScore(modelRow, args, weights) {
+    const calibration = args.model?.ensemble?.metaCalibration;
+    const rows = metaFallbackStats(args.stats)?.meta || [];
+    if (!args.model?.ensemble?.supported || !calibration || !rows.length || !Number.isFinite(modelRow.logit)) return null;
+    const scores = Array.from({ length: 5 }, () => new Map());
+    const roleValues = Array.from({ length: 5 }, () => []);
+    for (const row of rows) {
       const role = ROLE_INDEX[row.role];
       const score = Number(row.score);
       if (role === undefined || !Number.isFinite(score)) continue;
-      meta.set(`${row.champion_id}:${role}`, score);
-      roleScores[role].push(score);
+      scores[role].set(row.champion_id, score);
+      roleValues[role].push(score);
     }
-    const roleStats = roleScores.map((scores) => {
-      const mean = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
-      const sd = scores.length
-        ? Math.sqrt(scores.reduce((sum, score) => sum + (score - mean) ** 2, 0) / scores.length) || 1
-        : 1;
-      return { mean, sd };
-    });
-    const synergy = new Map();
-    for (const row of sourceRows(stats.synergy)) {
-      const role = ROLE_INDEX[row.role];
-      const strength = Number(row.strength);
-      if (role !== undefined && Number.isFinite(strength)) synergy.set(`${row.champion_id}:${role}:${row.ally_id}`, strength);
-    }
-    const matchup = new Map();
-    for (const row of sourceRows(stats.matchup)) {
-      const role = ROLE_INDEX[row.role];
-      const enemyRole = ROLE_INDEX[row.opponent_role || row.role];
-      const strength = Number(row.strength);
-      if (role !== undefined && enemyRole !== undefined && Number.isFinite(strength)) {
-        matchup.set(`${row.champion_id}:${role}:${row.opponent_id}:${enemyRole}`, strength);
-      }
-    }
-    const result = {
-      strength: (champion, role) => {
-        const score = meta.get(`${champion}:${role}`);
-        return score === undefined ? 0 : (score - roleStats[role].mean) / roleStats[role].sd;
-      },
-      synergy: (a, ra, b, rb) => {
-        const direct = synergy.get(`${a}:${ra}:${b}`);
-        const reverse = synergy.get(`${b}:${rb}:${a}`);
-        if (direct !== undefined && reverse !== undefined) return (direct + reverse) / 2;
-        return direct ?? reverse ?? 0;
-      },
-      matchup: (a, ra, b, rb) => {
-        const direct = matchup.get(`${a}:${ra}:${b}:${rb}`);
-        if (direct !== undefined) return direct;
-        const reverse = matchup.get(`${b}:${rb}:${a}:${ra}`);
-        return reverse === undefined ? 0 : -reverse;
-      },
+    const strength = (champion, role) => {
+      const value = scores[role].get(champion);
+      if (value === undefined || !roleValues[role].length) return 0;
+      const values = roleValues[role];
+      const mean = values.reduce((sum, item) => sum + item, 0) / values.length;
+      const sd = Math.sqrt(values.reduce((sum, item) => sum + (item - mean) ** 2, 0) / values.length) || 1;
+      return (value - mean) / sd;
     };
-    metaSourceCache.set(stats, result);
-    return result;
-  }
-
-  function metaFeaturesForCandidate({ stats, model, championId, role, allies = [], enemies = [] }) {
-    const source = metaSourceIndex(stats);
-    const ix = index(model);
-    const ownPicks = [{ championId, position: role }, ...allies.map(asPick)];
-    const enemyPicks = enemies.map(asPick);
+    const source = metaFallbackStats(args.stats);
+    const synergy = (a, ra, b) => {
+      const direct = source.synergy.find((row) => row.champion_id === a && ROLE_INDEX[row.role] === ra && row.ally_id === b);
+      const reverse = source.synergy.find((row) => row.champion_id === b && row.ally_id === a);
+      const values = [direct, reverse].filter(Boolean).map((row) => Number(row.strength)).filter(Number.isFinite);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+    };
+    const matchup = (a, ra, b, rb) => {
+      const direct = source.matchup.find((row) => row.champion_id === a && ROLE_INDEX[row.role] === ra && row.opponent_id === b && ROLE_INDEX[row.opponent_role || row.role] === rb);
+      if (direct) return Number(direct.strength);
+      const reverse = source.matchup.find((row) => row.champion_id === b && row.opponent_id === a && ROLE_INDEX[row.role] === rb);
+      return reverse ? -Number(reverse.strength) : 0;
+    };
+    const ownPicks = [{ championId: modelRow.championId, position: modelRow.role }, ...(args.allies || []).map(asPick)];
+    const enemyPicks = (args.enemies || []).map(asPick);
+    const ix = index(args.model);
     const ownAssignments = roleAssignments(ix, ownPicks);
     const enemyAssignments = roleAssignments(ix, enemyPicks, ownPicks);
-    if (!ownAssignments.length || !enemyAssignments.length) return [0, 0, 0];
-
-    const total = [0, 0, 0];
+    const totals = [0, 0, 0];
     let probabilitySum = 0;
     for (const own of ownAssignments) for (const enemy of enemyAssignments) {
       const probability = own.probability * enemy.probability;
@@ -1165,148 +1186,63 @@
       const enemyTeam = new Array(5).fill(null);
       ownPicks.forEach((pick, i) => { ownTeam[own.roles[i]] = pick.championId; });
       enemyPicks.forEach((pick, i) => { enemyTeam[enemy.roles[i]] = pick.championId; });
-      const feature = [0, 0, 0];
-      for (let r = 0; r < 5; r++) {
-        if (ownTeam[r]) feature[0] += source.strength(ownTeam[r], r);
-        if (enemyTeam[r]) feature[0] -= source.strength(enemyTeam[r], r);
-        for (let other = r + 1; other < 5; other++) {
-          if (ownTeam[r] && ownTeam[other]) feature[1] += source.synergy(ownTeam[r], r, ownTeam[other], other);
-          if (enemyTeam[r] && enemyTeam[other]) feature[1] -= source.synergy(enemyTeam[r], r, enemyTeam[other], other);
+      for (let role = 0; role < 5; role++) {
+        if (ownTeam[role]) totals[0] += probability * strength(ownTeam[role], role);
+        if (enemyTeam[role]) totals[0] -= probability * strength(enemyTeam[role], role);
+        for (let other = role + 1; other < 5; other++) {
+          if (ownTeam[role] && ownTeam[other]) totals[1] += probability * synergy(ownTeam[role], role, ownTeam[other]);
+          if (enemyTeam[role] && enemyTeam[other]) totals[1] -= probability * synergy(enemyTeam[role], role, enemyTeam[other]);
         }
         for (let enemyRole = 0; enemyRole < 5; enemyRole++) {
-          if (ownTeam[r] && enemyTeam[enemyRole]) feature[2] += source.matchup(ownTeam[r], r, enemyTeam[enemyRole], enemyRole);
+          if (ownTeam[role] && enemyTeam[enemyRole]) totals[2] += probability * matchup(ownTeam[role], role, enemyTeam[enemyRole], enemyRole);
         }
       }
-      for (let i = 0; i < 3; i++) total[i] += probability * feature[i];
       probabilitySum += probability;
     }
-    return probabilitySum ? total.map((value) => value / probabilitySum) : [0, 0, 0];
-  }
-
-  function calibratedMetaLogit(features, calibration) {
-    if (!calibration?.weights || !calibration?.mean || !calibration?.sd) return null;
-    return calibration.weights[0] + features.reduce((sum, value, i) =>
+    const features = probabilitySum ? totals.map((value) => value / probabilitySum) : totals;
+    const metaLogit = calibration.weights[0] + features.reduce((sum, value, i) =>
       sum + calibration.weights[i + 1] * ((value - calibration.mean[i]) / calibration.sd[i]), 0);
+    if (!Number.isFinite(metaLogit)) return null;
+    const blendedLogit = weights.model * modelRow.logit + weights.metasrc * metaLogit;
+    return Math.round(100 / (1 + Math.exp(-Math.max(-30, Math.min(30, blendedLogit)))));
   }
 
-  const sigmoid = (x) => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, x))));
-
-  function tunedScore(modelResult, championId, role, args) {
-    const calibration = args.model?.ensemble?.metaCalibration;
-    if (!args.model?.ensemble?.supported || !calibration || !args.stats?.meta?.length) return null;
-    const metaLogit = calibratedMetaLogit(metaFeaturesForCandidate({
-      stats: args.stats,
-      model: args.model,
-      championId,
-      role,
-      allies: args.allies,
-      enemies: args.enemies,
-    }), calibration);
-    if (!Number.isFinite(metaLogit) || !Number.isFinite(modelResult.logit)) return null;
-    const { wModel, wMeta } = getWeights(args.model, args.stats);
+  function withMetaFallback(modelRow, metaRow, model, args) {
+    if (!modelRow) return metaRow;
+    if (!metaRow) return modelRow;
+    const weights = sourceWeights(model);
     return {
-      score: Math.round(100 * sigmoid(wModel * modelResult.logit + wMeta * metaLogit)),
-      wModel,
-      wMeta,
+      ...modelRow,
+      score: calibratedMetaScore(modelRow, args, weights) ?? Math.round(weights.model * modelRow.score + weights.metasrc * metaRow.score),
+      modelScore: modelRow.score,
+      metaSrcScore: metaRow.score,
+      weights,
+      allies: modelRow.allies?.length ? modelRow.allies : metaRow.allies,
+      enemies: modelRow.enemies?.length ? modelRow.enemies : metaRow.enemies,
     };
   }
 
-  // Dynamic confidence-based weighting:
-  // Model weight is bounded between 0.0 and 0.50, scaling with how proven each layer is.
-  // MetaSRC keeps at least half of the fallback blend.
-  function modelConfidence(m) {
-    if (!m) return 0;
-    // 1. Meta / Strength confidence: based on matches collected, reaches 1.0 at 20,000 matches
-    const matches = m.matches || 0;
-    const cMeta = matches > 0 ? Math.min(1.0, Math.max(0.2, matches / 20000)) : 0.5;
-
-    // 2. Synergy confidence: based on proven synergy weights in model
-    const synCount = Array.isArray(m.syn) ? m.syn.length : 0;
-    const cSyn = synCount > 0 ? Math.min(1.0, synCount / 200) : 0.0;
-
-    // 3. Matchup confidence: based on proven matchup weights in model
-    const vsCount = Array.isArray(m.vs) ? m.vs.length : 0;
-    const cVs = vsCount > 0 ? Math.min(1.0, vsCount / 200) : 0.0;
-
-    // Layer-weighted average confidence: strength 40%, synergy 30%, matchup 30%
-    return 0.4 * cMeta + 0.3 * cSyn + 0.3 * cVs;
-  }
-
-  function getWeights(m, stats = null) {
-    const conf = modelConfidence(m);
-    // Use a supported out-of-time blend; until then, fall back to source confidence.
-    const hasMetaSrc = stats?.meta?.some((row) => !row.source || row.source === 'metasrc');
-    const tuned = hasMetaSrc && m?.ensemble?.supported && m.ensemble.metaCalibration && Number.isFinite(m.ensemble.modelWeight)
-      ? Math.max(0, Math.min(0.5, m.ensemble.modelWeight))
-      : null;
-    const wModel = tuned ?? Math.max(0.0, Math.min(0.50, 0.50 * conf));
-    const wMeta = 1.0 - wModel;
-    return { wModel, wMeta, conf };
-  }
-
-  function blendScore(modelScore, metaScore, m) {
-    if (modelScore === null || modelScore === undefined) return metaScore;
-    if (metaScore === null || metaScore === undefined) return modelScore;
-    const { wModel, wMeta } = getWeights(m);
-    return Math.round(wModel * modelScore + wMeta * metaScore);
-  }
-
   function hybridEvaluate(args) {
-    const hasModel = has(args.model);
-    const hasStats = Boolean(args.stats?.meta?.length);
-
-    if (hasModel && hasStats && root.Recommend) {
-      const modelRes = evaluate(args);
-      const metaRes = root.Recommend.evaluate(legacy(args));
-      if (!modelRes) return metaRes;
-      if (!metaRes) return modelRes;
-      const tuned = tunedScore(modelRes, args.championId, modelRes.role, args);
-      const { wModel, wMeta } = tuned || getWeights(args.model, args.stats);
-      return {
-        ...modelRes,
-        score: tuned?.score ?? blendScore(modelRes.score, metaRes.score, args.model),
-        metaSrcScore: metaRes.score,
-        modelScore: modelRes.score,
-        weights: { model: Number(wModel.toFixed(2)), metasrc: Number(wMeta.toFixed(2)) },
-        allies: modelRes.allies?.length ? modelRes.allies : metaRes.allies,
-        enemies: modelRes.enemies?.length ? modelRes.enemies : metaRes.enemies,
-      };
-    }
-    return hasModel ? evaluate(args) : (root.Recommend ? root.Recommend.evaluate(legacy(args)) : null);
+    const sourceStats = metaFallbackStats(args.stats);
+    const modelRow = has(args.model) ? evaluate(args) : null;
+    const metaRow = sourceStats && root.Recommend
+      ? root.Recommend.evaluate({ ...args, stats: sourceStats, allies: (args.allies || []).map((pick) => asPick(pick).championId) })
+      : null;
+    return withMetaFallback(modelRow, metaRow, args.model, args);
   }
 
   function hybridRecommend(args) {
-    const hasModel = has(args.model);
-    const hasStats = Boolean(args.stats?.meta?.length);
-
-    if (hasModel && hasStats && root.Recommend) {
-      const modelList = recommend(args);
-      const metaList = root.Recommend.recommend(legacy(args));
-      const metaMap = new Map(metaList.map((m) => [`${m.championId}:${m.role}`, m]));
-      const { wModel: fallbackModelWeight, wMeta: fallbackMetaWeight } = getWeights(args.model, args.stats);
-
-      const blended = modelList.map((m) => {
-        const metaItem = metaMap.get(`${m.championId}:${m.role}`);
-        if (!metaItem) return m;
-        const tuned = tunedScore(m, m.championId, m.role, args);
-        const wModel = tuned?.wModel ?? fallbackModelWeight;
-        const wMeta = tuned?.wMeta ?? fallbackMetaWeight;
-        const finalScore = tuned?.score ?? blendScore(m.score, metaItem.score, args.model);
-        return {
-          ...m,
-          score: finalScore,
-          metaSrcScore: metaItem.score,
-          modelScore: m.score,
-          weights: { model: Number(wModel.toFixed(2)), metasrc: Number(wMeta.toFixed(2)) },
-          allies: m.allies?.length ? m.allies : metaItem.allies,
-          enemies: m.enemies?.length ? m.enemies : metaItem.enemies,
-        };
-      });
-
-      blended.sort((a, b) => b.score - a.score);
-      return args.limit ? blended.slice(0, args.limit) : blended;
-    }
-    return hasModel ? recommend(args) : (root.Recommend ? root.Recommend.recommend(legacy(args)) : []);
+    const sourceStats = metaFallbackStats(args.stats);
+    if (!has(args.model)) return sourceStats && root.Recommend
+      ? root.Recommend.recommend({ ...args, stats: sourceStats, allies: (args.allies || []).map((pick) => asPick(pick).championId) })
+      : [];
+    const modelRows = recommend(args);
+    if (!sourceStats || !root.Recommend) return modelRows;
+    const metaRows = root.Recommend.recommend({ ...args, stats: sourceStats, allies: (args.allies || []).map((pick) => asPick(pick).championId) });
+    const metaByKey = new Map(metaRows.map((row) => [`${row.championId}:${row.role}`, row]));
+    return modelRows.map((row) => withMetaFallback(row, metaByKey.get(`${row.championId}:${row.role}`), args.model, args))
+      .sort((a, b) => b.score - a.score || b.logit - a.logit)
+      .slice(0, args.limit || modelRows.length);
   }
 
   /**

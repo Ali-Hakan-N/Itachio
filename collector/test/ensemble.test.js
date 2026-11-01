@@ -68,7 +68,7 @@ test('ensemble weight favors MetaSrc only when it significantly improves future 
   assert.equal(selection.metaCalibration.weights.length, 4);
 });
 
-test('ensemble weight stays at 50% when the model wins the holdout comparison', () => {
+test('ensemble weight may exceed 50% when the model wins the holdout comparison', () => {
   const observations = Array.from({ length: 1000 }, (_, i) => {
     const outcomeSignal = Math.sin(i * 1.71);
     const win = outcomeSignal > 0;
@@ -81,8 +81,9 @@ test('ensemble weight stays at 50% when the model wins the holdout comparison', 
   });
   const selection = selectModelWeight(observations);
 
-  assert.equal(selection.supported, false);
-  assert.equal(selection.modelWeight, 0.5);
+  assert.equal(selection.supported, true);
+  assert.ok(selection.modelWeight > 0.5 && selection.modelWeight <= 0.8);
+  assert.ok(selection.candidateLogloss < selection.baselineLogloss);
 });
 
 test('out-of-time observations require both snapshots to predate the match', () => {

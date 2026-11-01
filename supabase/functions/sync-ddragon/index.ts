@@ -60,10 +60,18 @@ Deno.serve(async (req) => {
     const { error: e1 } = await supabase.from("champions").upsert(rows, { onConflict: "id" });
     if (e1) throw e1;
 
-    const { error: e2 } = await supabase
+    const { data: currentPatch, error: patchReadError } = await supabase
       .from("app_meta")
-      .upsert({ key: "current_patch", value: patch, updated_at: now }, { onConflict: "key" });
-    if (e2) throw e2;
+      .select("value")
+      .eq("key", "current_patch")
+      .maybeSingle();
+    if (patchReadError) throw patchReadError;
+    if (currentPatch?.value !== patch) {
+      const { error: e2 } = await supabase
+        .from("app_meta")
+        .upsert({ key: "current_patch", value: patch, updated_at: now }, { onConflict: "key" });
+      if (e2) throw e2;
+    }
 
     return json({ ok: true, patch, champions: rows.length });
   } catch (err) {

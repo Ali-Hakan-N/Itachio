@@ -191,7 +191,10 @@ function decideScreen() {
 
 let appVersion = '';
 function renderVersion() {
-  document.getElementById('ver').textContent = appVersion ? `v${appVersion}` : '';
+  for (const id of ['ver', 'railver']) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = appVersion ? `v${appVersion}` : '';
+  }
 }
 
 api.onState((partial) => {
@@ -219,7 +222,9 @@ $tabs.addEventListener('click', (e) => {
 
 // ---------- rendering ----------
 function render() {
+  document.body.dataset.screen = screen;
   $tabs.hidden = screen !== 'main';
+  document.getElementById('page-head').hidden = screen !== 'main';
   renderStatus();
   if (screen === 'loading') $view.innerHTML = `<div class="empty-state"><p>Loading…</p></div>`;
   if (screen === 'config') renderConfig();
@@ -230,6 +235,9 @@ function render() {
 }
 
 function renderStatus() {
+  const warning = document.getElementById('metasrc-warning');
+  warning.hidden = screen !== 'main' || !S?.metaSrcHealth?.stale;
+  warning.textContent = 'MetaSRC snapshot data has not refreshed in 72 hours';
   const l = S?.lcu;
   if (!l) return ($status.innerHTML = '');
   const acct = l.summoner?.riotId ? ` · ${esc(l.summoner.riotId)}` : '';
@@ -362,6 +370,23 @@ async function signOut() {
 }
 
 function renderMain() {
+  const pages = {
+    draft: ['LIVE DRAFT', 'Draft Assistant'],
+    champions: ['PLAYER ANALYTICS', 'Champions'],
+    team: ['ROSTER', S.team?.name || 'Team'],
+    history: ['MATCH ARCHIVE', 'History'],
+  };
+  const [kicker, title] = pages[tab] || pages.draft;
+  document.getElementById('page-kicker').textContent = kicker;
+  document.getElementById('page-title').textContent = title;
+  for (const button of $tabs.querySelectorAll('[data-tab]')) {
+    const active = button.dataset.tab === tab;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  const user = document.getElementById('rail-player');
+  user.innerHTML = `<span class="rail-avatar">${esc((S.me?.nickname || '?').slice(0, 1).toUpperCase())}</span><span><b>${esc(S.me?.nickname || 'Player')}</b><small>${esc(S.me?.riot_id || 'Account')}</small></span>`;
   if (tab !== 'champions') {
     lineupPickerCleanup?.();
     lineupPickerCleanup = null;
@@ -434,11 +459,53 @@ function recRow(r, i, { canHover, hoverId, rank }) {
       <span class="info">
         <span class="name">${esc(champName(r.championId))}
           <span class="tier t-${tier}">${tier}</span>
+          ${Number.isFinite(r.blindSpread) ? `<span class="badge" title="Standard deviation of odds-ratio-adjusted lane matchups after subtracting estimated sampling noise.">Spread ${(r.blindSpread * 100).toFixed(1)}pp</span>` : ''}
+          ${Number.isFinite(r.counterChance) ? `<span class="badge ${r.counterChance >= 0.5 ? 'warn' : 'good'}" title="Chance an average 7-champion pool for this role contains a matchup at least 2 percentage points worse than expected, weighted by current pick rates.">Pool counter ${Math.round(r.counterChance * 100)}%</span>` : ''}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
       </span>
       <span class="score"><b class="sc sc-${tierOf(r.score)}">${r.score}</b><i class="bar-${tierOf(r.score)}" data-w="${r.score}"></i></span>
     </button>`;
+}
+
+function modelExplanation(row) {
+  if (!row) return '';
+  const signed = (value) => `${value > 0 ? '+' : ''}${value}`;
+  const factors = [
+    ['Champion strength', row.base - 50],
+    ['Team synergy', row.synergy || 0],
+    ['Matchups', row.matchup || 0],
+    ['Composition', row.composition || 0],
+    ['Lane adjustment', row.lane || 0],
+    ['Personal fit', row.personal || 0],
+  ];
+  const factorRows = factors.map(([label, value]) => {
+    const direction = value > 0 ? 'up' : value < 0 ? 'down' : 'flat';
+    const width = Math.min(100, Math.abs(value) * 4);
+    return `<div class="explain-factor ${direction}">
+      <span>${label}</span><div class="factor-track"><i data-w="${width}"></i></div><b>${signed(value)}</b>
+    </div>`;
+  }).join('');
+  const signals = (items, type) => items?.length
+    ? items.slice(0, 4).map((item) => {
+        const favorable = item.value > 0;
+        const lane = type === 'matchup' && item.lane > 0 ? `<small>Lane likelihood ${Math.round(item.lane * 100)}%</small>` : '';
+        return `<li>${champImg(item.championId, 's')}<span>${esc(champName(item.championId))}${lane}</span><b class="${favorable ? 'up' : 'down'}" title="Learned pair weight, not win-rate points">${favorable ? 'Helps' : 'Hurts'}</b></li>`;
+      }).join('')
+    : '<li class="signal-empty">No material pair signal</li>';
+  const risk = row.counterRisk > 0 ? `<span class="explain-risk">Enemy answer exposure <b>−${row.counterRisk}</b></span>` : '';
+  const blind = Number.isFinite(row.blindSpread) && Number.isFinite(row.counterChance)
+    ? `<div class="blind-summary"><span>Blind spread <b>${(row.blindSpread * 100).toFixed(1)}pp</b></span><span>7-pick pool counter <b>${Math.round(row.counterChance * 100)}%</b></span></div>`
+    : '';
+  return `<section class="explanation" aria-label="Model breakdown for ${esc(champName(row.championId))}">
+    <div class="explanation-head"><div><span class="page-kicker">MODEL BREAKDOWN</span><h3>${esc(champName(row.championId))}</h3></div><strong>${row.score}<small>/100</small></strong></div>
+    <div class="explain-factors">${factorRows}</div>
+    <div class="pair-signals">
+      <div><h4>Team synergy</h4><ul>${signals(row.allies, 'synergy')}</ul></div>
+      <div><h4>Enemy matchups</h4><ul>${signals(row.enemies, 'matchup')}</ul></div>
+    </div>
+    ${risk || blind ? `<div class="explain-foot">${risk}${blind}</div>` : ''}
+  </section>`;
 }
 
 // A ban suggestion: score 0-100 for how much banning it helps (see model.js)
@@ -886,6 +953,26 @@ function renderDraft() {
     }
   }
 
+  const explanationId = local?.locked ? local.championId : local?.hoverId || recs[0]?.championId;
+  const explanation = explanationId ? Engine.evaluate({
+    stats: S.stats, model: S.model, championId: explanationId, role,
+    ...draftContext(d, local?.cellId), lookAhead: !local?.locked, unavailable: blocked,
+    personal: personalOf(S.me?.id, d),
+  }) : null;
+  const explanationBlock = modelExplanation(explanation);
+  const recommendationList = recs.length
+    ? `<div class="recs">${recRow(recs[0], 0, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })}</div>${explanationBlock}${recs.length > 1
+        ? `<div class="recs recs-rest">${recs.slice(1).map((r, i) => recRow(r, i + 1, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>`
+        : ''}${hoverRow}`
+    : '';
+  const recommendationContent = local?.locked
+    ? pickRow + explanationBlock + buildBlock
+    : recs.length
+      ? recommendationList
+      : `<p class="note">${hasStats
+          ? 'No pickable champions left for this role.'
+          : 'No meta data yet. Recommendations appear here after the collector runs.'}</p>`;
+
   $view.innerHTML = `
     <div class="board">
       ${allyCol}
@@ -904,11 +991,7 @@ function renderDraft() {
             <span>${local?.locked ? `Your Pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</span>
             ${!local?.locked && d.myPickActionId && recs.length ? '<span class="hint">Click to hover in the client</span>' : ''}
           </h3>
-          ${local?.locked ? pickRow + buildBlock : recs.length
-            ? `<div class="recs">${recs.map((r, i) => recRow(r, i, { canHover: !!d.myPickActionId, hoverId: local?.hoverId })).join('')}</div>${hoverRow}`
-            : `<p class="note">${hasStats
-                ? 'No pickable champions left for this role.'
-                : 'No meta data yet. Recommendations appear here after the collector runs.'}</p>`}
+          ${recommendationContent}
         </div>
       </section>
       ${enemyCol}

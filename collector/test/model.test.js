@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { toCompact, roleShares, features } = require('../src/model/features');
 const { train, design } = require('../src/model/train');
-const { exportModel, resolveTrainMatchLimit } = require('../src/model');
+const { analyzeBlindability, adjustedMatchupResidual, exportModel, resolveTrainMatchLimit } = require('../src/model');
 
 const ctx = { share: new Map(), tagOf: (id) => (id % 2 ? 'Mage' : 'Tank') };
 
@@ -92,6 +92,35 @@ test('role shares come from the matches', () => {
   assert.equal(share.get('3:2'), 1);
 });
 
+test('counter adjustment compares a matchup with the odds-ratio expectation', () => {
+  const expected = (0.509 / 0.491) / (0.509 / 0.491 + 0.455 / 0.545);
+  assert.ok(Math.abs(adjustedMatchupResidual(0.515, 0.509, 0.455) - (0.515 - expected)) < 1e-12);
+  assert.ok(adjustedMatchupResidual(0.515, 0.509, 0.455) < -0.03);
+});
+
+test('blindability subtracts matchup sampling noise and weights counter chance by pick rate', () => {
+  const matches = [];
+  const addPair = (blue, red, blueWins, games) => {
+    for (let i = 0; i < games; i++) {
+      matches.push({
+        w: Number(i < blueWins),
+        b: [blue, 10, 11, 12, 13],
+        r: [red, 20, 21, 22, 23],
+      });
+    }
+  };
+  addPair(1, 2, 450, 1000);
+  addPair(1, 3, 550, 1000);
+  addPair(2, 3, 450, 1000);
+
+  const row = analyzeBlindability(matches).byKey['1:0'];
+  assert.equal(row.counterRate, 0.5);
+  assert.equal(row.counterChance, 0.99219);
+  assert.ok(row.spread > 0.04 && row.spread < row.observedSpread);
+  assert.ok(row.noiseVariance > 0);
+  assert.equal(row.matchups, 2000);
+});
+
 // Synthetic matches: champion 1 top is strong; optionally 2 mid + 3 jungle on the same
 // team win more, and 4 bot beats 5 bot.
 function synthetic(n, { pairs = true, seed = 7 } = {}) {
@@ -143,9 +172,10 @@ test('training proves the planted strength, synergy and matchup', () => {
   assert.ok(model.keys.every((k, i) => !k.startsWith('o:') || model.w[i] <= 0), 'off-role weights must not be positive');
   assert.ok(model.se[model.keys.indexOf('c:1:0')] > 0, 'standard error computed');
 
-  const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length });
+  const data = exportModel(model, { share, games, tags: new Map(), patch: 'T', matches: matches.length, matchRows: matches });
   assert.ok(data.champ['1:0'][0] > 0.3 && data.champ['1:0'][3] > 0);
   assert.ok(data.vs.some(([a, ra, b, rb, wt]) => a === 4 && ra === 3 && b === 5 && rb === 3 && wt > 0.3));
+  assert.ok(data.blindability.byKey['1:0']);
   assert.deepEqual(Object.keys(data.pillars).sort(), ['adIntoFrontline', 'control', 'damageImbalance', 'frontline', 'frontlineMarksman', 'highDamageLowControl']);
 });
 

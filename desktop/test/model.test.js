@@ -104,11 +104,12 @@ test('the scale is fixed: a champion scores the same no matter what else is list
   assert.ok(a < 100);
 });
 
-test('Engine falls back to the older scoring without a model', () => {
+test('MetaSRC provides a cold-start draft fallback until the trained model is loaded', () => {
   const stats = { meta: [{ champion_id: 9, role: 'top', score: 61 }], synergy: [], matchup: [] };
   const r = Engine.recommend({ stats, model: null, role: 'top', allies: [{ championId: 4, position: 'bottom' }] });
   assert.equal(r[0].championId, 9);
   assert.equal(r[0].score, 61);
+  assert.equal(Engine.evaluate({ stats, model: null, championId: 9, role: 'top' }).score, 61);
 });
 
 test('latent pairs add synergy and antisymmetric matchups', () => {
@@ -218,6 +219,23 @@ test('look ahead: easy-to-counter picks score lower while the enemy can still an
   const ev = evaluate({ model: m, championId: 30, role: 'top', lookAhead: true });
   assert.equal(ev.score, a.score);
   assert.equal(evaluate({ model: m, championId: 30, role: 'top' }).counterRisk, undefined);
+});
+
+test('recommendations expose collector-computed, noise-corrected blindability metrics', () => {
+  const m = {
+    ...model,
+    matches: 1000,
+    champ: { ...model.champ, '30:0': [0.1, 500, 1] },
+    blindability: {
+      byKey: {
+        '30:0': { spread: 0.013, counterRate: 0.014, counterChance: 0.094 },
+      },
+    },
+  };
+  const row = recommend({ model: m, role: 'top' }).find((x) => x.championId === 30);
+  assert.equal(row.blindSpread, 0.013);
+  assert.equal(row.counterRate, 0.014);
+  assert.equal(row.counterChance, 0.094);
 });
 
 test('personal layer: the player\'s own results on a champion move its score', () => {
@@ -386,7 +404,7 @@ test('personal layer for a draft: season and patch always, team only with the sa
   assert.equal(personalFor(stats, 'z'), null);
 });
 
-test('hybrid ensemble blends model score and external stats layer with confidence weighting', () => {
+test('draft predictions retain MetaSRC as a confidence-weighted cold-start prior', () => {
   const stats = {
     meta: [
       { champion_id: 1, role: 'top', score: 80, source: 'metasrc' },
@@ -396,18 +414,16 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
     matchup: [],
   };
 
-  // 1. Fully proven model (high matches, proven syn & vs): caps at 50% model, 50% MetaSRC
-  const provenModel = {
-    ...model,
-    matches: 25000,
-    syn: Array(300).fill([1, 0, 2, 0, 0.1]),
-    vs: Array(300).fill([1, 0, 2, 0, 0.1]),
-  };
-  const evProven = Engine.evaluate({ stats, model: provenModel, championId: 1, role: 'top' });
-  assert.ok(evProven);
-  assert.equal(evProven.weights.model, 0.5);
-  assert.equal(evProven.weights.metasrc, 0.5);
-  assert.equal(evProven.score, Math.round(0.5 * evProven.modelScore + 0.5 * evProven.metaSrcScore));
+  const expected = evaluate({ model, championId: 1, role: 'top' });
+  const actual = Engine.evaluate({ stats, model, championId: 1, role: 'top' });
+  assert.ok(actual.weights.metasrc > 0.5);
+  assert.ok(actual.weights.model < 0.5);
+  assert.equal(actual.score, Math.round(actual.weights.model * expected.score + actual.weights.metasrc * actual.metaSrcScore));
+
+  const provenModel = { ...model, matches: 25000, syn: Array(200).fill([]), vs: Array(200).fill([]) };
+  const proven = Engine.evaluate({ stats, model: provenModel, championId: 1, role: 'top' });
+  assert.equal(proven.weights.model, 0.5);
+  assert.equal(proven.weights.metasrc, 0.5);
 
   const tunedModel = {
     ...provenModel,
@@ -417,19 +433,55 @@ test('hybrid ensemble blends model score and external stats layer with confidenc
       metaCalibration: { mean: [0, 0, 0], sd: [1, 1, 1], weights: [0, 1, 0, 0] },
     },
   };
-  const baseTuned = evaluate({ model: tunedModel, championId: 1, role: 'top' });
-  const evTuned = Engine.evaluate({ stats, model: tunedModel, championId: 1, role: 'top' });
-  assert.equal(evTuned.weights.model, 0.25);
-  assert.equal(evTuned.weights.metasrc, 0.75);
-  assert.equal(evTuned.score, Math.round(100 / (1 + Math.exp(-(0.25 * baseTuned.logit + 0.75)))));
+  const base = evaluate({ model: tunedModel, championId: 1, role: 'top' });
+  const tuned = Engine.evaluate({ stats, model: tunedModel, championId: 1, role: 'top' });
+  assert.equal(tuned.weights.model, 0.25);
+  assert.equal(tuned.weights.metasrc, 0.75);
+  assert.equal(tuned.score, Math.round(100 / (1 + Math.exp(-(0.25 * base.logit + 0.75)))));
+});
 
-  // 2. Young model without proven syn/vs: model weight is lower, MetaSRC carries the weight
-  const youngModel = { ...model, matches: 2000, syn: [], vs: [] };
-  const evYoung = Engine.evaluate({ stats, model: youngModel, championId: 1, role: 'top' });
-  assert.ok(evYoung);
-  assert.ok(evYoung.weights.model < 0.2);
-  assert.ok(evYoung.weights.metasrc > 0.8);
-  assert.equal(evYoung.score, Math.round(evYoung.weights.model * evYoung.modelScore + evYoung.weights.metasrc * evYoung.metaSrcScore));
+test('adaptive draft weights favor MetaSRC early and increase model share with current-patch matches', () => {
+  const stats = {
+    meta: [{ champion_id: 1, role: 'top', score: 80, source: 'metasrc' }],
+    synergy: [],
+    matchup: [],
+  };
+  const confident = { ...model, matches: 25000, syn: Array(200).fill([]), vs: Array(200).fill([]) };
+  const fresh = Engine.evaluate({
+    stats,
+    model: { ...confident, patchMatches: 10000, patchStartedAt: new Date().toISOString() },
+    championId: 1,
+    role: 'top',
+  });
+  const grown = Engine.evaluate({
+    stats,
+    model: { ...confident, patchMatches: 5000, patchStartedAt: new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString() },
+    championId: 1,
+    role: 'top',
+  });
+  const mature = Engine.evaluate({
+    stats,
+    model: { ...confident, patchMatches: 10000, patchStartedAt: new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString() },
+    championId: 1,
+    role: 'top',
+  });
+  const validatedButUnsupported = Engine.evaluate({
+    stats,
+    model: {
+      ...confident,
+      patchMatches: 10000,
+      patchStartedAt: new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString(),
+      ensemble: { supported: false, matches: 1000, minimum: 500 },
+    },
+    championId: 1,
+    role: 'top',
+  });
+
+  assert.deepEqual(fresh.weights, { model: 0.2, metasrc: 0.8 });
+  assert.deepEqual(grown.weights, { model: 0.5, metasrc: 0.5 });
+  assert.equal(mature.weights.model, 0.8);
+  assert.ok(Math.abs(mature.weights.metasrc - 0.2) < 1e-12);
+  assert.deepEqual(validatedButUnsupported.weights, { model: 0.5, metasrc: 0.5 });
 });
 
 test('pick order delays top and mid when counter risk is tied, but respects a strong counter risk', () => {

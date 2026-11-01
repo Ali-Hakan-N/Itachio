@@ -133,7 +133,114 @@ function banRates(matches) {
   return Object.fromEntries([...count].map(([c, n]) => [c, round(n / withBans.length, 4)]));
 }
 
-function exportModel(model, { share, games, tags, patch, matches, banRate = null }) {
+const BLIND_COUNTER_THRESHOLD = 0.02;
+const BLIND_POOL_SIZE = 7;
+
+const sigmoid = (x) => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, x))));
+const logit = (p) => Math.log(p / (1 - p));
+
+function posteriorRate(wins, games) {
+  const alpha = wins + 0.5;
+  const beta = games - wins + 0.5;
+  const total = alpha + beta;
+  return {
+    mean: alpha / total,
+    variance: (alpha * beta) / (total * total * (total + 1)),
+  };
+}
+
+function adjustedMatchupResidual(actual, winRate, opponentWinRate) {
+  const expected = sigmoid(logit(winRate) - logit(opponentWinRate));
+  return actual - expected;
+}
+
+function analyzeBlindability(matches, banRate = {}) {
+  const roles = Array.from({ length: ROLES.length }, () => ({ champions: new Map(), pairs: new Map(), totalPicks: 0 }));
+  const addChampion = (role, championId, won) => {
+    const stats = roles[role].champions.get(championId) || { games: 0, wins: 0 };
+    stats.games++;
+    stats.wins += won;
+    roles[role].champions.set(championId, stats);
+    roles[role].totalPicks++;
+  };
+  const addPair = (role, championId, opponentId, won) => {
+    const key = `${championId}:${opponentId}`;
+    const stats = roles[role].pairs.get(key) || { games: 0, wins: 0 };
+    stats.games++;
+    stats.wins += won;
+    roles[role].pairs.set(key, stats);
+  };
+
+  for (const match of matches || []) {
+    if (!Array.isArray(match.b) || !Array.isArray(match.r)) continue;
+    for (let role = 0; role < ROLES.length; role++) {
+      const blue = match.b[role];
+      const red = match.r[role];
+      if (!blue || !red) continue;
+      const blueWon = match.w ? 1 : 0;
+      const redWon = 1 - blueWon;
+      addChampion(role, blue, blueWon);
+      addChampion(role, red, redWon);
+      addPair(role, blue, red, blueWon);
+      addPair(role, red, blue, redWon);
+    }
+  }
+
+  const byKey = {};
+  for (let role = 0; role < roles.length; role++) {
+    const data = roles[role];
+    if (!data.totalPicks) continue;
+    const candidates = [...data.champions].map(([championId, stats]) => {
+      const pickRate = Math.min(0.9,
+        stats.games / data.totalPicks / Math.max(0.1, 1 - (banRate[championId] || 0)));
+      return { championId, stats, rate: posteriorRate(stats.wins, stats.games), pickRate };
+    });
+
+    for (const candidate of candidates) {
+      const opponents = candidates.filter((opponent) => opponent.championId !== candidate.championId && opponent.pickRate > 0);
+      const pickRateTotal = opponents.reduce((sum, opponent) => sum + opponent.pickRate, 0);
+      if (!pickRateTotal) continue;
+      const comparisons = opponents.map((opponent) => {
+        const weight = opponent.pickRate / pickRateTotal;
+        const pair = data.pairs.get(`${candidate.championId}:${opponent.championId}`);
+        if (!pair) return { weight, residual: 0, errorVariance: 0, counter: false, games: 0 };
+
+        const actual = posteriorRate(pair.wins, pair.games);
+        const expected = sigmoid(logit(candidate.rate.mean) - logit(opponent.rate.mean));
+        const residual = adjustedMatchupResidual(actual.mean, candidate.rate.mean, opponent.rate.mean);
+        const slope = expected * (1 - expected);
+        const expectedVariance =
+          (slope / (candidate.rate.mean * (1 - candidate.rate.mean))) ** 2 * candidate.rate.variance
+          + (slope / (opponent.rate.mean * (1 - opponent.rate.mean))) ** 2 * opponent.rate.variance;
+
+        return {
+          weight,
+          residual,
+          errorVariance: actual.variance + expectedVariance,
+          counter: residual <= -BLIND_COUNTER_THRESHOLD,
+          games: pair.games,
+        };
+      });
+      const mean = comparisons.reduce((sum, item) => sum + item.weight * item.residual, 0);
+      const observedVariance = comparisons.reduce((sum, item) => sum + item.weight * (item.residual - mean) ** 2, 0);
+      const noiseVariance = comparisons.reduce((sum, item) => sum + item.weight * (1 - item.weight) * item.errorVariance, 0);
+      const counterRate = comparisons.reduce((sum, item) => sum + (item.counter ? item.weight : 0), 0);
+      const matchedGames = comparisons.reduce((sum, item) => sum + item.games, 0);
+      byKey[`${candidate.championId}:${role}`] = {
+        spread: round(Math.sqrt(Math.max(0, observedVariance - noiseVariance)), 5),
+        observedSpread: round(Math.sqrt(observedVariance), 5),
+        noiseVariance: round(noiseVariance, 7),
+        counterRate: round(counterRate, 5),
+        counterChance: round(1 - Math.pow(1 - counterRate, BLIND_POOL_SIZE), 5),
+        poolSize: BLIND_POOL_SIZE,
+        matchups: matchedGames,
+      };
+    }
+  }
+  return { threshold: BLIND_COUNTER_THRESHOLD, poolSize: BLIND_POOL_SIZE, byKey };
+}
+
+function exportModel(model, { share, games, tags, patch, matches, matchRows = null, banRate = null }) {
   const champ = {};
   const off = new Array(5).fill(0);
   const syn = [];
@@ -215,6 +322,7 @@ function exportModel(model, { share, games, tags, patch, matches, banRate = null
     patch,
     trainedAt: new Date().toISOString(),
     matches,
+    blindability: matchRows ? analyzeBlindability(matchRows, banRate || {}) : null,
     roles: ROLES,
     pointsPerLogit: round(pointsPerLogit, 3),
     center: round(mean, 5),
@@ -545,10 +653,12 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
   const m = model.metrics;
   const provenAt = recordProven(m);
   if (provenAt) log(`model: every layer proven; ${provenAt} matches are enough, older patches fill up to that`);
-  const [previousSnapshot, sourceSnapshots, previousObservations] = await Promise.all([
+  const [previousSnapshot, sourceSnapshots, previousObservations, currentPatchMeta] = await Promise.all([
     loadNewestModelSnapshot(client).catch((err) => (log(`model: previous snapshot unavailable (${err.message})`), null)),
     loadMetaSourceSnapshots(client, log),
     loadEnsembleObservations(client, log),
+    client.from('app_meta').select('value,updated_at').eq('key', 'current_patch').maybeSingle()
+      .then(check).catch((err) => (log(`model: patch start time unavailable (${err.message})`), null)),
   ]);
   const existingMatchIds = new Set(previousObservations.map((row) => row.matchId));
   const newObservations = makeOutOfTimeObservations(matches, {
@@ -561,7 +671,9 @@ async function trainAndPublish({ client, patch, log, waitMs = 0, ignoreBusy = fa
     .sort((a, b) => a.startedAt - b.startedAt)
     .slice(-ENSEMBLE_OBSERVATION_LIMIT);
   const ensemble = selectModelWeight(ensembleHistory);
-  const data = exportModel(model, { share, games, tags, patch, matches: matches.length, banRate: banRates(matches) });
+  const data = exportModel(model, { share, games, tags, patch, matches: matches.length, matchRows: matches, banRate: banRates(matches) });
+  data.patchMatches = byPatch[patch] || 0;
+  data.patchStartedAt = currentPatchMeta?.value === patch ? currentPatchMeta.updated_at : null;
   data.ensemble = ensemble;
   data.counterpick = counterpickTendency(data, matches);
   if (data.counterpick) {
@@ -624,4 +736,4 @@ async function republishBuilds(client, log) {
   await publishBuilds(client, matches, patch, log, snapshot?.data?.ensemble?.modelWeight ?? undefined);
 }
 
-module.exports = { banRates, publishBuilds, republishBuilds, pickTraining, storeMatches, storeStarts, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT, MAX_TRAIN_MATCHES, resolveTrainMatchLimit };
+module.exports = { analyzeBlindability, adjustedMatchupResidual, banRates, publishBuilds, republishBuilds, pickTraining, storeMatches, storeStarts, loadMatches, loadTrainingMatches, trainAndPublish, trainInWorker, exportModel, POINTS_PER_LOGIT, MAX_TRAIN_MATCHES, resolveTrainMatchLimit };

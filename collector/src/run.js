@@ -81,16 +81,17 @@ async function main() {
       log(`meta ${rows.meta.length} · synergy ${rows.synergy.length} · matchup ${rows.matchup.length}`);
       if (args.dryRun) return { written: false, note: 'dry run' };
       if (rows.meta.length < MIN_META_ROWS) {
-        // Not an error, e.g. the first day of a new patch. Current scores stay in place.
+        // Keep the last good snapshot, but record this run as unhealthy for source monitoring.
         const note = `only ${rows.meta.length} meta rows (need ${MIN_META_ROWS}); scores not updated`;
         log(note);
-        return { written: false, note };
+        return { written: false, valid: source.name !== 'metasrc', metaRows: rows.meta.length, note };
       }
       const stats = await writeRows(client, rows, { source: source.name, collectedAt });
+      let snapshotSaved = source.name !== 'metasrc';
       if (source.name === 'metasrc' && output.patch) {
         try {
-          await writeMetaSourceSnapshot(client, { patch: output.patch, collectedAt, rows });
-          log(`metasrc snapshot saved for patch ${output.patch}`);
+          snapshotSaved = await writeMetaSourceSnapshot(client, { patch: output.patch, collectedAt, rows });
+          if (snapshotSaved) log(`metasrc snapshot saved for patch ${output.patch}`);
         } catch (err) {
           log(`warning: MetaSrc snapshot not saved (${err.message}); apply migration 0016 to enable ensemble tuning`);
         }
@@ -106,7 +107,9 @@ async function main() {
           log(`warning: MetaSrc builds not saved (${err.message})`);
         }
       }
-      return { written: true, ...stats, problems: rows.problems.length };
+      const valid = source.name !== 'metasrc' || snapshotSaved;
+      const note = valid ? null : 'MetaSRC data rows updated, but the dated snapshot was not saved';
+      return { written: true, valid, metaRows: rows.meta.length, note, ...stats, problems: rows.problems.length };
     };
 
     log(`source: ${source.name}`);
@@ -116,8 +119,12 @@ async function main() {
       log('dry run: nothing written');
       return;
     }
-    await finishRun(client, runId, { status: 'ok', stats: { ...result, source: output.stats || null } });
-    log('done');
+    await finishRun(client, runId, {
+      status: result.valid === false ? 'error' : 'ok',
+      error: result.valid === false ? result.note : null,
+      stats: { ...result, source: output.stats || null },
+    });
+    log(result.valid === false ? 'completed with source warning' : 'done');
   } catch (err) {
     if (runId) await finishRun(client, runId, { status: 'error', error: String(err.message || err) }).catch(() => {});
     throw err;

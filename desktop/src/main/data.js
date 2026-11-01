@@ -39,6 +39,17 @@ function check({ data, error }) {
   return data;
 }
 
+const METASRC_STALE_MS = 72 * 60 * 60 * 1000;
+function metaSrcHealth(runs, now = Date.now()) {
+  const lastGood = (runs || []).find((run) => {
+    const rows = Number(run.stats?.meta?.written ?? run.stats?.metaRows);
+    return run.status === 'ok' && run.stats?.written !== false && rows > 0;
+  });
+  const lastSuccessAt = lastGood?.finished_at || lastGood?.started_at || null;
+  const timestamp = lastSuccessAt ? Date.parse(lastSuccessAt) : NaN;
+  return { stale: !Number.isFinite(timestamp) || now - timestamp >= METASRC_STALE_MS, lastSuccessAt };
+}
+
 class DataStore {
   constructor({ url, key, storageFile, client }) {
     this.client = client || createClient(url, key, {
@@ -181,6 +192,12 @@ class DataStore {
     const champions = check(await this.client.from('champions').select('id,slug,name,title,tags,image').order('name'));
     return { patch: meta?.value || null, champions };
   }
+  // Source freshness from collector_runs; the desktop never connects to the scraper.
+  async loadMetaSrcHealth() {
+    const runs = check(await this.client.from('collector_runs').select('status,stats,started_at,finished_at')
+      .eq('source', 'metasrc').order('started_at', { ascending: false }).limit(30));
+    return metaSrcHealth(runs);
+  }
   // Recommendation engine data. Supabase returns at most 1000 rows per request, so it is paged.
   async loadStats() {
     // Ordered by the full primary key so pages do not shift
@@ -248,10 +265,19 @@ class DataStore {
 
   // Newest learned win model (collector/src/model), one JSON document, tagged with its snapshot id
   async loadModel() {
-    const row = check(
-      await this.client.from('model_snapshots').select('id,data').order('id', { ascending: false }).limit(1).maybeSingle(),
-    );
-    return row?.data ? { ...row.data, snapshotId: row.id } : null;
+    const [row, currentPatch] = await Promise.all([
+      this.client.from('model_snapshots').select('id,data').order('id', { ascending: false }).limit(1).maybeSingle().then(check),
+      this.client.from('app_meta').select('value,updated_at').eq('key', 'current_patch').maybeSingle().then(check).catch(() => null),
+    ]);
+    if (!row?.data) return null;
+    const samePatch = !currentPatch?.value || currentPatch.value === row.data.patch;
+    return {
+      ...row.data,
+      snapshotId: row.id,
+      activePatch: currentPatch?.value || row.data.patch,
+      patchMatches: samePatch ? Number(row.data.patchMatches) || 0 : 0,
+      patchStartedAt: currentPatch?.updated_at || row.data.patchStartedAt || null,
+    };
   }
   // Id of the newest model, a cheap check before downloading it
   async latestModelId() {
@@ -345,4 +371,4 @@ class DataStore {
   }
 }
 
-module.exports = { DataStore };
+module.exports = { DataStore, metaSrcHealth };

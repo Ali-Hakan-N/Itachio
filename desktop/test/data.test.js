@@ -1,10 +1,48 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { DataStore } = require('../src/main/data');
+const { DataStore, metaSrcHealth } = require('../src/main/data');
 
 function storeWith(auth) {
   return new DataStore({ client: { auth } });
 }
+
+test('MetaSRC health becomes stale after three days without a valid non-empty run', () => {
+  const now = Date.parse('2026-11-01T12:00:00.000Z');
+  const runs = [
+    { status: 'error', started_at: '2026-11-01T04:00:00.000Z', stats: { metaRows: 0 } },
+    { status: 'ok', finished_at: '2026-10-28T11:59:59.000Z', stats: { meta: { written: 420 } } },
+  ];
+
+  assert.deepEqual(metaSrcHealth(runs, now), { stale: true, lastSuccessAt: '2026-10-28T11:59:59.000Z' });
+  assert.deepEqual(metaSrcHealth([{ status: 'ok', finished_at: '2026-11-01T04:00:00.000Z', stats: { meta: { written: 420 } } }], now), {
+    stale: false,
+    lastSuccessAt: '2026-11-01T04:00:00.000Z',
+  });
+});
+
+test('a previous-patch model starts with zero active-patch matches and the new patch clock', async () => {
+  const model = { patch: '16.20', patchMatches: 12000 };
+  const client = {
+    from: (table) => {
+      const query = {
+        select: () => query,
+        order: () => query,
+        limit: () => query,
+        eq: () => query,
+        maybeSingle: async () => table === 'model_snapshots'
+          ? { data: { id: 8, data: model }, error: null }
+          : { data: { value: '16.21', updated_at: '2026-11-01T00:00:00.000Z' }, error: null },
+      };
+      return query;
+    },
+  };
+  const loaded = await new DataStore({ client }).loadModel();
+
+  assert.equal(loaded.patch, '16.20');
+  assert.equal(loaded.activePatch, '16.21');
+  assert.equal(loaded.patchMatches, 0);
+  assert.equal(loaded.patchStartedAt, '2026-11-01T00:00:00.000Z');
+});
 
 test('password reset email uses the app recovery callback', async () => {
   let call;
