@@ -6,6 +6,7 @@ const { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, win
 // Roles: 0 top, 1 jungle, 2 middle, 3 bottom, 4 utility
 // 1 strong top, 2 average top, 3 mid that is rarely played top, 4 bot, 5 support, 6 enemy mid
 const model = {
+  heuristics: false, // fixture ids are not real champions
   pointsPerLogit: 150,
   center: 0,
   shareFloor: 0.002,

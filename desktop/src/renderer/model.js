@@ -87,6 +87,7 @@
 // module.exports in Node (tests).
 
 (function (root) {
+  const Traits = root.Traits || (typeof require === 'function' ? require('./traits') : null);
   const ROLES = ['top', 'jungle', 'middle', 'bottom', 'utility'];
   const ROLE_INDEX = Object.fromEntries(ROLES.map((r, i) => [r, i]));
   const OFF_ROLE_SHARE = 0.05; // below this share a pick is marked off-role
@@ -155,6 +156,7 @@
       ts: classPair(model.ts, false),
       tv: classPair(model.tv, true),
       tags: new Map(Object.entries(model.tags || {}).map(([id, t]) => [Number(id), t])),
+      heuristics: model.heuristics,
       blindability: new Map(Object.entries(model.blindability?.byKey || {})),
       off: model.off || [0, 0, 0, 0, 0],
       floor: model.shareFloor || 0.002,
@@ -348,7 +350,27 @@
   function synergy(ix, a, ra, b, rb) {
     const explicit = ix.syn.get(`${a}:${ra}:${b}:${rb}`);
     const latent = ix.fm ? dot(ix.fm.S.get(`${a}:${ra}`), ix.fm.S.get(`${b}:${rb}`)) : 0;
-    return (explicit ? explicit.w : 0) + latent + (ix.ts.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0);
+    return (explicit ? explicit.w : 0) + latent + (ix.ts.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0) + pairPrior(ix, a, b);
+  }
+
+  // Hand-made duo prior (curated pairs and trait fits, traits.js): results are too noisy to
+  // teach most duos, so this keeps the known ones in the suggestions
+  function pairPrior(ix, a, b) {
+    if (!Traits || ix.heuristics === false) return 0;
+    const key = a < b ? a * 4096 + b : b * 4096 + a;
+    ix.pairPriors ||= new Map();
+    let v = ix.pairPriors.get(key);
+    if (v === undefined) {
+      v = ix.sd * Traits.pairBonus(a, ix.tags.get(a), b, ix.tags.get(b));
+      ix.pairPriors.set(key, v);
+    }
+    return v;
+  }
+
+  // Composition rules of a team (damage split, frontline, CC, engage, one plan), as a loss in logit
+  function teamFit(ix, ids) {
+    if (!Traits || ix.heuristics === false) return { penalty: 0, lacking: [] };
+    return Traits.teamFit(ids.map((id) => ({ id, tag: ix.tags.get(id) })));
   }
 
   // Style of a team: the sum of its champions' style numbers, plus an expected future part
@@ -493,7 +515,8 @@
       });
     }
 
-    const comp = (ix.comp
+    const ourIds = [...allies.map((p) => asPick(p).championId).filter((id) => id && id !== championId), championId];
+    const comp = -ix.sd * teamFit(ix, ourIds).penalty + (ix.comp
       ? compValue(
           ix,
           championId,
@@ -761,14 +784,13 @@
     const priority = (pick) => {
       const role = ROLE_INDEX[pick.p.position];
       const matchup = Math.min(8, Math.max(0, pick.matchup || 0));
-      const targetProbability = role === ROLE_INDEX.jungle
-        ? Math.min(1, enemyPicks.length / 3)
-        : role === ROLE_INDEX.bottom || role === ROLE_INDEX.utility
-          ? Math.min(1, [...botRoles].reduce((sum, targetRole) => sum + roleProbability(targetRole), 0))
-          : roleProbability(role);
+      const targetProbability = role === ROLE_INDEX.bottom || role === ROLE_INDEX.utility
+        ? Math.min(1, [...botRoles].reduce((sum, targetRole) => sum + roleProbability(targetRole), 0))
+        : roleProbability(role);
+      // The opposing champion is on the board: we pick right after it, to counter it
       const counterBonus = targetProbability * (role === ROLE_INDEX.jungle
-        ? 4 + Math.min(6, matchup)
-        : 12 + matchup);
+        ? 22 + Math.min(6, matchup)
+        : 30 + matchup);
       const personalProtection = Math.min(4, Math.max(0, (pick.personal || 0) * 0.5));
       return (pick.risk ?? 0) + (roleBias[pick.p.position] ?? 0) + personalProtection + poolShift(pick) - counterBonus;
     };
@@ -900,7 +922,8 @@
     const b = side(them);
     let matchups = 0;
     for (const x of us) for (const y of them) matchups += matchup(ix, x.c, x.r, y.c, y.r);
-    let composition = a.composition - b.composition + pillarValue(ix, us.map((p) => p.c), them.map((p) => p.c));
+    let composition = a.composition - b.composition + pillarValue(ix, us.map((p) => p.c), them.map((p) => p.c))
+      + ix.sd * (teamFit(ix, them.map((p) => p.c)).penalty - teamFit(ix, us.map((p) => p.c)).penalty);
     if (ix.comp) {
       const A = styleOf(ix, us.map((p) => p.c));
       const B = styleOf(ix, them.map((p) => p.c));
