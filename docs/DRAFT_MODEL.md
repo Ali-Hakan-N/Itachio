@@ -205,7 +205,7 @@ Bunlar ayrı kavramlardır; UI/model alanları da ayrı kalmalıdır.
 
 - Ban değeri, rakibin açık role’lerinde champion pick olasılığı × rakibin locked ally’lerine karşı logit avantajı toplamıdır. Ban rate pick paydasına uygulanır. Bir teammate champion göstermediyse, bu patch’te kendi rolünde en çok oynadığı champion ban hesabında niyet prior’ı olur.
 - Pick order counter-risk’i, lane görünürlüğünü, jungle/bot gereksinimini ve solo lane’in kişisel havuz derinliğini kullanır. Öneri 1.5 saniye sabit kalmadan uygulanmaz; küçük farklar hysteresis ile tutulur; eşzamanlı ally pick’leri arasında trade gösterilmez.
-- Game Plan full draft için champion strength/off-role, synergy, matchup ve composition parçalarını; early/later edge, five lane matchup ve objective avantajını aynı logit modelinden türetir. Advice metni bu sayıları kullandığından panel ile çelişmemelidir.
+- Game Plan full draft için champion strength/off-role, synergy, matchup ve composition parçalarını; early/later edge, five lane matchup ve objective avantajını aynı logit modelinden türetir. Panel strateji tavsiyesi metni yerine kazanma şansı, istatistikler ve görsel göstergeleri sunar.
 
 UI akışı [desktop/src/renderer/app.js](../desktop/src/renderer/app.js) ve [desktop/src/renderer/champselect.js](../desktop/src/main/champselect.js) tarafında; client’a sadece kullanıcı tıklaması/ayar açık olduğunda hover veya rune/build apply gider, Itachio lock-in yapmaz.
 

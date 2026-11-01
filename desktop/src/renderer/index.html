@@ -11,46 +11,41 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&display=swap"
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="Main navigation">
-        <div class="rail-brand"><img class="seal" src="logo.png" alt="" aria-hidden="true" /><span>Itachio</span><small class="ver" id="railver"></small></div>
-        <div class="nav-caption">WORKSPACE</div>
-        <nav class="tabs" id="tabs" aria-label="Workspace sections" hidden>
-          <button data-tab="draft" class="active"><span class="nav-mark live-mark"></span>Draft</button>
-          <button data-tab="champions"><span class="nav-mark champion-mark"></span>Champions</button>
-          <button data-tab="team"><span class="nav-mark team-mark"></span>Team</button>
-          <button data-tab="history"><span class="nav-mark history-mark"></span>History</button>
-        </nav>
-        <div class="rail-spacer"></div>
-        <div class="rail-player" id="rail-player"></div>
-        <button class="rail-settings" id="optbtn" title="Options">
-          <span class="settings-mark" aria-hidden="true">⚙</span><span>Options</span>
+    <header class="topbar">
+      <div class="brand"><img class="seal" src="logo.png" alt="" aria-hidden="true" />Itachio<small class="ver" id="ver"></small></div>
+      <nav class="tabs" id="tabs" aria-label="Workspace sections" hidden>
+        <button data-tab="draft" class="active">Draft</button>
+        <button data-tab="champions">Champions</button>
+        <button data-tab="team">Team</button>
+        <button data-tab="history">History</button>
+      </nav>
+      <div class="page-head" id="page-head" hidden>
+        <span class="page-kicker" id="page-kicker"></span>
+        <h1 id="page-title"></h1>
+      </div>
+      <div class="top-right">
+        <div class="source-warning" id="metasrc-warning" role="status" hidden></div>
+        <div class="status" id="status"></div>
+        <button class="update-btn" id="upbtn" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V2.25A.75.75 0 0 1 8 1.5ZM2.75 12.5a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75Z"/></svg>
+          Update
         </button>
-      </aside>
-      <section class="workspace">
-        <header class="topbar">
-          <div class="brand auth-brand"><img class="seal" src="logo.png" alt="" aria-hidden="true" />Itachio<small class="ver" id="ver"></small></div>
-          <div class="page-head" id="page-head" hidden>
-            <span class="page-kicker" id="page-kicker"></span>
-            <h1 id="page-title"></h1>
-          </div>
-          <div class="top-right">
-            <div class="source-warning" id="metasrc-warning" role="status" hidden></div>
-            <div class="status" id="status"></div>
-            <button class="update-btn" id="upbtn" hidden>
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a.75.75 0 0 1 .75.75v6.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V2.25A.75.75 0 0 1 8 1.5ZM2.75 12.5a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75Z"/></svg>
-              Update
-            </button>
-          </div>
-        </header>
-        <main id="view"></main>
-      </section>
-    </div>
+        <button class="opt-btn" id="optbtn" title="Options" aria-label="Options">
+          <svg viewBox="-12 -12 24 24" aria-hidden="true">
+            <defs><path id="tomoe" d="M0-8.2A8.2 8.2 0 0 1 7.9-2.2Q4.4-2.6 0-2.4A2.9 2.9 0 0 1 0-8.2z"/></defs>
+            <circle r="11" class="tomoe-ring"/>
+            <use href="#tomoe"/><use href="#tomoe" transform="rotate(120)"/><use href="#tomoe" transform="rotate(240)"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+    <div id="rail-player" hidden></div>
+    <main id="view"></main>
     <div id="update" aria-live="polite"></div>
     <div id="modal"></div>
     <div class="toasts" id="toasts" aria-live="polite"></div>

@@ -644,50 +644,6 @@ const PLAN_PARTS = [
   ['composition', 'Composition', 'Team styles and how they meet'],
 ];
 
-function planAdvice(plan) {
-  const E = plan.edge;
-  const s = (v) => (v >= E ? 1 : v <= -E ? -1 : 0);
-  const early = signedPct(plan.early);
-  const later = signedPct(plan.later);
-  const timing = {
-    '1:1': `Ahead early (${early}) and later (${later}): press every lead, the draft does not fall off.`,
-    '1:0': `Your edge is early (${early}): force fights and objectives before 20 minutes; after that the draft is even.`,
-    '1:-1': `Front-loaded: ahead early (${early}), the enemy draft is better later (${later}). Turn lane leads into towers and dragons and close the game before it scales.`,
-    '0:1': `Your edge comes later (${later}): an even early game is enough, so skip risky early fights.`,
-    '-1:1': `Back-loaded: behind early (${early}), ahead later (${later}). Give up contested early objectives, farm safely and fight once your items are in.`,
-    '-1:0': `The enemy is stronger early (${early}): play safe and trade objectives until laning is over; later the draft is even.`,
-    '0:-1': `Even early, the enemy draft is better later (${later}): take what the early game gives and end before it scales.`,
-    '-1:-1': `The enemy draft is ahead early (${early}) and later (${later}): play for picks and their mistakes, avoid even fights.`,
-    '0:0': 'Even early and later: the game comes down to how each lane plays its matchup.',
-  }[`${s(plan.early)}:${s(plan.later)}`];
-  const out = [timing];
-  const lane = (role) => plan.lanes.find((l) => l && l.role === role);
-  if (plan.focus) {
-    const l = lane(plan.focus);
-    out.push(plan.focus === 'jungle'
-      ? `Your jungle matchup is the strongest (${signedPct(l.pct)}): invade and contest the enemy jungle early.`
-      : `${ROLE_NAME[plan.focus]} is your strongest lane (${signedPct(l.pct)}): path and roam toward it early and take the objectives on its side.`);
-  }
-  if (plan.weak) {
-    const l = lane(plan.weak);
-    out.push(plan.weak === 'jungle'
-      ? `Your jungle matchup is the weakest (${signedPct(l.pct)}): avoid invades, ward your own jungle and track the enemy jungler.`
-      : `${ROLE_NAME[plan.weak]} is your weakest lane (${signedPct(l.pct)}): play it safe with vision and expect the enemy jungler there.`);
-  }
-  if (plan.objectives >= E / 2) out.push(`Your draft takes first objectives better (${signedPct(plan.objectives)}): contest the first dragon, grubs and herald.`);
-  if (plan.objectives <= -E / 2) out.push(`The enemy draft takes first objectives better (${signedPct(plan.objectives)}): trade them across the map instead of contesting with even numbers.`);
-  if (plan.damage) {
-    const [low, high] = S.damage?.thresholds || [0.4, 0.6];
-    const m = Math.round(plan.damage.theirs * 100);
-    out.push(plan.damage.theirs >= high
-      ? `Enemy damage is ${m}% magic: magic resist pays off.`
-      : plan.damage.theirs <= low
-        ? `Enemy damage is ${100 - m}% physical: armor pays off.`
-        : `Enemy damage is mixed (${m}% magic): spread your resistances.`);
-  }
-  return out;
-}
-
 function gamePlanHtml(d) {
   const allies = d.ally.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
   const enemies = d.enemy.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
@@ -720,7 +676,6 @@ function gamePlanHtml(d) {
         </div>
         <div class="plan-block lanes-block"><small>Lanes · laning phase</small>${lanes}</div>
       </div>
-      <ul class="plan-advice">${planAdvice(plan).map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
     </div>`;
 }
 
