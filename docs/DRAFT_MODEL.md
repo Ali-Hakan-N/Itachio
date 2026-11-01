@@ -1,4 +1,4 @@
-# Itachio Draft Sistemi: Teknik Referans
+﻿# Itachio Draft Sistemi: Teknik Referans
 
 > Kapsam: Bu belge, champ-select sırasında şu anda çalışan Itachio modelini uçtan uca açıklar. `analytics/` altındaki ClickHouse/ONNX/item/CATE/MCP paketi ayrıca belgelenir; bu paket henüz Electron öneri motorunun yerine geçmez. Winrate.gg’nin üretim ağırlıkları veya özel feature listesi kamuya açık olmadığı için bu proje onun birebir model kopyası olduğunu iddia etmez.
 
@@ -360,7 +360,7 @@ Release öncesi eksikler (analytics paketi için):
 6. Production desktop data source, offline/fallback behavior, performance ve rollback testleri.
 7. Candidate modelin production trainer’la aynı date/rank/queue/patch split’inde head-to-head backtest’i.
 
-CI artık analytics compile/test/audit çalıştırır; mevcut Windows release workflow da analytics gate’ini çalıştırır. Bu, analytics server veya ClickHouse’ın production’a deploy edildiği anlamına gelmez. Bu belge desktop `v1.7.0` ile eşleşir (önceki tag `v1.6.1`). v1.7.0 değişiklikleri: adaptive patch-aware MetaSRC blend (model payı tavanı 0.80, OOT seçilmemişse 0.50 varsayılan), `blindability` export’u, `patchMatches`/`patchStartedAt` alanları, MetaSRC health izleme ve analytics CI/release gate’i. Doğrulama: collector 66, desktop 84, analytics 20 test geçti; `tsc --noEmit` temiz.
+CI artık analytics compile/test/audit çalıştırır; mevcut Windows release workflow da analytics gate’ini çalıştırır. Bu, analytics server veya ClickHouse’ın production’a deploy edildiği anlamına gelmez. Bu belge desktop `v1.7.3` ile eşleşir (önceki tag `v1.7.2`). v1.7.0 ile gelen değişiklikler: adaptive patch-aware MetaSRC blend (model payı tavanı 0.80, OOT seçilmemişse 0.50 varsayılan), `blindability` export’u, `patchMatches`/`patchStartedAt` alanları, MetaSRC health izleme ve analytics CI/release gate’i. Doğrulama: collector 66, desktop 84, analytics 20 test geçti; `tsc --noEmit` temiz.
 
 ## 12. Referanslar
 
