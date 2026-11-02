@@ -62,7 +62,7 @@ test('metasrc builds: widgets become runes, spells, starting items, items and a 
 });
 
 test('builds: MetaSRC counts for its weight in spells and starting items; path in buying order', () => {
-  const ms = matches(200, (i) => ({ gear: gear(8008, [3031, 3072, 0, 0, 0, 0], [4, 14]), win: i % 2 }));
+  const ms = matches(40, (i) => ({ gear: gear(8008, [3031, 3072, 0, 0, 0, 0], [4, 14]), win: i % 2 }));
   ms.forEach((m) => (m.ob = [[1036, 3072, 3031], null, null, null, null]));
   const meta = {
     weight: 0.8,

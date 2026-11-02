@@ -423,9 +423,9 @@ test('draft predictions retain MetaSRC as a confidence-weighted cold-start prior
 
   const provenModel = { ...model, matches: 25000, syn: Array(200).fill([]), vs: Array(200).fill([]) };
   const proven = Engine.evaluate({ stats, model: provenModel, championId: 1, role: 'top' });
-  // 900 games on this champion in the role: mostly the model
-  assert.ok(proven.weights.model > 0.85 && proven.weights.model < 1, `${proven.weights.model}`);
-  assert.ok(Math.abs(proven.weights.model + proven.weights.metasrc - 1) < 1e-12);
+  // 900 games on this champion in the role: the model alone, MetaSRC has no say
+  assert.deepEqual(proven.weights, { model: 1, metasrc: 0 });
+  assert.equal(proven.score, evaluate({ model: provenModel, championId: 1, role: 'top' }).score);
 
   const tunedModel = {
     ...provenModel,
@@ -437,9 +437,8 @@ test('draft predictions retain MetaSRC as a confidence-weighted cold-start prior
   };
   const base = evaluate({ model: tunedModel, championId: 1, role: 'top' });
   const tuned = Engine.evaluate({ stats, model: tunedModel, championId: 1, role: 'top' });
-  assert.equal(tuned.weights.model, 0.25);
-  assert.equal(tuned.weights.metasrc, 0.75);
-  assert.equal(tuned.score, Math.round(100 / (1 + Math.exp(-(0.25 * base.logit + 0.75)))));
+  assert.equal(tuned.weights.model, 1, 'a tuned blend weight does not hand a well covered pick to MetaSRC');
+  assert.equal(tuned.score, Math.round(100 / (1 + Math.exp(-base.logit))));
 });
 
 test('adaptive draft weights favor MetaSRC early and increase model share with current-patch matches', () => {
@@ -482,7 +481,7 @@ test('adaptive draft weights favor MetaSRC early and increase model share with c
   assert.ok(fresh.weights.model < grown.weights.model);
   assert.ok(grown.weights.model < mature.weights.model);
   assert.ok(fresh.weights.model < 0.3);
-  assert.deepEqual(validatedButUnsupported.weights, { model: 0.5, metasrc: 0.5 });
+  assert.equal(validatedButUnsupported.weights.model, 1, 'out-of-time evidence does not cap a well covered pick');
 
   // Where the model has seen the pick often it is used alone; where it has not, MetaSRC takes over
   const plenty = { ...confident, champ: { ...confident.champ, '1:0': [0.15, 20000, 0.95] } };

@@ -405,7 +405,7 @@ Orianna MonkeyKing 3
     return { damage, needs, coherence, penalty: damage + needs + coherence, lacking, info: { n, open, share, dominant, floors, sums, ap: now } };
   }
 
-  const PLAN_NAME = { pk: 'Poke / siege', en: 'Front-to-back teamfight', pe: 'Protect the carry', pi: 'Pick / catch', sp: 'Split push' };
+  const PLAN_NAME = { pk: 'Poke and Siege', en: 'Front-to-back Teamfight', pe: 'Protect the Carry', pi: 'Pick and Catch', sp: 'Split Push' };
   const NEED_NAME = { fr: 'Frontline', cc: 'Crowd control', en: 'Engage', wc: 'Waveclear', ac: 'Area control', pk: 'Long-range poke', pe: 'Peel', sc: 'Scaling', pi: 'Pick power', sp: 'Split pressure' };
 
   /**
@@ -439,7 +439,34 @@ Orianna MonkeyKing 3
     };
   }
 
-  const api = { traitsOf, pairBonus, teamFit, compProfile, KEYS, BY_ID, BY_NAME };
+  const PLAN_SD = 0.7; // sd of strength for a champion that is all about the team's plan
+  const FILL_SD = 0.5; // sd for a champion that fills everything the plan still lacks
+
+  /**
+   * How much a candidate supports the plan the allies are building, in sd (0 or more): how
+   * much of its kit is the plan's own (poke for a poke team) and how much of what the plan
+   * still lacks (frontline, CC, engage...) it brings. Counts more as the plan gets clearer
+   * (one pick: a third, three or more: fully). Unrelated picks get none of it.
+   */
+  function planSupport(allies, candidate) {
+    const list = allies.filter((m) => m && m.id);
+    if (!list.length || !candidate?.id) return 0;
+    const { info } = teamFit(list);
+    const c = traitsOf(candidate.id, candidate.tag);
+    const alignment = ARCH.reduce((s, a, i) => s + info.share[i] * (c[a] / 3), 0);
+    let weight = 0;
+    let filled = 0;
+    for (const k of Object.keys(info.floors)) {
+      const left = info.floors[k] - info.sums[k];
+      if (left <= 0) continue;
+      weight += WEIGHT[k];
+      filled += WEIGHT[k] * Math.min(1, c[k] / Math.max(1, left));
+    }
+    const trust = Math.min(1, list.length / 3);
+    return trust * (PLAN_SD * alignment + FILL_SD * (weight ? filled / weight : 0));
+  }
+
+  const api = { traitsOf, pairBonus, teamFit, planSupport, compProfile, KEYS, BY_ID, BY_NAME };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Traits = api;
 })(typeof window !== 'undefined' ? window : globalThis);

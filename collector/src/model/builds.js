@@ -58,6 +58,7 @@ const FULL_ITEMS = 4; // completed items that make a finished build (short games
 const LIFT_PRIOR = 60; // buyer games of the champion's own win rate an item's results start from
 const LIFT_WEIGHT = 10; // popularity multiplier per unit of win rate above the champion's own
 const CELL_PRIOR = 20; // games of the champion's role win rate a cell starts from
+const BUILD_EVIDENCE = 250; // games at which MetaSRC's share of a build has fallen to 37%
 
 const DDRAGON = 'https://ddragon.leagueoflegends.com/cdn';
 
@@ -540,7 +541,8 @@ function analyzeBuilds(matches, facts, metaBuilds = null) {
     const [c, r, bucket] = key.split(':');
     if (games.length < (bucket === 'any' ? MIN_GAMES : BUCKET_MIN)) continue;
     const entry = metaBuilds?.builds?.[`${c}:${ROLES[Number(r)]}`];
-    const meta = entry ? { ...entry, weight: metaBuilds.weight } : null;
+    // MetaSRC only fills what the games here cannot say: its say fades as the games add up
+    const meta = entry ? { ...entry, weight: Math.exp(-games.length / BUILD_EVIDENCE) } : null;
     const runes = pickRunes(games, meta);
     if (!runes) continue;
     rows.push({

@@ -353,6 +353,11 @@ class DataStore {
     return check(await q.order('started_at', { ascending: false }).order('match_id').range(offset, offset + count - 1));
   }
 
+  // The games a player played with exactly this five (lineup: their sorted player ids)
+  async listLineupGames(playerId, lineup) {
+    return check(await this.client.from('player_games').select('side,win,blue,red').eq('player_id', playerId).eq('lineup', lineup).limit(500));
+  }
+
   // ---------- Live updates ----------
   // playerId: our own row too, so we notice being removed from the team
   subscribeTeam(teamId, onChange, playerId) {

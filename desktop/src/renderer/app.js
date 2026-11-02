@@ -204,7 +204,7 @@ api.onState((partial) => {
   renderStatus();
   // Keep focus while typing on the pool screen: re-render only the affected parts
   if (screen !== 'main') return;
-  if (tab === 'draft' && ['draft', 'pools', 'lcu', 'members', 'model', 'currentBuild', 'applied', 'gameData', 'lastGame'].some((k) => k in partial)) renderMain();
+  if (tab === 'draft' && ['draft', 'pools', 'lcu', 'lobby', 'teamHistory', 'members', 'model', 'currentBuild', 'applied', 'gameData', 'lastGame'].some((k) => k in partial)) renderMain();
   if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial || 'me' in partial)) renderMain();
   if (tab === 'champions' && ('playerStats' in partial || 'members' in partial || 'model' in partial)) renderMain();
 });
@@ -575,8 +575,9 @@ function modelExplanation(row) {
     { label: 'Champion strength', z: P.strength },
     { label: 'Team synergy', z: P.synergy + P.ahead, detail: icons(row.allies, P.synergy >= 0 ? 1 : -1) },
     { label: 'Enemy matchups', z: P.matchup, detail: icons(row.enemies, P.matchup >= 0 ? 1 : -1) },
-    { label: 'AP / AD balance', z: P.damage },
+    { label: 'AP and AD balance', z: P.damage },
     { label: 'CC, frontline, engage', z: P.needs, detail: row.lacking?.length ? `Missing ${row.lacking.map((k) => NEED_NAME[k] || k).join(', ')}` : '' },
+    { label: 'Fits the comp plan', z: P.plan },
     { label: 'Team coordination', z: P.coherence },
     { label: 'Enemy answers', z: P.exposure },
     { label: 'Lane', z: P.lane },
@@ -623,6 +624,7 @@ function banRow(r, i, { canHover, hoverId }) {
         <span class="name">${esc(champName(r.championId))}
           <span class="badge">${ROLE_NAME[r.role] || ''}</span>
           <span class="badge" title="How often a team picks it there when it is not banned">Picked ${pct < 1 ? pct.toFixed(1) : Math.round(pct)}%</span>
+          ${r.history ? `<span class="badge warn" title="Your games with this five against it">Beat you ${r.history.games - r.history.wins} of ${r.history.games}</span>` : ''}
           ${hovering ? '<span class="badge live">Hovering</span>' : ''}
         </span>
       </span>
@@ -667,18 +669,18 @@ function poolDepthOf(playerId, role) {
   return entries.length ? Engine.poolDepth(entries.filter((e) => e.role === role)) : null;
 }
 
-const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null };
+const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null, lockedSignature: null };
 const PICK_ORDER_STABILITY_MS = 1500;
 const PICK_ORDER_HYSTERESIS = 2.5;
 
-function stabilizedPickOrder(d, rated, suggested, teammateHoverChanged) {
+function stabilizedPickOrder(d, rated, suggested, lockedChanged) {
   if (pickOrderUi.gameId !== d.gameId) {
     clearTimeout(pickOrderUi.timer);
-    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null });
+    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, lockedSignature: null });
   }
   const desired = suggested.map((r) => r.p.cellId);
-  const canChange = Engine.shouldUpdatePickOrder(Boolean(pickOrderUi.order), d.turn)
-    || Engine.shouldUpdatePickOrderForHover(d.turn, teammateHoverChanged);
+  // Only a new lock-in can reorder: hovers, timers and our own clicks never do
+  const canChange = !pickOrderUi.order || lockedChanged;
   const improvement = Engine.pickOrderImprovement(pickOrderUi.order, desired, suggested);
   const result = Engine.stabilizePickOrder(pickOrderUi.order, pickOrderUi.pending, desired, Date.now(), PICK_ORDER_STABILITY_MS, canChange, improvement, PICK_ORDER_HYSTERESIS);
   pickOrderUi.order = result.order;
@@ -706,28 +708,26 @@ function pickOrderHtml(d, blocked) {
   if (remaining.length < 2) return '';
   if (pickOrderUi.gameId !== d.gameId) {
     clearTimeout(pickOrderUi.timer);
-    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, hoverSignature: null });
+    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, lockedSignature: null });
   }
-  const hoverSignature = remaining.filter((p) => !p.isLocal).map((p) => `${p.cellId}:${p.hoverId || 0}`).join(',');
-  const teammateHoverChanged = pickOrderUi.hoverSignature !== null && pickOrderUi.hoverSignature !== hoverSignature;
-  pickOrderUi.hoverSignature = hoverSignature;
+  // The order depends on the locked picks and the roles only, never on hovers
+  const lockedSignature = [...d.ally, ...d.enemy].filter((p) => p.locked && p.championId).map((p) => `${p.cellId}:${p.championId}`).join(',');
+  const lockedChanged = pickOrderUi.lockedSignature !== null && pickOrderUi.lockedSignature !== lockedSignature;
+  pickOrderUi.lockedSignature = lockedSignature;
   const nameOf = (p) => (p.isLocal ? S.me?.nickname : memberByPuuid(p.puuid)?.nickname) || ROLE_NAME[p.position];
   const rated = remaining.map((p) => {
-    const championId = !p.isLocal && p.hoverId ? p.hoverId : 0;
     const playerId = p.isLocal ? S.me?.id : memberByPuuid(p.puuid)?.id;
-    const ev = championId
-      ? Engine.evaluate({ stats: S.stats, model: S.model, championId, role: p.position, ...draftContext(d, p.cellId), lookAhead: true, unavailable: blocked, personal: personalOf(playerId, d) })
-      : null;
-    return { p, championId, risk: ev?.counterRisk ?? 0, matchup: ev?.matchup ?? 0, personal: ev?.personal ?? 0, poolDepth: poolDepthOf(playerId, p.position) };
+    // A teammate's hover is shown, but does not move the order
+    return { p, championId: !p.isLocal && p.hoverId ? p.hoverId : 0, risk: 0, matchup: 0, personal: 0, poolDepth: poolDepthOf(playerId, p.position) };
   });
   const enemyPicks = d.enemy.filter((p) => p.locked && p.championId);
-  const suggested = stabilizedPickOrder(d, rated, Engine.orderPickSuggestions(rated, enemyPicks, S.model, draftContext(d).allies), teammateHoverChanged);
+  const lockedAllies = d.ally.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
+  const suggested = stabilizedPickOrder(d, rated, Engine.orderPickSuggestions(rated, enemyPicks, S.model, lockedAllies), lockedChanged);
   const trades = Engine.pickOrderTrades(rated, suggested, d.allyPickGroups || []);
-  const riskText = (n) => (n > 0 ? `<b class="down">−${n}</b>` : n < 0 ? `<b class="up">+${-n}</b>` : '<b>0</b>');
   return `
     <div class="pick-order">
-      <h3 class="sub" title="By role; a teammate's hovered champion also counts. Nobody's usual champion is assumed">Pick Order</h3>
-      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span><span class="risk" title="Counter risk shown; order also saves solo lanes for CT opportunities">${riskText(r.risk)}</span></li>`).join('')}</ol>
+      <h3 class="sub" title="By role and what the enemy has locked in; hovers never move it">Pick Order</h3>
+      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span></li>`).join('')}</ol>
       ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
     </div>`;
 }
@@ -1035,6 +1035,7 @@ function renderDraft() {
         unavailable: blocked,
         allies: banAllies(d, blocked),
         enemies: d.enemy.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position })),
+        history: S.teamHistory?.byChampion || null,
         limit: 10,
       })
     : [];

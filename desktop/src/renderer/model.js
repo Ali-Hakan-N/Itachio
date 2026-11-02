@@ -110,7 +110,11 @@
   const POOL_DEPTH = 0.3; // standard deviations between a deep and a shallow pool on the role
   const NEW_ROLE = 0.5; // standard deviations lost on a role a known player never plays
   const ROLE_CHOICE = 0.3; // standard deviations for the roles a player chose (Team tab) or queued for
-  const ROLE_EVIDENCE_GAMES = 400; // games of a champion in a role at which the model is trusted about 63% on it
+  const ROLE_EVIDENCE_GAMES = 250; // games of a champion in a role at which the model is trusted about 63% on it
+  const HISTORY_PRIOR = 2; // games of each result a team's record against a champion starts from
+  const HISTORY_CONFIDENCE = 4; // games at which the record counts half
+  const HISTORY_CAP = 0.5; // log-odds of losing counted at most
+  const HISTORY_PICK_FLOOR = 0.15; // pick chance assumed for a champion the model has not seen
   const PERSONAL_CLASS_PRIOR = 40; // pseudo-games before class-level comfort transfers to an unseen champion
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
@@ -379,6 +383,12 @@
     return Traits.teamFit(ids.map((id) => ({ id, tag: ix.tags.get(id) })));
   }
 
+  // How much a candidate supports the plan its allies are building, as a gain in logit
+  function planFit(ix, allyIds, id) {
+    if (!Traits || ix.heuristics === false) return 0;
+    return ix.sd * Traits.planSupport(allyIds.map((a) => ({ id: a, tag: ix.tags.get(a) })), { id, tag: ix.tags.get(id) });
+  }
+
   // Style of a team: the sum of its champions' style numbers, plus an expected future part
   function styleOf(ix, ids, extra = null) {
     const T = new Float64Array(ix.comp.k);
@@ -533,7 +543,8 @@
       : 0) + pillarValue(ix,
         [...allies.map((p) => asPick(p).championId).filter((id) => id !== championId), championId],
         enemies.map((p) => asPick(p).championId));
-    const comp = -ix.sd * fit.penalty + learned;
+    const plan = planFit(ix, ourIds.slice(0, -1), championId);
+    const comp = -ix.sd * fit.penalty + learned + plan;
 
     // Losing the lane hard (beyond LANE_CALL standard deviations of the role) costs extra
     // unless the composition gain makes it up by LANE_AMORTIZE times the excess loss
@@ -560,7 +571,7 @@
       baseLogit: base,
       // The logit as its parts (they add up to it once finalRow and personalize are done)
       parts: {
-        strength: base, synergy: syn, matchup: mu, learned,
+        strength: base, synergy: syn, matchup: mu, learned, plan,
         damage: -ix.sd * (fit.damage || 0), needs: -ix.sd * (fit.needs || 0), coherence: -ix.sd * (fit.coherence || 0),
         lane: -lanePenalty, typical: 0, ahead: 0, exposure: 0, personal: 0,
       },
@@ -1025,7 +1036,12 @@
     };
   }
 
-  function recommendBans({ model, unavailable = new Set(), allies = [], enemies = [], limit = 10 }) {
+  /**
+   * Ban suggestions. history: { championId: [games, wins] } of the team's past games with
+   * this exact five against each champion (wins are ours); what beat them counts next to
+   * the model's value, by how many games it rests on.
+   */
+  function recommendBans({ model, unavailable = new Set(), allies = [], enemies = [], limit = 10, history = null }) {
     const ix = index(model);
     if (!ix.matches) return [];
     const mine = new Set(allies.map((p) => asPick(p).championId));
@@ -1046,13 +1062,22 @@
         value += part;
         if (!main || part > main.part) main = { r, part, p };
       }
-      if (!main || value <= 0) continue;
+      // What this five has lost to: log-odds of losing, shrunk to even by 4 games, by evidence
+      const past = history?.[championId];
+      let beat = 0;
+      if (past && past[0] > 0) {
+        const rate = (past[1] + HISTORY_PRIOR) / (past[0] + 2 * HISTORY_PRIOR);
+        beat = (past[0] / (past[0] + HISTORY_CONFIDENCE)) * Math.min(HISTORY_CAP, Math.max(0, -Math.log(rate / (1 - rate))));
+      }
+      value += beat * (main ? Math.max(main.p, HISTORY_PICK_FLOOR) : HISTORY_PICK_FLOOR);
+      if (value <= 0) continue;
       out.push({
         championId,
         value,
         score: Math.round(100 * (1 - Math.exp(-value / (BAN_UNIT * ix.sd)))),
-        role: ROLES[main.r],
-        pickChance: main.p,
+        role: ROLES[main ? main.r : ix.bestRole.get(championId).r],
+        pickChance: main ? main.p : 0,
+        history: past ? { games: past[0], wins: past[1] } : null,
       });
     }
     return out.sort((a, b) => b.value - a.value).slice(0, limit);
@@ -1243,17 +1268,13 @@
    * Share of the model against MetaSRC for one pick: how much the model knows about this
    * champion in this role (its games there), times how well trained and current it is
    * overall. A well-covered pick is the model alone (1); a pick it has barely seen, or a
-   * model that is small or new, hands over to MetaSRC (down to 0). Out-of-time evidence
-   * caps it: a model that did not beat MetaSRC counts for at most half, a tuned one for
-   * its tuned weight.
+   * model that is small or new, hands over to MetaSRC (down to 0). Nothing else caps it:
+   * where the model has the evidence, MetaSRC has no say.
    */
   function sourceWeights(model, games = null) {
     const evidence = games === null ? 1 : 1 - Math.exp(-Math.max(0, games) / ROLE_EVIDENCE_GAMES);
-    const hasOotEvidence = Number(model?.ensemble?.matches) >= Number(model?.ensemble?.minimum || 500);
-    const tuned = model?.ensemble?.supported && Number.isFinite(model.ensemble.modelWeight) ? model.ensemble.modelWeight : null;
-    const ceiling = tuned ?? (hasOotEvidence && !model.ensemble.supported ? 0.5 : 1);
-    let w = Math.min(ceiling, modelConfidence(model) * patchFreshness(model) * evidence);
-    if (w >= 0.95 && ceiling >= 0.95) w = 1;
+    let w = Math.min(1, modelConfidence(model) * patchFreshness(model) * evidence);
+    if (w >= 0.95) w = 1;
     if (w <= 0.05) w = 0;
     return { model: w, metasrc: 1 - w };
   }

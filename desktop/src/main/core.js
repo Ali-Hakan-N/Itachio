@@ -9,6 +9,23 @@ const { parseEndOfGame, parsePlayers } = require('./endofgame');
 globalThis.Recommend = globalThis.Recommend || require('../renderer/recommend');
 const { Engine } = require('../renderer/model');
 
+/**
+ * What the team's games with one five say about the enemy champions: { championId: [games, our wins] }.
+ * games: [{ side: 'blue'|'red', win, blue: [ids], red: [ids] }] (player_games rows).
+ */
+function teamHistoryOf(games) {
+  const byChampion = {};
+  for (const g of games || []) {
+    const enemy = g.side === 'blue' ? g.red : g.blue;
+    for (const id of enemy || []) {
+      const e = (byChampion[id] ||= [0, 0]);
+      e[0] += 1;
+      e[1] += g.win ? 1 : 0;
+    }
+  }
+  return { games: (games || []).length, byChampion };
+}
+
 const PRE_GAME_PHASES = new Set(['None', 'Lobby', 'Matchmaking', 'ReadyCheck']);
 // The draft stays on screen while the game is played and goes when it is over
 const AFTER_GAME_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -71,6 +88,7 @@ class AppCore extends EventEmitter {
       lcu: { connected: false, phase: 'None', summoner: null },
       draft: null,
       lobby: null, // the party waiting or queueing: { queueId, members: [{ puuid, isLocal, preferences }] }
+      teamHistory: null, // { key, games, byChampion } of the line-up in this draft, see teamHistoryOf
       playerStats: {}, // how each player does on each champion
       builds: {}, // runes, items and spells per champion, role and enemy damage
       damage: null, // champions' magic share, to choose the build for the enemy team
@@ -295,6 +313,23 @@ class AppCore extends EventEmitter {
     }
   }
 
+  // Bans lean on what this exact five struggled against: read their games together
+  // once per line-up (all five on our side must be team members)
+  async #loadTeamHistory(draft) {
+    const me = this.state.me;
+    const byPuuid = new Map(this.state.members.filter((m) => m.puuid).map((m) => [m.puuid, m.id]));
+    const ids = draft.ally.map((p) => (p.isLocal ? me?.id : byPuuid.get(p.puuid))).filter(Boolean);
+    const key = ids.length === 5 && new Set(ids).size === 5 ? [...ids].sort().join(',') : null;
+    if (key === (this.state.teamHistory?.key ?? null)) return;
+    if (!key || !this.data.listLineupGames) return this.#emit({ teamHistory: null });
+    try {
+      const games = await this.data.listLineupGames(me.id, key);
+      this.#emit({ teamHistory: { key, ...teamHistoryOf(games) } });
+    } catch (err) {
+      this.log.error('[team history]', err.message);
+    }
+  }
+
   #onSession(raw) {
     const draft = normalizeSession(raw);
     const isNew = !this.state.draft || this.state.draft.gameId !== draft.gameId;
@@ -303,6 +338,7 @@ class AppCore extends EventEmitter {
       this.#loadPickable(draft.gameId);
       this.refreshModel({ atDraftStart: draft.gameId }).catch((err) => this.log.error('[model]', err.message));
       this.#loadBuilds(this.state.patch);
+      this.#loadTeamHistory(draft);
       if (this.state.lastGame) this.#emit({ lastGame: null });
       const mine = (raw.actions || []).flat().filter((a) => a.actorCellId === draft.localCellId);
       this.log.info?.('champ select', JSON.stringify({
@@ -595,4 +631,4 @@ class AppCore extends EventEmitter {
   }
 }
 
-module.exports = { AppCore, situationalItems };
+module.exports = { AppCore, situationalItems, teamHistoryOf };
