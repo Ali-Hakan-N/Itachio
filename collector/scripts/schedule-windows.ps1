@@ -6,6 +6,9 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\schedule-windows.ps1 -Stop      # stop, saving what it has
 #   powershell -ExecutionPolicy Bypass -File scripts\schedule-windows.ps1 -Remove
 #
+# The collector runs all day but pauses by itself while the computer is busy (the League
+# game is running or the GPU is loaded) and goes on when it is free again; training waits
+# the same way. COLLECTOR_IDLE=0 in .env turns the pause off.
 # If the computer is off at that time, the job runs when it starts. A run lasts up to
 # ~23 hours (until the development key expires); the next day's run starts with the
 # new key. If a run is still going, the next start is skipped. If it crashes (e.g. no

@@ -1,4 +1,4 @@
-/* global api, Engine */
+/* global api, Engine, Traits */
 // UI. State comes from the main process (api.onState); this file only renders and sends requests.
 
 const ROLES = [
@@ -212,21 +212,99 @@ api.onSaved((info) => {
   if (info.type === 'match') toast('Match result and draft saved');
 });
 
+// ---------- Menu ----------
+const ICONS = {
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/>',
+  users: '<circle cx="9" cy="9" r="3"/><circle cx="17" cy="10" r="2.5"/><path d="M3 19c0-3 3-5 6-5s6 2 6 5M15 15c3 0 6 1.5 6 4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  shield: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
+};
+const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+// The three statistics sources are inputs of the scores: each has its own entry
+const MENU = [
+  { id: 'draft', title: 'Draft', items: [{ tab: 'draft', label: 'Draft Assistant', hint: 'Live picks and bans', icon: 'target' }] },
+  { id: 'players', title: 'Players', items: [
+    { tab: 'champions', src: 'season', label: 'This Season', hint: 'Scoring input', icon: 'calendar' },
+    { tab: 'champions', src: 'history', label: 'This Patch', hint: 'Scoring input', icon: 'layers' },
+    { tab: 'champions', src: 'team', label: 'With the Team', hint: 'Scoring input', icon: 'users' },
+    { tab: 'history', label: 'Match History', icon: 'clock' },
+  ] },
+  { id: 'team', title: 'Team', items: [{ tab: 'team', label: 'Roster', hint: 'Members and roles', icon: 'shield' }] },
+];
+const store = {
+  get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+};
+const menuCollapsed = new Set(store.get('menu.collapsed', []));
+
+function buildMenu() {
+  $tabs.innerHTML = MENU.map((g) => `
+    <div class="menu-group ${menuCollapsed.has(g.id) ? 'collapsed' : ''}" data-group="${g.id}">
+      <button type="button" class="menu-head" data-head="${g.id}" aria-expanded="${!menuCollapsed.has(g.id)}">${g.title}${icon('chevron')}</button>
+      <div class="menu-items">${g.items.map((it) => `
+        <button type="button" class="menu-item" data-tab="${it.tab}" ${it.src ? `data-src="${it.src}"` : ''}>
+          ${icon(it.icon)}<span>${it.label}${it.hint ? `<small>${it.hint}</small>` : ''}</span>
+        </button>`).join('')}
+      </div>
+    </div>`).join('');
+}
+function markMenu() {
+  for (const b of $tabs.querySelectorAll('[data-tab]')) {
+    const active = b.dataset.tab === tab && (!b.dataset.src || (tab === 'champions' && b.dataset.src === statsUi.source));
+    b.classList.toggle('active', active);
+    if (active) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  }
+}
+buildMenu();
 $tabs.addEventListener('click', (e) => {
+  const head = e.target.closest('[data-head]');
+  if (head) {
+    const group = head.closest('.menu-group');
+    const collapsed = group.classList.toggle('collapsed');
+    head.setAttribute('aria-expanded', String(!collapsed));
+    if (collapsed) menuCollapsed.add(group.dataset.group);
+    else menuCollapsed.delete(group.dataset.group);
+    store.set('menu.collapsed', [...menuCollapsed]);
+    return;
+  }
   const b = e.target.closest('button[data-tab]');
-  if (!b || b.disabled) return;
+  if (!b) return;
   tab = b.dataset.tab;
-  for (const x of $tabs.querySelectorAll('button')) x.classList.toggle('active', x === b);
+  if (b.dataset.src) statsUi.source = b.dataset.src;
   renderMain();
 });
+function setMenu(open) {
+  document.body.classList.toggle('menu-closed', !open);
+  document.getElementById('menutoggle').setAttribute('aria-expanded', String(open));
+  store.set('menu.open', open);
+}
+setMenu(store.get('menu.open', true));
+document.getElementById('menutoggle').onclick = () => setMenu(document.body.classList.contains('menu-closed'));
 
 // ---------- rendering ----------
+const splashHtml = (text) => `
+  <div class="splash">
+    <div class="splash-seal">
+      <svg class="splash-ring" viewBox="-12 -12 24 24" aria-hidden="true">
+        <circle r="11" class="ring-line"/>
+        <use href="#tomoe"/><use href="#tomoe" transform="rotate(120)"/><use href="#tomoe" transform="rotate(240)"/>
+      </svg>
+      <img src="logo.png" alt="">
+    </div>
+    <h1 class="splash-word">ITACHIO</h1>
+    <p class="splash-line">${esc(text)}</p>
+    <div class="splash-bar"><i></i></div>
+  </div>`;
+
 function render() {
   document.body.dataset.screen = screen;
-  $tabs.hidden = screen !== 'main';
   document.getElementById('page-head').hidden = screen !== 'main';
   renderStatus();
-  if (screen === 'loading') $view.innerHTML = `<div class="empty-state"><p>Loading…</p></div>`;
+  if (screen === 'loading') $view.innerHTML = splashHtml('Gathering your team and the model…');
   if (screen === 'config') renderConfig();
   if (screen === 'login') renderLogin();
   if (screen === 'profile') renderProfile();
@@ -242,8 +320,8 @@ function renderStatus() {
   if (!l) return ($status.innerHTML = '');
   const acct = l.summoner?.riotId ? ` · ${esc(l.summoner.riotId)}` : '';
   $status.innerHTML = l.connected
-    ? `<span class="dot on"></span><span>${esc(PHASE_TEXT[l.phase] || l.phase)}${acct}</span>`
-    : `<span class="dot"></span><span>Waiting for the League client</span>`;
+    ? `<span class="dot on"></span><span><b>Eyes open</b><small>${esc(PHASE_TEXT[l.phase] || l.phase)}${acct}</small></span>`
+    : `<span class="dot"></span><span><b>The Rift is quiet</b><small>Open League to awaken Itachio</small></span>`;
 }
 
 function renderConfig() {
@@ -370,21 +448,17 @@ async function signOut() {
 }
 
 function renderMain() {
+  const sourceName = (STAT_SOURCES.find(([k]) => k === statsUi.source) || STAT_SOURCES[0])[1];
   const pages = {
     draft: ['LIVE DRAFT', 'Draft Assistant'],
-    champions: ['PLAYER ANALYTICS', 'Champions'],
+    champions: ['PLAYER ANALYTICS', `Champions \u00b7 ${sourceName}`],
     team: ['ROSTER', S.team?.name || 'Team'],
-    history: ['MATCH ARCHIVE', 'History'],
+    history: ['MATCH ARCHIVE', 'Match History'],
   };
   const [kicker, title] = pages[tab] || pages.draft;
   document.getElementById('page-kicker').textContent = kicker;
   document.getElementById('page-title').textContent = title;
-  for (const button of $tabs.querySelectorAll('[data-tab]')) {
-    const active = button.dataset.tab === tab;
-    button.classList.toggle('active', active);
-    if (active) button.setAttribute('aria-current', 'page');
-    else button.removeAttribute('aria-current');
-  }
+  markMenu();
   const user = document.getElementById('rail-player');
   user.innerHTML = `<span class="rail-avatar">${esc((S.me?.nickname || '?').slice(0, 1).toUpperCase())}</span><span><b>${esc(S.me?.nickname || 'Player')}</b><small>${esc(S.me?.riot_id || 'Account')}</small></span>`;
   if (tab !== 'champions') {
@@ -869,6 +943,35 @@ function lineupRolesHtml() {
     </div>`;
 }
 
+// ---------- Comp: what each team is turning into ----------
+const classOf = (championId) => champMap().get(championId)?.tags?.[0] || S.model?.tags?.[championId] || 'None';
+function compCard(title, ids, mine) {
+  const comp = Traits.compProfile(ids.map((id) => ({ id, tag: classOf(id) })));
+  const sure = Math.round(comp.confidence * 100);
+  const plans = comp.plans.map((p) => `
+    <div class="plan ${comp.plan === p.key && !comp.mixed ? 'lead' : ''}" title="${esc(p.name)}">
+      <span>${esc(p.name)}</span><div class="plan-track"><i data-w="${Math.round(p.share * 100)}"></i></div><b>${Math.round(p.share * 100)}%</b>
+    </div>`).join('');
+  const chips = comp.needs.slice(0, 7).map((n) => `<span class="need ${n.state}" title="${esc(n.name)}: ${n.have} of about ${n.need}">${esc(n.name)} <b>${n.have}/${Math.ceil(n.need)}</b></span>`).join('');
+  const open = comp.needs.filter((n) => n.state !== 'done').slice(0, 3).map((n) => n.name);
+  const ap = Math.round(comp.damage.ap * 100);
+  const dmgText = { open: '', balanced: 'Balanced damage', 'ap-heavy': 'Too much magic damage', 'ad-heavy': 'Too much physical damage' }[comp.damage.state];
+  return `
+    <div class="comp-card ${mine ? 'ours' : 'theirs'}">
+      <div class="comp-head"><span class="comp-kicker">${title}</span><b>${esc(comp.label)}</b><small>${comp.plan ? `${sure}% sure · ` : ''}${comp.n}/5 picks</small></div>
+      ${comp.n ? `<div class="plans">${plans}</div>` : ''}
+      ${comp.n ? `<div class="needs">${chips}</div>` : ''}
+      ${comp.n ? `<div class="dmg ${comp.damage.state}"><span>AD</span><div class="dmg-track"><i data-w="${ap}"></i></div><span>AP</span><small>${dmgText}</small></div>` : ''}
+      ${mine && comp.n && comp.n < 5 && open.length ? `<p class="comp-next">Look for: <b>${esc(open.join(', '))}</b></p>` : ''}
+    </div>`;
+}
+function compHtml(d) {
+  const ours = d.ally.map(shownChamp).filter(Boolean);
+  const theirs = d.enemy.map(shownChamp).filter(Boolean);
+  if (!ours.length && !theirs.length) return '';
+  return `<section class="comp" aria-label="Team compositions">${compCard('YOUR COMP', ours, true)}${compCard('ENEMY COMP', theirs, false)}</section>`;
+}
+
 function renderDraft() {
   clearInterval(timerHandle);
   const d = withRoles(S.draft);
@@ -885,12 +988,12 @@ function renderDraft() {
           <span class="sweep"></span>
           <img class="orb-seal" src="logo.png" alt="">
         </div>
-        <p class="kicker">${connected ? 'Connected' : 'Itachio is watching'}</p>
-        <h2 class="waiting-title">${connected ? 'Waiting for Champ Select' : 'League Client Is Closed'}</h2>
+        <p class="kicker">${connected ? 'Eyes open' : 'The Rift is quiet'}</p>
+        <h2 class="waiting-title">${connected ? 'Awaiting Champ Select' : 'Awaiting League'}</h2>
         <p class="waiting-text">${connected
-          ? 'Queue up. When champ select starts, the draft shows up here live with your picks, bans and build.'
-          : 'Open the League of Legends client. Itachio finds it and connects on its own.'}</p>
-        <div class="scan"><span class="scan-dot"></span>${connected ? esc(PHASE_TEXT[S.lcu?.phase] || 'Idle') : 'Searching for the client'}</div>
+          ? 'Queue up. The draft unfolds here the moment champ select begins.'
+          : 'Open the client and Itachio awakens on its own.'}</p>
+        <div class="scan"><span class="scan-dot"></span>${connected ? esc(PHASE_TEXT[S.lcu?.phase] || 'Idle') : 'Listening for the client'}</div>
         ${connected ? lineupRolesHtml() : ''}
         ${S.stats?.meta?.length ? '' : '<p class="waiting-text small">No meta data yet. Recommendations appear after the collector runs for the first time.</p>'}
       </div>`;
@@ -1000,6 +1103,7 @@ function renderDraft() {
           <div class="timer"><div id="tbar"></div></div>
         </div>
         ${banBlock}
+        ${compHtml(d)}
         ${pickOrderHtml(d, blocked)}
         <div>
           <h3 class="sub head-row">
@@ -1302,7 +1406,7 @@ function renderChampions() {
     const b = e.target.closest('[data-src]');
     if (!b) return;
     statsUi.source = b.dataset.src;
-    renderChampions();
+    renderMain();
   };
   document.getElementById('who').onchange = (e) => {
     statsUi.player = e.target.value;
@@ -1466,62 +1570,71 @@ async function renderHistory(more = false) {
 }
 
 // ---------- Options ----------
-// Kept on this computer. General: start with Windows. Drafting: send runes (with summoner
-// spells) and the item build to the client on their own once every champion is locked.
+// Kept on this computer. Essentials: start with Windows. Draft rites: send runes (with
+// summoner spells) and the item build to the client once every champion is locked.
 const OPTION_TABS = [
-  ['general', 'General', [['openAtLogin', 'Start with Windows', 'Opens Itachio when you sign in to your computer, so it is ready before you open League.']]],
-  ['drafting', 'Drafting', [
-    ['autoRunes', 'Auto push runes', 'Sends the recommended rune page and summoner spells to the client as soon as every champion is locked. Off: use the Apply buttons.'],
-    ['autoItems', 'Auto push item build', 'Sends the item set (starting items, core, boots, situational items) to the client as soon as every champion is locked.'],
+  ['general', 'Essentials', 'seal', [['openAtLogin', 'Awaken at sign-in', 'Ready before League opens']]],
+  ['drafting', 'Draft Rites', 'scroll', [
+    ['autoRunes', 'Rune seal', 'Sets runes and spells at lock-in'],
+    ['autoItems', 'Item scroll', 'Sets the item build at lock-in'],
   ]],
 ];
+ICONS.seal = '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 8 5.5M12 21a9 9 0 0 1-8-5.5M3.5 9.5A9 9 0 0 1 12 3"/><circle cx="12" cy="12" r="2.4"/>';
+ICONS.scroll = '<path d="M7 4h10a2 2 0 0 1 2 2v12a2 2 0 0 0 2 2H9a2 2 0 0 1-2-2z"/><path d="M7 4a2 2 0 0 0-2 2v2h2M10 9h6M10 13h6"/>';
 let optionsTab = 'general';
 async function openOptions() {
   const settings = await run(api.getSettings());
   const $m = document.getElementById('modal');
+  const close = () => ($m.innerHTML = '');
+  const flip = async (toggle) => {
+    if (toggle.disabled) return;
+    const key = toggle.dataset.key;
+    const wanted = toggle.getAttribute('aria-checked') !== 'true';
+    toggle.setAttribute('aria-checked', String(wanted));
+    toggle.disabled = true;
+    try {
+      const res = await api.setSettings({ [key]: wanted });
+      if (!res?.ok) throw new Error(res?.error || 'Could not save');
+      Object.assign(settings, res.data);
+      toggle.setAttribute('aria-checked', String(!!settings[key]));
+    } catch (e) {
+      toggle.setAttribute('aria-checked', String(!wanted));
+      toast(e.message, 'error');
+    } finally {
+      toggle.disabled = false;
+    }
+  };
   const draw = () => {
-    const [, title, items] = OPTION_TABS.find(([k]) => k === optionsTab);
+    const [, title, , items] = OPTION_TABS.find(([k]) => k === optionsTab);
     $m.innerHTML = `
       <div class="modal-overlay" id="mclose-bg">
         <div class="options" role="dialog" aria-modal="true" aria-label="Options">
           <nav class="options-nav">
-            <h2>Options</h2>
-            ${OPTION_TABS.map(([k, label]) => `
-              <button data-otab="${k}" class="${k === optionsTab ? 'active' : ''}">${label}</button>`).join('')}
+            <div class="options-brand"><img class="seal" src="logo.png" alt=""><h2>Options</h2></div>
+            ${OPTION_TABS.map(([k, label, ic]) => `
+              <button type="button" data-otab="${k}" class="${k === optionsTab ? 'active' : ''}">${icon(ic)}${label}</button>`).join('')}
           </nav>
           <section class="options-body">
-            <div class="options-head"><h3>${title}</h3><button class="x" id="mclose" aria-label="Close">×</button></div>
+            <div class="options-head"><div><span class="page-kicker">OPTIONS</span><h3>${title}</h3></div><button type="button" class="x" id="mclose" aria-label="Close">\u00d7</button></div>
             ${items.map(([key, label, text]) => `
-              <label class="option">
-                <span><b>${label}</b><small>${text}</small></span>
-                <input type="checkbox" class="switch" data-key="${key}" ${settings[key] ? 'checked' : ''}>
-              </label>`).join('')}
+              <div class="option" data-row="${key}">
+                <svg class="option-mark" viewBox="-12 -12 24 24" aria-hidden="true"><circle r="11" class="tomoe-ring"/><use href="#tomoe"/><use href="#tomoe" transform="rotate(120)"/><use href="#tomoe" transform="rotate(240)"/></svg>
+                <span class="option-copy"><b>${label}</b><small>${text}</small></span>
+                <button type="button" role="switch" class="toggle" data-key="${key}" aria-checked="${!!settings[key]}" aria-label="${label}"><i></i></button>
+              </div>`).join('')}
           </section>
         </div>
       </div>`;
-    const close = () => ($m.innerHTML = '');
-    document.getElementById('mclose').onclick = close;
-    document.getElementById('mclose-bg').onclick = (e) => e.target.id === 'mclose-bg' && close();
-    for (const b of $m.querySelectorAll('[data-otab]')) {
-      b.onclick = () => {
-        optionsTab = b.dataset.otab;
-        draw();
-      };
+  };
+  $m.onclick = (e) => {
+    if (e.target.id === 'mclose-bg' || e.target.closest('#mclose')) return close();
+    const tabBtn = e.target.closest('[data-otab]');
+    if (tabBtn) {
+      optionsTab = tabBtn.dataset.otab;
+      return draw();
     }
-    for (const box of $m.querySelectorAll('[data-key]')) {
-      box.onchange = async () => {
-        const wanted = box.checked;
-        try {
-          const res = await api.setSettings({ [box.dataset.key]: wanted });
-          if (!res?.ok) throw new Error(res?.error || 'Could not save');
-          Object.assign(settings, res.data);
-          box.checked = !!settings[box.dataset.key];
-        } catch (e) {
-          box.checked = !wanted;
-          toast(e.message, 'error');
-        }
-      };
-    }
+    const row = e.target.closest('[data-row]');
+    if (row) flip(row.querySelector('.toggle'));
   };
   draw();
 }

@@ -90,7 +90,8 @@ npm install
 cp .env.example .env      # fill in SUPABASE_SERVICE_ROLE_KEY and RIOT_API_KEY
 npm run collect:dry       # quick check, writes nothing
 npm run collect           # real run (about 40 minutes)
-powershell -ExecutionPolicy Bypass -File scripts\schedule-windows.ps1   # daily at 10:00
+powershell -ExecutionPolicy Bypass -File scripts\schedule-windows.ps1   # daily at 10:00; pauses itself while the computer is busy (game running, GPU loaded)
+powershell -ExecutionPolicy Bypass -File scripts\schedule-metasrc.ps1   # MetaSRC scraper: once a day at most, only when the computer is idle
 ```
 
 - Get a Riot key at [developer.riotgames.com](https://developer.riotgames.com). Development keys expire every 24 hours; a Personal API key does not.

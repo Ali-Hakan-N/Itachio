@@ -106,6 +106,8 @@ module.exports = {
       process.once('SIGINT', () => process.exit(130));
     });
     fs.rmSync(STOP_FILE, { force: true }); // an old request must not stop a new run
+    // The collector runs all day but only while the computer is free (no game, low GPU load)
+    if (env.COLLECTOR_IDLE !== '0') api.gate = require('../model/idle').makeGate({ log, isStopped: () => stop.reason });
     const stopWatch = setInterval(() => {
       if (stop.reason || !fs.existsSync(STOP_FILE)) return;
       fs.rmSync(STOP_FILE, { force: true });

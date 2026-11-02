@@ -7,6 +7,7 @@ const { LcuConnector } = require('./lcu');
 const { DataStore } = require('./data');
 const { AppCore } = require('./core');
 const { setupUpdater } = require('./updater');
+const { createSettings } = require('./settings');
 
 let win = null;
 let core = null;
@@ -83,16 +84,9 @@ const fileLog = {
   info: (...args) => writeLog('INFO', args),
 };
 
-// Options, kept on this computer: { autoRunes, autoItems }. Starting with Windows is the
-// system's own setting (login items), read from there.
-const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-function loadSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
-  } catch {
-    return {};
-  }
-}
+// Options, kept on this computer: { autoRunes, autoItems, openAtLogin } (settings.js).
+const settings = createSettings(path.join(app.getPath('userData'), 'settings.json'));
+const loadSettings = settings.load;
 function settingsView(saved) {
   return { autoRunes: !!saved.autoRunes, autoItems: !!saved.autoItems, openAtLogin: saved.openAtLogin ?? app.getLoginItemSettings().openAtLogin };
 }
@@ -102,7 +96,7 @@ function applyLoginItem(open) {
   try {
     app.setLoginItemSettings({ openAtLogin: !!open });
   } catch (err) {
-    fileLog?.('setLoginItemSettings error', err.message);
+    fileLog.error('setLoginItemSettings', err.message);
   }
 }
 
@@ -253,11 +247,8 @@ app.whenReady().then(async () => {
 
   handle('settings:get', () => settingsView(loadSettings()));
   handle('settings:set', (changes) => {
-    const saved = { ...loadSettings() };
-    for (const key of ['autoRunes', 'autoItems', 'openAtLogin']) if (key in changes) saved[key] = !!changes[key];
-    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
-    fs.writeFileSync(settingsFile(), JSON.stringify(saved));
-    if ('openAtLogin' in changes) applyLoginItem(changes.openAtLogin);
+    const saved = settings.save(changes || {});
+    if (changes && 'openAtLogin' in changes) applyLoginItem(changes.openAtLogin);
     core?.setSettings(saved);
     return settingsView(saved);
   });

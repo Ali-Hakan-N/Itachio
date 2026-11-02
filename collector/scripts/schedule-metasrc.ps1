@@ -48,8 +48,11 @@ $Node = (Get-Command node -ErrorAction Stop).Source
 $Action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\conhost.exe" `
   -Argument "--headless `"$Node`" --env-file=.env src\run.js --source metasrc --log logs\metasrc.log" -WorkingDirectory $Dir
 $Trigger = New-ScheduledTaskTrigger -Daily -At $At
+# Runs only once the computer has been idle for 5 minutes (waits up to 12 hours for that);
+# the scraper itself also refuses to run twice within 20 hours.
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
   -MultipleInstances IgnoreNew -RunOnlyIfNetworkAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
+  -RunOnlyIfIdle -IdleDuration (New-TimeSpan -Minutes 5) -IdleWaitTimeout (New-TimeSpan -Hours 12) -DontStopOnIdleEnd `
   -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 10)
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Force | Out-Null

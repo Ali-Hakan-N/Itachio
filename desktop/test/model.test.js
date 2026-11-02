@@ -250,9 +250,9 @@ test('personal layer: the player\'s own results on a champion move its score', (
   // Recommendations rank with it
   const top = (p) => recommend({ model, role: 'top', personal: p }).map((r) => r.championId);
   assert.equal(top(null)[0], 1);
-  // Capped: even a huge value moves a score by a few points only
+  // Capped: even a huge value moves a score by a bounded amount (1.5 standard deviations)
   const capped = evaluate({ model, championId: 2, role: 'top', personal: { history: { byKey: { '2:top': { delta: 5, games: 80 } }, unplayed: 0 } } });
-  assert.ok(capped.personal > 0 && capped.personal <= 8, `capped ${capped.personal}`);
+  assert.ok(capped.personal > 0 && capped.personal <= 30, `capped ${capped.personal}`);
   // Both sources add up (before the cap)
   const both = evaluate({ model, championId: 2, role: 'top', personal: { history: personal.history, team: personal.history } });
   assert.ok(both.personal >= mine.personal);

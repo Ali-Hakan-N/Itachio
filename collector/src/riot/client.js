@@ -80,6 +80,7 @@ class RiotClient {
     this.requests = 0;
     this.limitSpec = String(limits);
     this.urgent = 0; // priority work running
+    this.gate = null; // async () => resolves when requests may go on (see model/idle.js makeGate)
   }
 
   /** Runs fn(api) ahead of every other request: api is this client with priority */
@@ -118,6 +119,7 @@ class RiotClient {
 
     while (!priority && this.urgent > 0) await this.sleep(PRIORITY_POLL_MS);
     for (let attempt = 1; ; attempt++) {
+      if (this.gate) await this.gate(); // waits while the computer is busy
       await limiter.acquire();
       this.requests++;
       let res;

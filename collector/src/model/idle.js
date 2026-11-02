@@ -44,4 +44,37 @@ async function busyNow(log = () => {}) {
 
 const describe = ({ load, game }) => (game ? 'League game is running' : `GPU 3D load ${load}%`);
 
-module.exports = { busyNow, describe, GPU_BUSY_PERCENT };
+const GATE_POLL_MS = 60_000;
+const GATE_FREE_MS = 60_000;
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A gate the collector passes before every request: free passes at once (the answer is
+ * kept GATE_FREE_MS), busy waits here, checking every GATE_POLL_MS, until the computer is
+ * free or the run is stopping. One check at a time, however many callers wait.
+ */
+function makeGate({ log = () => {}, isStopped = () => false, probe = busyNow, sleep = sleepMs, pollMs = GATE_POLL_MS, freeMs = GATE_FREE_MS } = {}) {
+  let freeUntil = 0;
+  let pending = null;
+  const wait = async () => {
+    let paused = false;
+    for (;;) {
+      const state = await probe();
+      if (!state.busy || isStopped()) {
+        if (paused) log('collector: computer is free, resuming');
+        freeUntil = Date.now() + freeMs;
+        return;
+      }
+      if (!paused) log(`collector: paused while the computer is busy (${describe(state)})`);
+      paused = true;
+      await sleep(pollMs);
+    }
+  };
+  return async () => {
+    if (Date.now() < freeUntil) return;
+    pending ||= wait().finally(() => (pending = null));
+    await pending;
+  };
+}
+
+module.exports = { busyNow, describe, makeGate, GPU_BUSY_PERCENT };

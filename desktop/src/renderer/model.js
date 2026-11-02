@@ -97,14 +97,14 @@
   const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
   const LANE_CALL = 0.6; // a lane is ahead or behind beyond this many standard deviations of its role (game plan and lane penalty)
   const EDGE_PCT = 1; // game plan: an edge counts from this many percentage points of win chance
-  const PERSONAL_WEIGHT = 0.5;
+  const PERSONAL_WEIGHT = 1;
   const POOL_GAMES = 10; // games on a champion for it to count fully in a player's pool
   const POOL_MASTERY = 0.4; // mastery (0-1) that makes a champion comfortable without results
   const POOL_NORMAL = 4; // a pool of this size changes nothing in the pick order
   const POOL_WEIGHT = 6; // pick order points between a pool of none and a pool of POOL_NORMAL
   const LANE_PENALTY = 0.5; // share of a lane loss beyond the threshold that is taken off the logit
   const LANE_AMORTIZE = 1.5; // a lane loss is forgiven once the composition gain is this many times the loss
-  const PERSONAL_CAP = 0.4; // in standard deviations of strength
+  const PERSONAL_CAP = 1.5; // in standard deviations of strength
   const ROLE_PRIOR = 15; // pseudo-games shrinking a player's average on a role toward zero (line-up roles)
   const ROLE_EXPERIENCE = 0.4; // standard deviations for a role that is most of a player's games
   const POOL_DEPTH = 0.3; // standard deviations between a deep and a shallow pool on the role

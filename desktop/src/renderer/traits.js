@@ -33,7 +33,7 @@
 268 Azir 9 0 2 1 2 1 3 2 3 0 0
 432 Bard 7 0 2 1 0 2 1 0 2 2 0
 200 Belveth 2 1 1 1 0 0 1 2 3 0 1
-53 Blitzcrank 8 1 2 2 0 0 0 0 1 3 0
+53 Blitzcrank 8 2 2 2 0 0 0 0 1 3 0
 63 Brand 10 0 1 0 2 0 3 3 1 0 0
 201 Braum 3 3 3 2 0 3 1 0 1 0 0
 233 Briar 1 1 1 1 0 0 0 1 1 2 1
@@ -94,7 +94,7 @@
 236 Lucian 1 0 0 0 1 0 0 2 1 1 0
 117 Lulu 9 0 2 0 1 3 0 1 2 0 0
 99 Lux 10 0 2 0 3 1 2 2 1 1 0
-54 Malphite 8 3 3 3 0 0 3 1 1 0 0
+54 Malphite 8 3 3 3 0 0 3 2 1 0 0
 90 Malzahar 10 0 3 0 1 0 2 3 1 1 0
 57 Maokai 8 3 3 3 0 1 2 1 2 0 0
 11 MasterYi 0 0 0 0 0 0 0 1 2 0 2
@@ -111,11 +111,11 @@
 518 Neeko 10 0 3 2 1 0 3 2 1 2 0
 76 Nidalee 9 0 0 0 3 0 0 2 1 2 0
 895 Nilah 0 0 1 1 0 0 1 2 2 0 0
-56 Nocturne 0 1 1 3 0 0 0 1 1 3 0
+56 Nocturne 0 1 2 3 0 0 0 1 1 3 0
 20 Nunu 7 2 2 3 0 0 2 1 1 1 0
 2 Olaf 0 2 1 2 0 0 0 2 1 0 1
 61 Orianna 10 0 2 1 1 1 3 2 2 0 0
-516 Ornn 3 3 3 3 0 1 3 1 2 0 0
+516 Ornn 3 3 3 3 0 1 3 2 2 0 0
 80 Pantheon 0 1 2 2 0 0 0 1 0 2 0
 78 Poppy 1 3 3 2 0 2 0 1 1 2 0
 555 Pyke 0 1 2 2 0 0 0 0 1 3 0
@@ -181,6 +181,7 @@
 83 Yorick 2 2 1 0 0 0 0 2 1 0 3
 804 Yunara 3 0 0 0 1 0 1 2 3 0 0
 904 Zaahen 0 2 1 1 0 0 0 1 2 1 1
+350 Yuumi 9 0 1 0 1 3 0 0 3 0 0
 154 Zac 8 3 3 3 0 0 2 2 1 1 0
 238 Zed 0 0 0 0 0 0 0 1 1 3 1
 221 Zeri 0 0 0 0 1 0 1 3 3 0 0
@@ -382,10 +383,14 @@ Orianna MonkeyKing 3
 
     let needs = 0;
     const lacking = [];
+    const floors = {};
+    const sums = {};
     for (const k of Object.keys(WEIGHT)) {
       const plan = ARCH.reduce((s, a, i) => s + share[i] * (PLAN[a][k] ?? BASE[k]), 0);
       const floor = (1 - trust) * BASE[k] + trust * plan;
       if (floor <= 0) continue;
+      floors[k] = floor;
+      sums[k] = sum(k);
       const projected = sum(k) + open * (AVG[k] ?? 0);
       const short = Math.max(0, floor - projected) / floor;
       if (short > 0) {
@@ -395,11 +400,46 @@ Orianna MonkeyKing 3
     }
 
     // Agreement: a team built around one plan has one dominant lean
-    const coherence = n >= 3 ? COHERENCE_WEIGHT * (Math.max(0, COHERENCE_FLOOR - Math.max(...lean) / total) / 0.1) ** 2 : 0;
-    return { damage, needs, coherence, penalty: damage + needs + coherence, lacking };
+    const dominant = Math.max(...lean) / total;
+    const coherence = n >= 3 ? COHERENCE_WEIGHT * (Math.max(0, COHERENCE_FLOOR - dominant) / 0.1) ** 2 : 0;
+    return { damage, needs, coherence, penalty: damage + needs + coherence, lacking, info: { n, open, share, dominant, floors, sums, ap: now } };
   }
 
-  const api = { traitsOf, pairBonus, teamFit, KEYS, BY_ID, BY_NAME };
+  const PLAN_NAME = { pk: 'Poke / siege', en: 'Front-to-back teamfight', pe: 'Protect the carry', pi: 'Pick / catch', sp: 'Split push' };
+  const NEED_NAME = { fr: 'Frontline', cc: 'Crowd control', en: 'Engage', wc: 'Waveclear', ac: 'Area control', pk: 'Long-range poke', pe: 'Peel', sc: 'Scaling', pi: 'Pick power', sp: 'Split pressure' };
+
+  /**
+   * What a team is turning into, for the draft screen: the plan its picks lean towards
+   * (null while there are fewer than two picks), how sure that is, the traits the plan
+   * needs with what the team has so far, and the damage split.
+   * Returns { n, plan, label, confidence, mixed, plans: [{ key, name, share }], needs: [{ key, name, have, need, state }], damage: { ap, state } }
+   * where a need's state is 'done', 'ontrack' (the picks to come can still reach it) or 'missing'.
+   */
+  function compProfile(team) {
+    const fit = teamFit(team);
+    const { n, open, share, dominant, floors, sums, ap } = fit.info || { n: 0, open: 5, share: ARCH.map(() => 0), dominant: 0, floors: {}, sums: {}, ap: 0.5 };
+    const plans = ARCH.map((key, i) => ({ key, name: PLAN_NAME[key], share: share[i] || 0 })).sort((a, b) => b.share - a.share);
+    const plan = n >= 2 ? plans[0].key : null;
+    const mixed = n >= 4 && dominant < COHERENCE_FLOOR + 0.04;
+    const needs = Object.keys(floors).map((key) => {
+      const have = sums[key];
+      const need = floors[key];
+      const state = have >= need ? 'done' : have + open * (AVG[key] ?? 0) >= need ? 'ontrack' : 'missing';
+      return { key, name: NEED_NAME[key], have: Math.round(have * 10) / 10, need: Math.round(need * 10) / 10, state };
+    }).sort((a, b) => b.need - a.need);
+    return {
+      n,
+      plan,
+      label: !n ? 'Open draft' : !plan ? 'Taking shape' : mixed ? 'No clear plan' : PLAN_NAME[plan],
+      confidence: plan ? plans[0].share : 0,
+      mixed,
+      plans,
+      needs,
+      damage: { ap, state: !n ? 'open' : ap > AP_HIGH ? 'ap-heavy' : ap < AP_LOW ? 'ad-heavy' : 'balanced' },
+    };
+  }
+
+  const api = { traitsOf, pairBonus, teamFit, compProfile, KEYS, BY_ID, BY_NAME };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Traits = api;
 })(typeof window !== 'undefined' ? window : globalThis);

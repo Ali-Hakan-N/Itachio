@@ -10,6 +10,22 @@ const fs = require('node:fs');
 const { createClient } = require('@supabase/supabase-js');
 const { toRows } = require('./normalize');
 const { writeRows, writeMetaSourceSnapshot, writeMetaBuilds, loadChampions, startRun, finishRun } = require('./writer');
+const idle = require('./model/idle');
+
+// The MetaSRC scraper runs once a day at most, and only while the computer is free
+const SCRAPE_EVERY_MS = 20 * 60 * 60_000;
+const SCRAPE_STATE = path.join(__dirname, '..', 'data', 'metasrc-last.json');
+function lastScrape() {
+  try {
+    return Number(JSON.parse(fs.readFileSync(SCRAPE_STATE, 'utf8')).at) || 0;
+  } catch {
+    return 0;
+  }
+}
+function markScrape() {
+  fs.mkdirSync(path.dirname(SCRAPE_STATE), { recursive: true });
+  fs.writeFileSync(SCRAPE_STATE, JSON.stringify({ at: Date.now() }));
+}
 
 // Fewer meta rows than this means the data is incomplete: keep the current scores
 const MIN_META_ROWS = 50;
@@ -33,6 +49,7 @@ function parseArgs(argv) {
     if (argv[i] === '--dry-run') args.dryRun = true;
     else if (argv[i] === '--source') args.source = argv[++i];
     else if (argv[i] === '--log') args.log = argv[++i];
+    else if (argv[i] === '--force') args.force = true;
   }
   return args;
 }
@@ -67,6 +84,11 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  if (source.name === 'metasrc' && !args.dryRun) {
+    const ago = Date.now() - lastScrape();
+    if (!args.force && ago < SCRAPE_EVERY_MS) return log(`metasrc: scraped ${Math.round(ago / 3_600_000)}h ago, once a day is enough (--force to scrape anyway)`);
+    await idle.makeGate({ log: (m) => log(m.replace('collector:', 'metasrc:')) })();
+  }
   const runId = args.dryRun ? null : await startRun(client, source.name);
   try {
     const champions = await loadChampions(client);
@@ -124,6 +146,7 @@ async function main() {
       error: result.valid === false ? result.note : null,
       stats: { ...result, source: output.stats || null },
     });
+    if (source.name === 'metasrc' && result.valid !== false) markScrape();
     log(result.valid === false ? 'completed with source warning' : 'done');
   } catch (err) {
     if (runId) await finishRun(client, runId, { status: 'error', error: String(err.message || err) }).catch(() => {});
