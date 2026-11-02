@@ -18,6 +18,7 @@ const { counterpickTendency } = require('./choice');
 const { exportComp } = require('./comp');
 const { analyzeBuilds, analyzeSituations, loadDdragon } = require('./builds');
 const { makeOutOfTimeObservations, selectModelWeight, MAX_MODEL_WEIGHT } = require('./ensemble');
+const { traitProfiles } = require('./traits');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'matches');
 const SCORE_SD = 15;
@@ -113,8 +114,11 @@ function loadMatches(patch) {
  *   syn:   [[a, ra, b, rb, weight, se]]   same team, a:ra before b:rb
  *   vs:    [[a, ra, b, rb, weight, se]]   a against b; b against a is -weight
  *   ts/tv: { "<classA>:<classB>": weight }   classes sorted; tv is classA against classB
- *   fm:    { k, S, P, Q: { "<champ>:<role>": vector } } latent pairs, when that layer was kept:
- *          synergy <S_a, S_b>, a against b <P_a, Q_b> - <P_b, Q_a>
+ *   fm:    { k, S, P, Q: { "<champ>:<role>": vector }, prior: { S, P, Q: { "<class>:<role>": vector } } }
+ *          latent pairs, when that layer was kept: synergy <S_a, S_b>, a against b
+ *          <P_a, Q_b> - <P_b, Q_a>. A champion:role too rare to have its own vectors uses the
+ *          games-weighted average of its class in that role, so never-seen pairs get an estimate
+ *   traitProfile: { "<champ>": { mg, cc, fr, n } } measured traits (traits.js)
  *   synE/vsE: [[a, ra, b, rb, weight]] pairs through the early game layer (model/early.js),
  *          when it was kept: added to syn/vs (same sign rules)
  *   early: { matches, kept, accuracy of the early state alone, kappa, beta, laneMean, laneVs, objMean } or null. When kept,
@@ -268,10 +272,25 @@ function exportModel(model, { share, games, tags, patch, matches, matchRows = nu
   if (model.fm) {
     fm = { k: model.fm.k, S: {}, P: {}, Q: {} };
     const k = model.fm.k;
+    const pooled = { S: new Map(), P: new Map(), Q: new Map() };
+    const seen = new Map();
     model.fm.entities.forEach((key, e) => {
-      if ((games.get(key) || 0) < FM_MIN_GAMES) return;
-      for (const name of ['S', 'P', 'Q']) fm[name][key] = Array.from(model.fm[name].subarray(e * k, e * k + k), (v) => round(v, 4));
+      const n = games.get(key) || 0;
+      if (n < FM_MIN_GAMES) return;
+      const [champion, role] = key.split(':');
+      const group = `${tags.get(Number(champion)) || 'None'}:${role}`;
+      seen.set(group, (seen.get(group) || 0) + n);
+      for (const name of ['S', 'P', 'Q']) {
+        const v = model.fm[name].subarray(e * k, e * k + k);
+        fm[name][key] = Array.from(v, (x) => round(x, 4));
+        const sum = pooled[name].get(group) || new Float64Array(k);
+        for (let d = 0; d < k; d++) sum[d] += n * v[d];
+        pooled[name].set(group, sum);
+      }
     });
+    fm.prior = Object.fromEntries(['S', 'P', 'Q'].map((name) => [name, Object.fromEntries(
+      [...pooled[name]].map(([group, sum]) => [group, Array.from(sum, (x) => round(x / seen.get(group), 4))]),
+    )]));
   }
   const throughEarly = (list) =>
     (list || [])
@@ -323,6 +342,7 @@ function exportModel(model, { share, games, tags, patch, matches, matchRows = nu
     trainedAt: new Date().toISOString(),
     matches,
     blindability: matchRows ? analyzeBlindability(matchRows, banRate || {}) : null,
+    traitProfile: matchRows ? traitProfiles(matchRows) : null,
     roles: ROLES,
     pointsPerLogit: round(pointsPerLogit, 3),
     center: round(mean, 5),
@@ -451,6 +471,7 @@ function writeReport({ data, metrics: m, champions, seconds, ensemble, log }) {
     logloss: m.logloss,
     alwaysFiftyLogloss: m.baseLogloss,
     layers: m.layers.map((l) => ({ name: l.name, kept: l.accepted, proven: l.proven ?? true, gain: l.improvement, se: l.se })),
+    recency: m.recency,
     calibration: m.calibration,
     ensemble,
     pointsPerLogit: data.pointsPerLogit,

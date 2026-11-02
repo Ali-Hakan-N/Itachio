@@ -18,8 +18,10 @@
 // Familiarity: champions a player rarely played. F is the average of both parts over
 // games where the player had fewer than FIRST_GAMES earlier games on that champion,
 // pooled over the team. A champion with n games gets F × N_FAM / (N_FAM + n) on top, and
-// one never played gets F. delta = early + late + familiarity, in log-odds, is what the
-// app adds to that player's score for the champion.
+// one never played gets F. Form: the player's newest FORM_GAMES on the champion once more,
+// shrunk with TAU_FORM and limited to FORM_CAP, so a champion they are on a run with moves
+// up sooner. delta = early + late + familiarity + form, in log-odds, is what the app adds
+// to that player's score for the champion.
 
 const { laneAdvantage } = require('../model/early');
 const { matchLogit } = require('../model/predict');
@@ -32,6 +34,10 @@ const FIRST_GAMES = 3;
 const N_FAM = 10;
 const F_PRIOR = 20; // games of evidence before the familiarity estimate moves freely
 const MASTERY_GAIN = 1.5; // full mastery makes a champion's games count 2.5 times as much against the priors
+const FORM_GAMES = 20;
+const FORM_MIN_GAMES = 5;
+const TAU_FORM = 25; // in units of p(1-p): about 100 games
+const FORM_CAP = 0.25;
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 
@@ -67,6 +73,14 @@ function scoreGames(data, games) {
     seen.set(key, (seen.get(key) || 0) + 1);
   }
   return out;
+}
+
+/** Recent run on a champion, from its games oldest first, relative to the player's average */
+function formOf(games) {
+  if (games.length < FORM_MIN_GAMES) return 0;
+  const recent = games.slice(-FORM_GAMES);
+  const form = recent.reduce((a, g) => a + g.l, 0) / (recent.reduce((a, g) => a + g.weight, 0) + TAU_FORM);
+  return Math.max(-FORM_CAP, Math.min(FORM_CAP, form));
 }
 
 /** Early shrinkage from within/between champion variance over all players (method of moments) */
@@ -147,7 +161,7 @@ function analyzePlayers(data, byPlayer, mastery = new Map()) {
       wins: g.games.filter((x) => x.win).length,
       early,
       late,
-      delta: early + late + (familiarity * N_FAM) / (N_FAM + n * f),
+      delta: early + late + (familiarity * N_FAM) / (N_FAM + n * f) + formOf(g.games),
       mastery: Math.round(m * 1000) / 1000,
     });
   }

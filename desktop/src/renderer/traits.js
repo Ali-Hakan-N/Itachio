@@ -215,7 +215,33 @@
     BY_NAME.set(name, Number(id));
   }
 
-  const traitsOf = (id, tag) => BY_ID.get(id) || toProfile(FALLBACK[tag] || FALLBACK.None);
+  // Traits measured from matches (collector/src/model/traits.js), set from the model snapshot.
+  // A measured value moves the hand score by n / (n + LEARNED_PRIOR), at most LEARNED_MAX of the
+  // way; a champion missing from the table has no hand score to keep and follows the data fully.
+  const LEARNED_PRIOR = 200;
+  const LEARNED_MAX = 0.6;
+  const NEW_CHAMPION_PRIOR = 20;
+  let learned = null;
+  let blended = new Map();
+  function useLearnedTraits(profile) {
+    learned = profile || null;
+    blended = new Map();
+  }
+  function blend(id, tag) {
+    const base = BY_ID.get(id);
+    const own = learned?.[id];
+    if (!own) return base || toProfile(FALLBACK[tag] || FALLBACK.None);
+    const key = `${id}:${base ? '' : tag}`;
+    if (blended.has(key)) return blended.get(key);
+    const start = base || toProfile(FALLBACK[tag] || FALLBACK.None);
+    const w = base ? Math.min(LEARNED_MAX, own.n / (own.n + LEARNED_PRIOR)) : own.n / (own.n + NEW_CHAMPION_PRIOR);
+    const out = { ...start };
+    for (const k of ['mg', 'cc', 'fr']) if (Number.isFinite(own[k])) out[k] = start[k] + w * (own[k] - start[k]);
+    blended.set(key, out);
+    return out;
+  }
+
+  const traitsOf = (id, tag) => blend(id, tag);
 
   // Duo pairs worth taking together (3 strong, 2 good, 1 nice), same name keys as RAW
   const PAIR_TEXT = `
@@ -405,8 +431,8 @@ Orianna MonkeyKing 3
     return { damage, needs, coherence, penalty: damage + needs + coherence, lacking, info: { n, open, share, dominant, floors, sums, ap: now } };
   }
 
-  const PLAN_NAME = { pk: 'Poke and Siege', en: 'Front-to-back Teamfight', pe: 'Protect the Carry', pi: 'Pick and Catch', sp: 'Split Push' };
-  const NEED_NAME = { fr: 'Frontline', cc: 'Crowd control', en: 'Engage', wc: 'Waveclear', ac: 'Area control', pk: 'Long-range poke', pe: 'Peel', sc: 'Scaling', pi: 'Pick power', sp: 'Split pressure' };
+  const PLAN_NAME = { pk: 'Poke', en: 'Front-to-Back', pe: 'Protect the Carry', pi: 'Pick', sp: 'Split Push' };
+  const NEED_NAME = { fr: 'Frontline', cc: 'Crowd control', en: 'Engage', wc: 'Waveclear', ac: 'Area control', pk: 'Poke', pe: 'Peel', sc: 'Scaling', pi: 'Pick power', sp: 'Split push' };
 
   /**
    * What a team is turning into, for the draft screen: the plan its picks lean towards
@@ -430,7 +456,7 @@ Orianna MonkeyKing 3
     return {
       n,
       plan,
-      label: !n ? 'Open draft' : !plan ? 'Taking shape' : mixed ? 'No clear plan' : PLAN_NAME[plan],
+      label: !n ? 'Open draft' : !plan ? 'Forming' : mixed ? 'Mixed' : PLAN_NAME[plan],
       confidence: plan ? plans[0].share : 0,
       mixed,
       plans,
@@ -466,7 +492,7 @@ Orianna MonkeyKing 3
     return trust * (PLAN_SD * alignment + FILL_SD * (weight ? filled / weight : 0));
   }
 
-  const api = { traitsOf, pairBonus, teamFit, planSupport, compProfile, KEYS, BY_ID, BY_NAME };
+  const api = { traitsOf, useLearnedTraits, pairBonus, teamFit, planSupport, compProfile, KEYS, BY_ID, BY_NAME };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Traits = api;
 })(typeof window !== 'undefined' ? window : globalThis);

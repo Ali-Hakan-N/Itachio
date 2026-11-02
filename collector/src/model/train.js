@@ -28,6 +28,10 @@
 // and weak ones more), kept only if it validates better: real effects keep their size
 // while noise goes to zero.
 //
+// Recency: newer matches can count more (a half-life on every match's weight), so a hotfix
+// shows in the next training. The half-life is tried on the newest matches against no
+// decay and only used when it beats it by more than PROVEN_SE standard errors.
+//
 // The chosen model is then calibrated (Platt scaling on the cross-validated predictions),
 // fitted on all matches, and each explicit weight gets an approximate standard error
 // (Laplace).
@@ -63,6 +67,11 @@ const ADAPTIVE_ROUNDS = 3; // reweighting passes, close to a sparse (L1-like) pr
 const NON_POSITIVE = new Set(['o']);
 const DEFAULTS = { folds: 5, latentDim: 6, tuneIters: 200, finalIters: 500, maxTuneRows: 60000, maxFinalRows: 250000, lr: 0.05 };
 const PROVEN_SE = 2;
+const RECENCY_HALF_LIVES = [3, 7, 14, 30]; // days
+const RECENCY_MIN_TIMED = 5000; // matches with a start time, to try a half-life
+const RECENCY_MIN_SPAN_DAYS = 2;
+const RECENCY_HOLDOUT = 0.2; // the newest share of the matches with a start time
+const DAY_MS = 86_400_000;
 
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const clampP = (p) => Math.min(Math.max(p, 1e-9), 1 - 1e-9);
@@ -72,6 +81,44 @@ function hash(id) {
   let h = 2166136261;
   for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
   return h >>> 0;
+}
+
+/**
+ * Weight of every match: halves every halfLifeDays before referenceMs. A match without a
+ * start time counts as old as the oldest one that has it. Null when there are no start times.
+ */
+function recencyWeights(matches, halfLifeDays, referenceMs) {
+  let oldest = Infinity;
+  for (const m of matches) if (m.t && m.t < oldest) oldest = m.t;
+  if (oldest === Infinity) return null;
+  return Float64Array.from(matches, (m) => 0.5 ** (Math.max(0, referenceMs - (m.t || oldest)) / DAY_MS / halfLifeDays));
+}
+
+/**
+ * Tries the half-lives on the newest matches, fitted on the matches before them with the
+ * layers already chosen (without their slower extras). Returns { halfLifeDays, gain, se, tried }
+ * with halfLifeDays null unless one is proven better than no decay; null when there are too
+ * few start times to tell.
+ */
+function selectRecency(D, matches, cfg, o, log) {
+  const timed = matches.map((m, r) => [m.t, r]).filter(([t]) => t).sort((a, b) => a[0] - b[0]);
+  if (timed.length < RECENCY_MIN_TIMED || timed.at(-1)[0] - timed[0][0] < RECENCY_MIN_SPAN_DAYS * DAY_MS) return null;
+  const start = timed[Math.floor(timed.length * (1 - RECENCY_HOLDOUT))][0];
+  const test = timed.filter(([t]) => t >= start).map(([, r]) => r);
+  const inTest = new Set(test);
+  const allFit = matches.map((_, r) => r).filter((r) => !inTest.has(r));
+  const fitRows = subsample(allFit, o.maxTuneRows);
+  const light = { groups: cfg.groups, tau: cfg.tau, fm: null, adaptive: new Set() };
+  const scores = (weights) => predict(D, test, fit(D, fitRows, light, { iters: o.tuneIters, weights, effectiveRows: allFit.length }), light);
+  const base = scores(null);
+  const tried = RECENCY_HALF_LIVES.map((days) => {
+    const weights = recencyWeights(matches, days, start);
+    const { improvement, se } = compare(D, test, base, scores(weights));
+    log(`model: recency ${days}d    gain ${(improvement * 1000).toFixed(3)} ± ${(se * 1000).toFixed(3)} ×1e-3 on the newest ${test.length} matches`);
+    return { days, gain: improvement, se };
+  });
+  const best = tried.reduce((a, b) => (b.gain > a.gain ? b : a));
+  return { halfLifeDays: best.gain > PROVEN_SE * best.se ? best.days : null, gain: best.gain, se: best.se, tried };
 }
 
 /** Adds dense columns (one value per row) to a design matrix, in place */
@@ -254,7 +301,7 @@ function fit(D, rows, cfg, opts = {}) {
   return params;
 }
 
-function fitOnce(D, rows, cfg, scale, { iters, lr = DEFAULTS.lr, seed = 1, effectiveRows = rows.length } = {}) {
+function fitOnce(D, rows, cfg, scale, { iters, lr = DEFAULTS.lr, seed = 1, effectiveRows = rows.length, weights = null } = {}) {
   const cols = columnsFor(D, cfg, effectiveRows, scale);
   const F = D.keys.length;
   const k = cfg.fm ? cfg.fm.k : 0;
@@ -273,7 +320,13 @@ function fitOnce(D, rows, cfg, scale, { iters, lr = DEFAULTS.lr, seed = 1, effec
     lat = ['S', 'P', 'Q'].map((name) => ({ name, g: new Float64Array(E * k), m: new Float64Array(E * k), v: new Float64Array(E * k) }));
   }
   const tmp = makeTmp(Math.max(k, 1));
-  const n = rows.length;
+  // With match weights the gradient is their weighted mean, and the penalty is per total weight
+  let n = rows.length;
+  if (weights) {
+    n = 0;
+    for (const r of rows) n += weights[r];
+    effectiveRows *= n / rows.length;
+  }
   const b1 = 0.9;
   const b2 = 0.999;
 
@@ -282,7 +335,7 @@ function fitOnce(D, rows, cfg, scale, { iters, lr = DEFAULTS.lr, seed = 1, effec
     if (lat) for (const l of lat) l.g.fill(0);
     let gb = 0;
     for (const r of rows) {
-      const g = sigmoid(logit(D, r, params, cols, k, tmp)) - D.y[r];
+      const g = (sigmoid(logit(D, r, params, cols, k, tmp)) - D.y[r]) * (weights ? weights[r] : 1);
       gb += g;
       for (let j = D.rowPtr[r]; j < D.rowPtr[r + 1]; j++) {
         const c = D.cols[j];
@@ -554,8 +607,13 @@ function train(matches, ctx, options = {}) {
   const cv = summary(D, rows, zFinal);
   const after = reliability(D, rows, zFinal);
 
+  const recency = o.recency === false ? null : selectRecency(D, matches, current, o, log);
+  if (recency) log(`model: recency       ${recency.halfLifeDays ? `half-life ${recency.halfLifeDays} days` : 'no decay, none proven better'}`);
+  const newest = matches.reduce((t, m) => Math.max(t, m.t || 0), 0);
+  const weights = recency?.halfLifeDays ? recencyWeights(matches, recency.halfLifeDays, newest) : null;
+
   const finalRows = subsample(rows, o.maxFinalRows);
-  const params = fit(D, finalRows, current, { iters: o.finalIters, effectiveRows: rows.length });
+  const params = fit(D, finalRows, current, { iters: o.finalIters, effectiveRows: rows.length, weights });
   const se = standardErrors(D, finalRows, params, current, rows.length);
   // Calibration goes into every weight, so the app's scores are calibrated too
   for (let i = 0; i < params.w.length; i++) params.w[i] *= cal.a;
@@ -580,6 +638,7 @@ function train(matches, ctx, options = {}) {
     logloss: cv.logloss,
     baseLogloss: baseline.logloss,
     layers,
+    recency,
     calibration: { a: cal.a, b: cal.b, eceBefore: before.ece, eceAfter: after.ece, bins: after.bins },
     trainSeconds: Math.round((Date.now() - t0) / 1000),
     trainMatches: n, // kept for older readers
@@ -627,4 +686,4 @@ function earlyResult(D, early, cfg, params, se, log) {
   return out;
 }
 
-module.exports = { train, fit, design, predict, appendColumns, LAYERS };
+module.exports = { train, fit, design, predict, appendColumns, recencyWeights, selectRecency, LAYERS };

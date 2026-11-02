@@ -10,7 +10,7 @@ Itachio’da iki ayrı model yolu vardır:
 |---|---|---|
 | Collector lojistik draft modeli | Aktif üretim yolu | Riot Flex ve Solo/Duo maçlarından yerel olarak eğitilir; model snapshot’ı Supabase’e gönderilir; Electron bu snapshot’la champ-select önerisi, ban, pick-order, game plan ve draft geçmişi skorlarını üretir. |
 | MetaSRC draft verisi | Aktif dış kaynak ve cold-start prior’ı | Meta, synergy ve matchup tabloları sağlar. Collector bunları tarihli snapshot’larda saklar; desktop yeni model yokken bunları öneri fallback’i olarak kullanır ve düşük model confidence’ında ensemble’a katar. Build collector’ı MetaSRC build parçalarını da Riot maçlarının build istatistikleriyle harmanlar. |
-| `analytics/` TypeScript paketi | Deneysel, üretim desktop’ına bağlı değil | 58 boyutlu Itachio feature vektörü, ClickHouse ingest/queries, Node logistic → ONNX, pairwise item scorer ve cross-fitted causal estimator içerir. Örnekleri henüz current desktop modelinin yerini alacak kaliteye ulaşmadı. |
+| `analytics/` TypeScript paketi | Deneysel, üretim desktop’ına bağlı değil | 58 boyutlu Itachio feature vektörü, ClickHouse ingest/queries, histogram GBDT + sparse katman → ONNX, pairwise item scorer ve cross-fitted causal estimator içerir. Örnekleri henüz current desktop modelinin yerini alacak kaliteye ulaşmadı. |
 
 Aktif veri yolu:
 
@@ -44,7 +44,7 @@ Collector’ın ana girişi [collector/src/run.js](../collector/src/run.js), se�
 - Match-V5 hasar, iyileştirme ve CC ölçümleri;
 - participant ID’ler, timeline isteğini sonradan eşleştirmek için.
 
-Kuyruk dışı oyunlar, remakeler, eksik katılımcılar ve rol başına tek champion şartını karşılamayan maçlar analiz için elenir. Kaynak API şekilleri ve limitleri Riot’ın [Match-V5](https://developer.riotgames.com/apis#match-v5) dokümantasyonundadır.
+Takımların aldığı Void Grub sayısı da `teams[].objectives.horde.kills` alanından okunur (compact `g`). Kuyruk dışı oyunlar, remakeler, eksik katılımcılar ve rol başına tek champion şartını karşılamayan maçlar analiz için elenir. Kaynak API şekilleri ve limitleri Riot’ın [Match-V5](https://developer.riotgames.com/apis#match-v5) dokümantasyonundadır.
 
 ### Compact maç kaydı
 
@@ -90,6 +90,8 @@ Blue takım feature’ları pozitif, red takım feature’ları negatif yönde e
 
 [collector/src/model/early.js](../collector/src/model/early.js), yalnızca sonuçtan daha az gürültülü erken sinyalleri kullanır. Önce lane erken durumundan ve ilk objective sonuçlarından bir early-state win logit’i öğrenir. Sonra bu fiyatlanmış erken avantajı draft strength ve pair feature’larından tahmin eder. Cross-fitting sayesinde bir maçın erken feature’ı, o maçın sonucu ile eğitilmiş katsayıdan gelmez. En az 3.000 erken oyun verili maç olmadan bu katman eklenmez.
 
+Early state ayrıca Void Grub farkını (`g`, altı grub’ın üçte biri cinsinden) taşır; grub’lar haritadan erken çekildiği için sayı maç sonucuna karışmaz. Bu alan olmayan eski maçlarda 0’dır. Grub ve ilk ejder dakikası bu katmanda yoktur: dakika yalnız timeline’dan gelir ve timeline yalnız maçların bir alt kümesi için çekilir.
+
 Turret plate, solo kill ve oyun sonu sayıları erken oyun target’ına katılmaz; bunlar maç boyunca oluşur ve sonuçla karışır. Erken katman zayıfsa held-out gain eşiğini geçmeyebilir; exported `early.kept` bunu belirtir.
 
 ### Composition katmanı
@@ -112,7 +114,8 @@ Eğitim ve seçim akışı:
 3. Champion/class synergy, champion/class matchup, composition pillars, factorization-machine latent pairs sırayla denenir.
 4. Her katmanda tau (pseudo-game regularization) grid’i iki validation split üzerinde denenir. Pair katmanları ayrıca adaptive shrinkage dener.
 5. Beş fold out-of-fold tahminleri ile katmanın önceki modele göre logloss gain’i ve paired standard error hesaplanır. “Proven” kriteri `gain > 2 × SE`’dir; katmanlar modelden atılmayabilir ama raporlanır.
-6. OOF tahminlerine Platt scaling uygulanır, final katsayılar all-match fit’ten ve yaklaşık diagonal Laplace standard error’larından çıkarılır.
+6. Recency: en yeni %20 zamanlı maçta `3/7/14/30` günlük yarı ömürler “decay yok” ile karşılaştırılır (`selectRecency`, seçilmiş katmanların adaptive/latent olmayan hâli). Yarı ömür yalnız `gain > 2 × SE` ise final fit’te maç ağırlığı olur; sonuç `metrics.recency`’dedir. En az 5.000 zamanlı maç ve 2 günlük aralık gerekir. Başlangıç zamanı olmayan maçlar en eski maç sayılır.
+7. OOF tahminlerine Platt scaling uygulanır, final katsayılar all-match fit’ten ve yaklaşık diagonal Laplace standard error’larından çıkarılır.
 
 Varsayılan trainer ayarları: 5 fold, latent boyut 6, tuning 200 iteration, final fit 500 iteration; tuning satır sınırı 60.000, final fit örnekleme sınırı 250.000. Bu sınırlar CV’nin tüm retained örnekleri değerlendirmesini engellemez; yalnızca fit belleğini sınırlar. Kaynak kodu ve feature girişleri [collector/src/model/train.js](../collector/src/model/train.js) içinde.
 
@@ -126,7 +129,8 @@ Varsayılan trainer ayarları: 5 fold, latent boyut 6, tuning 200 iteration, fin
 | `off` | Her rolün off-role katsayısı. |
 | `syn`, `vs`, `ts`, `tv` | Öğrenilmiş champion/class pair ağırlıkları. |
 | `synE`, `vsE`, `early` | Early game layer ve lane/objective summary. |
-| `fm` | Latent `S/P/Q` vektörleri; az verili champion-role çiftleri dışarıda bırakılır. |
+| `fm` | Latent `S/P/Q` vektörleri; az verili champion-role çiftleri dışarıda bırakılır. `fm.prior`, sınıf:rol başına oyun ağırlıklı ortalama vektördür; kendi vektörü olmayan champion (yeni veya nadir) bunu kullanır, böylece hiç oynanmamış çift de bir tahmin alır. |
+| `traitProfile` | Maçlardan ölçülen `mg`, `cc`, `fr` ve `n` ([model/traits.js](../collector/src/model/traits.js)). |
 | `comp`, `pillars`, `tags` | Öğrenilmiş composition ve class proxy’leri. |
 | `banRate`, `counterpick` | Ban frekansları ve real pick’lerden öğrenilen counterpick `lambda`. |
 | `center`, `pointsPerLogit`, `shareFloor` | Desktop’un sabit 0–100 sunum ölçeği parametreleri. |
@@ -209,19 +213,25 @@ Bunlar ayrı kavramlardır; UI/model alanları da ayrı kalmalıdır.
 - **Hasar dengesi**: Takımın magic payı, tank’ların hasarını azaltan ağırlıkla (`1 - 0.15·fr`) hesaplanır. `[0.22, 0.78]` bandı dışı ceza `1.2·(d/0.1)^1.5` sd’dir. Açık slotlar uç değerle (0.9/0.1) doldurulursa bile bant düzelmiyorsa tam ceza; düzeliyorsa yalnız hafif baskı (`0.4·(d/0.1)^1.2`) vardır. Böylece beş AD/AP takım oluşmaz, eksik kalan hasar tipi önerilerde öne çıkar.
 - **İhtiyaçlar**: Takım picklerinin eğilimi (`pk/en/pe/pi/sp` toplamlarının ortalamaya oranı) bir plan seçer: poke, engage/front-to-back, protect-the-carry, pick/dive veya split. Planın tam takım için gereken toplamları (frontline, CC, engage, waveclear, AoE ve plana özel poke/peel/pick/split) pick sayısıyla `trust = min(1, (n-1)/3)` kadar karışır. Kalan slotlar ortalama champion sayılır; `short = max(0, floor - projected)/floor` ve ceza `w·short^1.5`’tir (CC 2.0, frontline 1.8, poke 1.5 en ağır). Kimse mükemmel olmak zorunda değildir: bir joker eksik kalabilir, ceza yumuşaktır.
 - **Koordinasyon**: `n ≥ 3` için baskın eğilimin payı `0.34`’ün altına düşerse (poke + engage + pick karışımı) `((0.34 - pay)/0.1)^2` ceza gelir.
+- **Ölçülen trait’ler**: Snapshot’taki `traitProfile`, tablodaki `mg/cc/fr` değerlerini `n/(n+200)` kadar (en çok %60) ölçüme çeker; tabloda olmayan champion için ağırlık `n/(n+20)`’dir, sınıf profili yalnız başlangıçtır. `cc` ve `fr`, ölçülen champion’lar içindeki sıraya göre 0-3 ölçeğine yerleştirilir. Diğer trait’ler (engage, poke, peel...) maç verisinden ölçülmez ve elle kalır. `fr` için gereken hasar-alma alanı yeni toplanan maçlarla birikir.
 - **Duo prior’ı**: `synergy()` her çifte `ix.sd × pairBonus` ekler: elle seçilmiş ~85 duo (ADC-support, Yasuo-knock-up, Orianna-engage vb.; ağırlık 1-3 × 0.1 sd) ve trait’ten türeyen en çok 0.15 sd (engage + AoE takip, peel + scaling carry, iki poke, iki pick). Bu prior look-ahead, role-assignment ve typical-pick normalizasyonundan geçtiği için aynı rolde ortalama pick’e göre fark yaratır.
 - **Entegrasyon**: `scoreOne` takım cezasını candidate + mevcut ally’lerle `composition` parçasına ekler; `winParts` iki takımın cezasını farkıyla composition’a katar. Heuristik, kalibre öğrenilmiş olasılığın yerine geçmez; elle ayarlıdır ve [desktop/test/traits.test.js](../desktop/test/traits.test.js) ile korunur.
 
-- **Tutarl\u0131l\u0131k**: Trait puanlar\u0131 tek bir rubri\u011fe uyar ve [desktop/test/traits-consistency.test.js](../desktop/test/traits-consistency.test.js) ile korunur (aral\u0131k 0-3, `mg` 0-1; hard engage \u21d2 CC \u2265 2; frontline 3 \u21d2 CC \u2265 1; poke 3 \u21d2 frontline < 2; split 3 \u21d2 engage < 3; AoE 3 \u21d2 waveclear \u2265 2). Puanlar yazar\u0131n de\u011ferlendirmesidir, kullan\u0131c\u0131n\u0131n ki\u015fisel tablosu de\u011fildir; yeni \u00e7\u0131kan champion\u2019lar primary class\u2019tan t\u00fcretilir (\u00f6r. Locke).\n- **Comp g\u00f6stergesi**: `Traits.compProfile` her tak\u0131m\u0131n picklerinden hangi plana (poke, front-to-back, protect, pick, split) evrildi\u011fini, plan\u0131n g\u00fcvenini, plan\u0131n istedi\u011fi trait toplamlar\u0131n\u0131 (done / ontrack / missing) ve AP/AD dengesini \u00fcretir. Draft ekran\u0131nda \u201cYour comp\u201d ve \u201cEnemy comp\u201d kartlar\u0131 olarak g\u00f6sterilir; ilk iki pick\u2019ten sonra plan belirir, \u201cLook for\u201d sat\u0131r\u0131 kalan slotlar\u0131n neye ihtiyac\u0131 oldu\u011funu s\u00f6yler.\n\n### Bans, pick order ve game plan
+- **Tutarlılık**: Trait puanları tek bir rubriğe uyar ve [desktop/test/traits-consistency.test.js](../desktop/test/traits-consistency.test.js) ile korunur (aralık 0-3, `mg` 0-1; hard engage ⇒ CC ≥ 2; frontline 3 ⇒ CC ≥ 1; poke 3 ⇒ frontline < 2; split 3 ⇒ engage < 3; AoE 3 ⇒ waveclear ≥ 2). Puanlar yazarın değerlendirmesidir, kullanıcının kişisel tablosu değildir; yeni çıkan champion’lar primary class’tan türetilir (ör. Locke).
+- **Comp göstergesi**: `Traits.compProfile` her takımın picklerinden hangi plana (poke, front-to-back, protect, pick, split) evrildiğini, planın güvenini, planın istediği trait toplamlarını (done / ontrack / missing) ve AP/AD dengesini üretir. Draft ekranında iki kart olarak yalnız simgelerle gösterilir: plan simgeleri ve eğilim çizgisi, ihtiyaç simgeleri (renk = done / ontrack / missing) ve AD-AP çubuğu; ayrıntı tooltip’tedir.\n
+### Bans, pick order ve game plan
 
-- **Plan desteği** (`Traits.planSupport`): allies\u2019in kurdu\u011fu plana (payl\u0131 poke/engage/protect/pick/split e\u011filimi) candidate\u2019in kitinin ne kadar ait oldu\u011fu (`0.7 sd \u00d7 hizalanma`) ve plan\u0131n h\u00e2l\u00e2 eksik b\u0131rakt\u0131\u011f\u0131 trait\u2019lerin ne kadar\u0131n\u0131 kapatt\u0131\u011f\u0131 (`0.5 sd \u00d7 doldurma`) `composition` par\u00e7as\u0131na eklenir; plan netle\u015ftik\u00e7e (1 pick: 1/3, 3+ pick: tam) etkisi artar. \u0130lgisiz pick bonus almaz; di\u011fer kriterler (strength, matchup, lane, ki\u015fisel) ayn\u0131 logit i\u00e7inde dengelenmeye devam eder. UI\u2019da \u201cFits the comp plan\u201d sat\u0131r\u0131d\u0131r.\n- **Ban ge\u00e7mi\u015fi**: Lineup\u2019taki be\u015f ki\u015fi de team \u00fcyesiyse `player_games.lineup` kay\u0131tlar\u0131ndan bu be\u015fliyle oynanan ma\u00e7lar okunur; rakip champion ba\u015f\u0131na `[oyun, bizim galibiyet]` tutulur (`teamHistoryOf`). Ban de\u011feri = modelin de\u011feri + `kay\u0131p log-odds\u2019u \u00d7 pick olas\u0131l\u0131\u011f\u0131`; kay\u0131p oran\u0131 4 oyunluk prior ile \u00e7ekilir, kan\u0131t `g/(g+4)` ile a\u011f\u0131rl\u0131kland\u0131r, \u00fcst s\u0131n\u0131r 0.5 log-odds\u2019tur. Modelin g\u00f6rmedi\u011fi champion i\u00e7in pick olas\u0131l\u0131\u011f\u0131 0.15 al\u0131n\u0131r. Sat\u0131rda \u201cBeat you X of Y\u201d rozeti g\u00f6sterilir.\n- **Pick order stabilitesi**: S\u0131ra `Engine.planPickOrder` ile slot slot planlan\u0131r: her (oyuncu, slot) \u00e7ifti i\u00e7in maliyet = rol\u00fcn kar\u015f\u0131 pick riski (`PICK_BLIND`: top 10, mid 8, jungle/bot 3, support 1 puan) \u00d7 rakip kar\u015f\u0131l\u0131\u011f\u0131n\u0131n o slota kadar g\u00f6r\u00fcnmeme olas\u0131l\u0131\u011f\u0131 (slottan \u00f6nce yap\u0131lacak rakip pick\u2019lerinden hesaplan\u0131r) + dar havuzlu solo lane eki + zaten g\u00f6r\u00fcnen rakibe an\u0131nda cevap i\u00e7in slot ba\u015f\u0131na 3 puan + client s\u0131ras\u0131ndan uzakl\u0131\u011fa slot ba\u015f\u0131na 0.5 puan. En ucuz atama \u00f6nerilir. G\u00f6sterilen s\u0131ra, yeni bir lock-in daha ucuz bir s\u0131ray\u0131 en az 4 puan farkla g\u00f6sterirse ve bu 2.5 sn boyunca ge\u00e7erli kal\u0131rsa de\u011fi\u015fir; hover, zamanlay\u0131c\u0131 ve kendi t\u0131klamalar\u0131m\u0131z s\u0131ray\u0131 oynatmaz. Lock-in eden oyuncu s\u0131radan \u00e7\u0131kar, di\u011ferleri yerinde kal\u0131r.\n- **Lobby rol \u00f6nerisi**: Lobby \u00fcyeleri `puuid`, yoksa Riot ID ile team \u00fcyelerine e\u015fle\u015ftirilir; be\u015fi de tan\u0131n\u0131rsa \u00f6neri, tan\u0131nm\u0131yorsa ka\u00e7\u0131n\u0131n tan\u0131nd\u0131\u011f\u0131n\u0131 s\u00f6yleyen bir not g\u00f6sterilir. Lobby de\u011fi\u015fiklikleri ekran\u0131 yeniler.
-- **MetaSRC**: Pick ba\u015f\u0131na model pay\u0131 `confidence \u00d7 freshness \u00d7 (1 \u2212 exp(\u2212games/250))` (\u22650.95 \u21d2 %100 model); OOT/tuned tavan\u0131 art\u0131k yoktur. Build\u2019lerde MetaSRC pay\u0131 `exp(\u2212games/250)` ile oyun say\u0131s\u0131yla erir.
+- **Plan desteği** (`Traits.planSupport`): allies’in kurduğu plana (paylı poke/engage/protect/pick/split eğilimi) candidate’in kitinin ne kadar ait olduğu (`0.7 sd × hizalanma`) ve planın hâlâ eksik bıraktığı trait’lerin ne kadarını kapattığı (`0.5 sd × doldurma`) `composition` parçasına eklenir; plan netleştikçe (1 pick: 1/3, 3+ pick: tam) etkisi artar. İlgisiz pick bonus almaz; diğer kriterler (strength, matchup, lane, kişisel) aynı logit içinde dengelenmeye devam eder. UI’da “Comp plan fit” simgesidir.
+- **Ban geçmişi**: Lineup’taki beş kişi de team üyesiyse `player_games.lineup` kayıtlarından bu beşliyle oynanan maçlar okunur; rakip champion başına `[oyun, bizim galibiyet]` tutulur (`teamHistoryOf`). Ban değeri = modelin değeri + `kayıp log-odds’u × pick olasılığı`; kayıp oranı 4 oyunluk prior ile çekilir, kanıt `g/(g+4)` ile ağırlıklandır, üst sınır 0.5 log-odds’tur. Modelin görmediği champion için pick olasılığı 0.15 alınır. Skor etkisi korunur; UI’da ayrı bir rozet gösterilmez.
+- **Pick order stabilitesi**: Sıra `Engine.planPickOrder` ile slot slot planlanır: her (oyuncu, slot) çifti için maliyet = rolün karşı pick riski (`PICK_BLIND`: top 10, mid 8, jungle/bot 3, support 1 puan) × rakip karşılığının o slota kadar görünmeme olasılığı (slottan önce yapılacak rakip pick’lerinden hesaplanır) + dar havuzlu solo lane eki + zaten görünen rakibe anında cevap için slot başına 3 puan + client sırasından uzaklığa slot başına 0.5 puan. En ucuz atama önerilir. Gösterilen sıra, yeni bir lock-in daha ucuz bir sırayı en az 4 puan farkla gösterirse ve bu 2.5 sn boyunca geçerli kalırsa değişir; hover, zamanlayıcı ve kendi tıklamalarımız sırayı oynatmaz. Lock-in eden oyuncu sıradan çıkar, diğerleri yerinde kalır.
+- **Lobby rol önerisi**: Lobby üyeleri `puuid`, yoksa Riot ID ile team üyelerine eşleştirilir; beşi de tanınırsa öneri, tanınmıyorsa kaçının tanındığını söyleyen bir not gösterilir. Lobby değişiklikleri ekranı yeniler.
+- **MetaSRC**: Pick başına model payı `confidence × freshness × (1 − exp(−games/250))` (≥0.95 ⇒ %100 model); OOT/tuned tavanı artık yoktur. Build’lerde MetaSRC payı `exp(−games/250)` ile oyun sayısıyla erir.
 
 - Ban değeri, rakibin açık role’lerinde champion pick olasılığı × rakibin locked ally’lerine karşı logit avantajı toplamıdır. Ban rate pick paydasına uygulanır. Bir teammate champion göstermediyse, bu patch’te kendi rolünde en çok oynadığı champion ban hesabında niyet prior’ı olur.
 - Pick order counter-risk’i, lane görünürlüğünü, jungle/bot gereksinimini ve solo lane’in kişisel havuz derinliğini kullanır. Rakibin ilgili role’ü görünüyorsa (rol olasılığı `roleAssignments` ile) counter bonusu baskındır (`30 + matchup`, jungle `22 + min(6, matchup)`; blind safety `roleBias` 0-10 puandır) ve biz o role’ü görünen rakipten hemen sonra alırız; rakip görünmüyorsa risk ve `roleBias` belirler. Öneri 1.5 saniye sabit kalmadan uygulanmaz; küçük farklar hysteresis ile tutulur; eşzamanlı ally pick’leri arasında trade gösterilmez.
 - Game Plan full draft için champion strength/off-role, synergy, matchup ve composition parçalarını; early/later edge, five lane matchup ve objective avantajını aynı logit modelinden türetir. Panel strateji tavsiyesi metni yerine kazanma şansı, istatistikler ve görsel göstergeleri sunar.
 
-- Öneri listesi en fazla 80 champion’ı skorlarıyla birlikte S+/S/A/B/C/D tier gruplarında (≥85/75/65/55/45) ikon ızgarası olarak gösterir. Alttaki “Why” paneli seçili/hover edilen pick’in beklenen kazanma şansını `row.parts` logit parçalarına böler (strength, synergy + gelecek synergy, matchup, AP/AD dengesi, ihtiyaçlar, koordinasyon, rakip cevapları, lane, kişisel, diğer). Parçalar 50%’den başlayarak sırayla `100/(1+e^-z) - 50` ile yüzde puana çevrilir, toplamları final değere eşittir; “tahmini kazanma şansı” sıradan bir pick’e göre modelin farkıdır, tam draft olasılığı değildir.
+- Öneri listesi en fazla 80 champion’ı skorlarıyla birlikte S+/S/A/B/C/D tier gruplarında (≥85/75/65/55/45) ikon ızgarası olarak gösterir. Alttaki kırılım paneli seçili/hover edilen pick’in beklenen kazanma şansını `row.parts` logit parçalarına böler (strength, synergy + gelecek synergy, matchup, AP/AD dengesi, ihtiyaçlar, koordinasyon, rakip cevapları, lane, kişisel, diğer). Parçalar 50%’den başlayarak sırayla `100/(1+e^-z) - 50` ile yüzde puana çevrilir, toplamları final değere eşittir; “tahmini kazanma şansı” sıradan bir pick’e göre modelin farkıdır, tam draft olasılığı değildir.
 
 UI akışı [desktop/src/renderer/app.js](../desktop/src/renderer/app.js) ve [desktop/src/renderer/champselect.js](../desktop/src/main/champselect.js) tarafında; client’a sadece kullanıcı tıklaması/ayar açık olduğunda hover veya rune/build apply gider, Itachio lock-in yapmaz.
 
@@ -233,9 +243,9 @@ UI akışı [desktop/src/renderer/app.js](../desktop/src/renderer/app.js) ve [de
 - `history`: yalnızca current patch;
 - `team`: oyuncunun tarafındaki beş kişinin hepsi Itachio takımı üyesi olduğunda, her ayrı lineup için.
 
-Her maç oyuncunun erken lane sonucu ve draft’ın beklenen sonucuna göre late residual’a ayrılır; her champion değeri oyuncunun kendi ortalamasına göre shrink edilir. Erken shrinkage yaklaşık 10–50 pseudo-game, late residual yaklaşık 200 game prior kullanır; familiarity ilk champion oyunlarından pooled çıkarılır. Mastery, champion maçlarının prior etkisini gevşetir ama başarıyı kendi başına icat etmez.
+Her maç oyuncunun erken lane sonucu ve draft’ın beklenen sonucuna göre late residual’a ayrılır; her champion değeri oyuncunun kendi ortalamasına göre shrink edilir. Erken shrinkage yaklaşık 10–50 pseudo-game, late residual yaklaşık 200 game prior kullanır; familiarity ilk champion oyunlarından pooled çıkarılır. Mastery, champion maçlarının prior etkisini gevşetir ama başarıyı kendi başına icat etmez. En az 5 oyunda champion’ın son 20 oyunu `form` olarak bir kez daha sayılır (`TAU_FORM=25` ile shrink, ±0.25 log-odds sınırı) ve `delta`’ya eklenir.
 
-Renderer’da `personalFor()` season ve patch değerlerini her zaman, team değerini yalnızca aynı beşli lineup ile kullanır. Champion/class prior, az oynanan veya oynanmamış champion’lara kişisel sinyal aktarır. Kişisel logit katkısı `PERSONAL_WEIGHT=1` ile uygulanır (season, patch ve team kaynakları tam toplanır), `PERSONAL_CAP=1.5 SD` (~20+ puan) ile sınırlanır; eskiden 0.5 ve 0.4 SD idi ve çoğu oyuncuda tavana takılıp etkiyi görünmez kılıyordu. Champions sekmesindeki üç alt sekme (This Season, This Patch, With the Team) modelin üç girdisidir. Veriler `player_champion_stats` ve History için `player_games` tablosundadır.
+Renderer’da `personalFor()` season ve patch değerlerini her zaman, team değerini yalnızca aynı beşli lineup ile kullanır. Champion/class prior, az oynanan veya oynanmamış champion’lara kişisel sinyal aktarır. Kişisel logit katkısı `PERSONAL_WEIGHT=1` ile uygulanır (season, patch ve team kaynakları tam toplanır), `PERSONAL_CAP=1.5 SD` (~20+ puan) ile sınırlanır, en az 25 oyunlu champion’da bu sınır mastery ile iki katına kadar çıkar; yine 25+ oyun ve pozitif `delta` varsa champion off-meta olsa da öneri listesinde kalır; eskiden 0.5 ve 0.4 SD idi ve çoğu oyuncuda tavana takılıp etkiyi görünmez kılıyordu. Menüdeki Season Stats, Patch Stats ve Lineup Stats sayfaları modelin üç girdisidir. Veriler `player_champion_stats` ve History için `player_games` tablosundadır.
 
 ### Lobby/queue rol dağılımı
 
@@ -314,21 +324,26 @@ npm run ingest --prefix analytics -- ../collector/data/matches/16.21.jsonl [rank
 
 Gerekli env ayarları [analytics/.env.example](../analytics/.env.example) içindedir. Match ingest için gerçek `CLICKHOUSE_URL`/credentials gerekir; bu workspace’te ClickHouse server yapılandırılmadı ve canlı insert yapılmadı.
 
-### Deneysel Node trainer ve ONNX
+### Deneysel hibrit trainer ve ONNX
 
-[analytics/src/training-data.ts](../analytics/src/training-data.ts), maçları zaman sırasına dizer; ilk %70 ile champion, lane, pair, damage/heal/CC prior’larını hesaplar; sonraki pencerenin en fazla `DRAFT_TRAIN_MATCHES` maçını 10 champion-role observation’a çevirir. Eğitim/validation ayrımı `match_id` bazında yapılır; aynı maçın participant satırları iki tarafa bölünmez.
+[analytics/src/hybrid.ts](../analytics/src/hybrid.ts) zaman sırasıyla çalışır: en eski %70 geçmiş feature’larını ve sparse champion katmanını (champion:lane, aynı takım çiftleri, lane matchup’ları) üretir; sonraki pencerede (en fazla 30.000 maç) [analytics/src/gbdt.ts](../analytics/src/gbdt.ts) ağaçları eğitilir; bu pencerenin en yeni %20’si early stopping, prior karışımı ve Platt kalibrasyonu içindir. Aynı maçın satırları ayrılmaz.
 
-[analytics/src/training.ts](../analytics/src/training.ts) 58-feature standardized logistic regression’ı Node’da eğitir, 80/20 match-level holdout logloss/accuracy üretir ve protobuf ile `MatMul → Add → Sigmoid` ONNX graph yazar. Bu XGBoost veya LambdaMART değildir. [analytics/src/predictor.ts](../analytics/src/predictor.ts) `onnxruntime-node` session açar ve 58-float tensor ile olasılık üretir.
+- **Ağaçlar**: LightGBM’in histogram yöntemi TypeScript’te yazılmıştır; yerel bağımlılık veya Python gerekmez. Bu LightGBM paketinin kendisi değildir. ONNX çıktısı `TreeEnsembleRegressor → Sigmoid` grafiğidir.
+- **Feature’lar**: 58 dense değer ve dört sparse çıktı (`sparse_strength`, `sparse_synergy`, `sparse_matchup`, `sparse_team_logit`). `candidate_blind_spread`, `candidate_counter_rate`, `candidate_counter_chance` ve `candidate_ban_rate` artık gerçek veriden gelir; oyuncu sayıları olmayan eski maçlar hasar/CC ortalamalarını seyreltmez.
+- **Maskeler**: `pick_order`, `enemy_answer_share`, `rank_tier`, `patch_age`, `candidate_range` ağaçlara kapalıdır. Match-V5 ve timeline seçim sırasını kaydetmez, maç anındaki rank bilinmez (rank map verilirse `rank_tier` açılır). Bunlar veri geldiğinde değil, kaynak olduğunda açılabilir.
+- **Prior**: Maç tahmini `pay × model + (1 - pay) × prior` olur; `pay`, on pick’in `1 - exp(-games/k)` ortalamasıdır. `k` (`yok, 800, 200, 50`) validation’da seçilir. Prior, geçmişin win rate’idir; `META_PRIOR_PATH` MetaSRC oranlarını verir, CLI veritabanından okumaz.
 
-Feature attribution için ONNX Runtime gradient API’si olmadığından `DraftPredictor.explain()` sonlu farkla yaklaşık Integrated Gradients hesaplar: champion win-rate özelliklerinin baseline’ı 0.5, diğerlerinin 0; path 10 aralıklı trapezoid integrali, gradient için `epsilon=0.001`. Bu yöntem TreeSHAP değildir ve doğruluk/kalibrasyon sonucu değildir; yalnızca model sensitivity açıklamasıdır. Model current champion listesi üretmez; caller her aday için DraftStateVector hazırlayıp `recommend()`’e verir.
+`npm run train` artifact üretir; `npm run backtest` adayı ve üretim trainer’ını aynı bölünmede karşılaştırır (bkz. aşağıdaki sonuç).
 
-Training komutu:
+Son `npm run backtest` sonucu (16.21 yerel corpus, 2026-11-03): en yeni zamanlı 16.396 maç test, kalan 214.787 maç geliştirme; aday 150.350 maçlık geçmiş ve 30.000 maçlık eğitim penceresi kullandı (197 ağaç, seçilen `k=800`).
 
-```powershell
-npm run train --prefix analytics -- ../collector/data/matches/16.21.jsonl
-```
+| Model | Logloss | Maç accuracy |
+|---|---:|---:|
+| Blue oranı (taban) | 0,68943 | 54,32% |
+| Aday (GBDT + sparse + prior) | 0,68512 | 54,90% |
+| Üretim trainer’ı | 0,68366 | 55,53% |
 
-Son gerçek corpus denemesi 182.925 satırdan 500.000 champion-role observation üretti. 50.000 sonraki maç / 80 epoch ayarında validation: **51.94% accuracy, 0.6920 logloss**. Bu aynı split’teki mevcut production model ile ölçülmedi ve replacement için yeterli değil; `analytics/models/` altındaki artifact gitignore edilir. Electron model yüklemesi hâlâ Supabase’in mevcut model snapshot’ından yapılır.
+Adayın üretime göre kazancı **−0,00146 ± 0,00052**; `gain > 2 × SE` koşulunu geçemedi, bu yüzden Electron’a bağlanmaz. Eski 51,94% satır accuracy’si bu tabloyla doğrudan karşılaştırılamaz: o satır bazlıydı, burası maç bazlıdır. Rakamlar `g` ve hasar-alma alanları toplanmadan önceki veridendir ve tek patch’e aittir. Aynı koşuda recency’nin hiçbir yarı ömrü decay’siz modeli geçemedi (3g −7,4; 7g −1,2; 14g −0,39; 30g −0,15 ×1e-3), fakat maçların dörtte üçünde başlangıç zamanı olmadığı ve bunlar en eski sayıldığı için bu ölçüm decay aleyhine yanlıdır. Sınıf prior’ı testte logloss’u ölçülebilir biçimde değiştirmedi (fark 0); bu ölçüm `choice.js` matchup düzeltmesinden önce alındı ve yalnız synergy tarafını kapsar. Latent katmanın kendi kazancı zaten yaklaşık 2,5e-7’dir.
 
 ### Deneysel pairwise item scorer
 
@@ -370,7 +385,7 @@ npm run serve:mcp --prefix analytics
 
 Draft scoring’de MetaSRC cold-start fallback ve collector’ın out-of-time kalibrasyonu korunur. Yeni ONNX modeli mevcut renderer’a bağlanmaz; önce aynı chronological, match-grouped holdout üzerinde production modelin logloss/accuracy değerini aşması gerekir. Mevcut run bunu başaramadı.
 
-Model kalitesi korunur: trainer, feature seti, layer-proof (`gain > 2 × SE`) ve Platt kalibrasyonu bu sürümde değişmedi; yalnızca ensemble ağırlık ızgarası ve export alanları genişledi.
+Model katmanları değişmedi; v1.10.0 ile recency seçimi, Void Grub farkı, sınıf prior’ı, ölçülen trait’ler ve kişisel form/main davranışı eklendi. Layer-proof (`gain > 2 × SE`) ve Platt kalibrasyonu aynıdır.
 
 Release öncesi eksikler (analytics paketi için):
 
@@ -382,7 +397,7 @@ Release öncesi eksikler (analytics paketi için):
 6. Production desktop data source, offline/fallback behavior, performance ve rollback testleri.
 7. Candidate modelin production trainer’la aynı date/rank/queue/patch split’inde head-to-head backtest’i.
 
-CI artık analytics compile/test/audit çalıştırır; mevcut Windows release workflow da analytics gate’ini çalıştırır. Bu, analytics server veya ClickHouse’ın production’a deploy edildiği anlamına gelmez. Bu belge desktop `v1.7.3` ile eşleşir (önceki tag `v1.7.2`). v1.7.0 ile gelen değişiklikler: adaptive patch-aware MetaSRC blend (model payı tavanı 0.80, OOT seçilmemişse 0.50 varsayılan), `blindability` export’u, `patchMatches`/`patchStartedAt` alanları, MetaSRC health izleme ve analytics CI/release gate’i. Doğrulama: collector 66, desktop 84, analytics 20 test geçti; `tsc --noEmit` temiz.
+CI artık analytics compile/test/audit çalıştırır; mevcut Windows release workflow da analytics gate’ini çalıştırır. Bu, analytics server veya ClickHouse’ın production’a deploy edildiği anlamına gelmez. Bu belge desktop `v1.10.0` ile eşleşir. v1.7.0 ile gelen değişiklikler: adaptive patch-aware MetaSRC blend (model payı tavanı 0.80, OOT seçilmemişse 0.50 varsayılan), `blindability` export’u, `patchMatches`/`patchStartedAt` alanları, MetaSRC health izleme ve analytics CI/release gate’i.
 
 ## 12. Referanslar
 

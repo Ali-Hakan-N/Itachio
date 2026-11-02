@@ -11,7 +11,7 @@
 //   1. Early state S of a match, seen from blue: per role, blue's player minus red's
 //      player in the same role (CS by 10 minutes, gold+xp lead early in and at the end
 //      of the laning phase), plus the first objectives (blood, tower, dragon, herald,
-//      grubs). Only numbers that are fixed early in the game: Riot's turret plates and
+//      grubs) and how many void grubs each team took. Only numbers that are fixed early in the game: Riot's turret plates and
 //      early takedowns turned out to count over the whole game (single players with
 //      16-18 plates; plates alone "predicted" 92% of results), so they would smuggle
 //      the result in. With the clean set the early state predicts about 72% of results,
@@ -39,7 +39,8 @@
 const LANE_FIELDS = ['laneCs10', 'jungleCs10', 'plates', 'earlyLead', 'laneLead', 'earlyTakedowns', 'soloKills'];
 const LANE_LEN = LANE_FIELDS.length;
 const ROLE_DIM = 3; // CS by 10 minutes, early lead, laning lead
-const TEAM_DIM = 5; // first blood, tower, dragon, herald, grubs
+const FIRSTS = 5; // first blood, tower, dragon, herald, grubs
+const TEAM_DIM = FIRSTS + 1; // and the void grub lead, matches without the count have 0 there
 const COMPONENTS = 6; // five roles and the objectives
 const DIM = ROLE_DIM * 5 + TEAM_DIM;
 const LAMBDA_GRID = [3, 10, 30, 100, 300, 1000, 3000]; // ridge penalty in games
@@ -70,7 +71,8 @@ function earlyState(m) {
     s[o + 1] = v(b, 3) - v(x, 3); // gold+xp lead early in the laning phase
     s[o + 2] = v(b, 4) - v(x, 4); // and at its end
   }
-  for (let i = 0; i < TEAM_DIM; i++) s[ROLE_DIM * 5 + i] = m.f[i] || 0;
+  for (let i = 0; i < FIRSTS; i++) s[ROLE_DIM * 5 + i] = m.f[i] || 0;
+  if (m.g) s[ROLE_DIM * 5 + FIRSTS] = ((m.g[0] || 0) - (m.g[1] || 0)) / 3; // in thirds of the six grubs
   return s;
 }
 
@@ -148,7 +150,8 @@ function fitSurrogate(S, y, rows, effectiveRows = rows.length) {
 /** Early advantage per component, in log-odds of winning: A[k] for one match */
 function components(beta, s) {
   const a = new Float64Array(COMPONENTS);
-  for (let i = 0; i < DIM; i++) a[componentOf(i)] += beta[i] * s[i];
+  // A snapshot from before the grub count has a shorter beta
+  for (let i = 0; i < DIM; i++) a[componentOf(i)] += (beta[i] ?? 0) * s[i];
   return a;
 }
 

@@ -6,11 +6,12 @@
 //   x: banned champion ids, both teams (newer matches)
 //   lb / lr: early game per role, as riot/parse.js laneOf() (newer matches only)
 //   f: first blood, tower, dragon, herald, grubs: 1 blue, -1 red, 0 nobody (newer matches)
+//   g: void grubs taken, [blue, red] (newer matches)
 //   gb / gr: runes, items and spells per role, as riot/parse.js gearOf() (newer matches)
 //   sb / sr: starting items per role (from the match timeline, riot/timelines.js)
 //   ib / ir: participant id per role, to read the timeline (newer matches)
 //   xb / xr: per role, magic and physical damage to champions, healing, crowd control
-//            seconds (riot/parse.js factsOf); d: game length in seconds (newer matches)
+//            seconds, damage taken (riot/parse.js factsOf); d: game length in seconds (newer matches)
 //
 // Features, seen from blue (+1 for blue, -1 for red):
 //   c:<champ>:<role>                 champion strength in a role
@@ -63,6 +64,7 @@ function toCompact(m) {
   if (Array.isArray(m.b)) out.x = m.b;
   if (lb.some(Boolean) || lr.some(Boolean)) Object.assign(out, { lb, lr });
   if (m.first) out.f = m.first.map((t) => (t === 100 ? 1 : t === 200 ? -1 : 0));
+  if (m.grubs) out.g = m.grubs;
   if (gb.some(Boolean) || gr.some(Boolean)) Object.assign(out, { gb, gr });
   if (sb.some(Boolean) || sr.some(Boolean)) Object.assign(out, { sb, sr });
   if (m.dur && (xb.some(Boolean) || xr.some(Boolean))) Object.assign(out, { xb, xr, d: m.dur });

@@ -120,12 +120,20 @@
   const HISTORY_PICK_FLOOR = 0.15; // pick chance assumed for a champion the model has not seen
   const PERSONAL_CLASS_PRIOR = 40; // pseudo-games before class-level comfort transfers to an unseen champion
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
+  // A champion the player has this many games on stays on their list even when it is off-meta,
+  // and their personal effect on it may reach up to twice PERSONAL_CAP, by mastery
+  const MAIN_GAMES = 25;
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
   const ANSWER_MIN_GAMES = 20; // enemy answers considered when looking ahead
 
   const cache = new WeakMap();
+  let learnedFrom = null; // the model whose measured traits are in use
   function index(model) {
+    if (learnedFrom !== model && Traits?.useLearnedTraits) {
+      learnedFrom = model;
+      Traits.useLearnedTraits(model.traitProfile);
+    }
     if (cache.has(model)) return cache.get(model);
     const champ = new Map();
     const bestRole = new Map();
@@ -174,7 +182,10 @@
       off: model.off || [0, 0, 0, 0, 0],
       floor: model.shareFloor || 0.002,
       early: model.early || null,
-      fm: model.fm ? { S: vectors(model.fm.S), P: vectors(model.fm.P), Q: vectors(model.fm.Q) } : null,
+      fm: model.fm ? {
+        S: vectors(model.fm.S), P: vectors(model.fm.P), Q: vectors(model.fm.Q),
+        prior: { S: vectors(model.fm.prior?.S || {}), P: vectors(model.fm.prior?.P || {}), Q: vectors(model.fm.prior?.Q || {}) },
+      } : null,
     };
     // Scale from the spread of strength among well-played champion:role pairs
     const strengthOf = (key, e) => e.w + ix.off[Number(key.split(':')[1])] * -Math.log(Math.max(e.share, ix.floor));
@@ -349,21 +360,24 @@
     return s;
   };
 
+  // Latent vector of a champion:role; one too rare to have its own gets its class's
+  const latent = (ix, name, c, r) => ix.fm[name].get(`${c}:${r}`) ?? ix.fm.prior[name].get(`${ix.tags.get(c) || 'None'}:${r}`);
+
   // How much a (in role ra) wins against b (in role rb), in log-odds: learned pair,
   // latent pair and class pair terms. Antisymmetric: matchup(b, a) = -matchup(a, b).
   function matchup(ix, a, ra, b, rb) {
     const explicit = ix.vs.get(`${a}:${ra}:${b}:${rb}`);
-    const latent = ix.fm
-      ? dot(ix.fm.P.get(`${a}:${ra}`), ix.fm.Q.get(`${b}:${rb}`)) - dot(ix.fm.P.get(`${b}:${rb}`), ix.fm.Q.get(`${a}:${ra}`))
+    const pair = ix.fm
+      ? dot(latent(ix, 'P', a, ra), latent(ix, 'Q', b, rb)) - dot(latent(ix, 'P', b, rb), latent(ix, 'Q', a, ra))
       : 0;
-    return (explicit ? explicit.w : 0) + latent + (ix.tv.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0);
+    return (explicit ? explicit.w : 0) + pair + (ix.tv.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0);
   }
 
   // How well a (role ra) and b (role rb) play on the same team, in log-odds
   function synergy(ix, a, ra, b, rb) {
     const explicit = ix.syn.get(`${a}:${ra}:${b}:${rb}`);
-    const latent = ix.fm ? dot(ix.fm.S.get(`${a}:${ra}`), ix.fm.S.get(`${b}:${rb}`)) : 0;
-    return (explicit ? explicit.w : 0) + latent + (ix.ts.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0) + pairPrior(ix, a, b);
+    const pair = ix.fm ? dot(latent(ix, 'S', a, ra), latent(ix, 'S', b, rb)) : 0;
+    return (explicit ? explicit.w : 0) + pair + (ix.ts.get(`${ix.tags.get(a) || 'None'}:${ix.tags.get(b) || 'None'}`) || 0) + pairPrior(ix, a, b);
   }
 
   // Hand-made duo prior (curated pairs and trait fits, traits.js): results are too noisy to
@@ -728,7 +742,7 @@
       sum += own ? own.delta : classFit?.delta ?? src.unplayed ?? 0;
       games += own?.games || classFit?.games || 0;
     }
-    const cap = PERSONAL_CAP * ix.sd;
+    const cap = PERSONAL_CAP * ix.sd * (1 + mainMastery(personal, row.championId, row.role));
     const delta = Math.max(-cap, Math.min(cap, PERSONAL_WEIGHT * sum));
     if (!delta) return { ...row, personal: 0, personalGames: games };
     const logit = row.logit + delta;
@@ -925,6 +939,19 @@
     return { order: previous, pending };
   }
 
+  // The player's games and mastery on a champion in a role, over their season statistics
+  function ownEntry(personal, championId, role) {
+    return personal?.season?.byKey?.[`${championId}:${role}`] || personal?.history?.byKey?.[`${championId}:${role}`] || null;
+  }
+  const mainMastery = (personal, championId, role) => {
+    const own = ownEntry(personal, championId, role);
+    return own && own.games >= MAIN_GAMES ? Math.min(1, own.mastery || 0) : 0;
+  };
+  const isMain = (personal, championId, role) => {
+    const own = ownEntry(personal, championId, role);
+    return !!own && own.games >= MAIN_GAMES && own.delta > 0;
+  };
+
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
   function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10, personal = null, answerShare = 1 }) {
     const ix = index(model);
@@ -940,8 +967,8 @@
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
       const entry = ix.champ.get(`${championId}:${r}`);
-      // Never seen in this role, or off-meta there: not recommended (see above)
-      if (!entry || (ix.matches && entry.games / (2 * ix.matches) < MIN_PICK_RATE)) continue;
+      // Never seen in this role, or off-meta there: not recommended (see above), unless it is the player's main
+      if ((!entry || (ix.matches && entry.games / (2 * ix.matches) < MIN_PICK_RATE)) && !isMain(personal, championId, ROLES[r])) continue;
       const rest = ix.matches ? restFor(r) : null;
       const typ = typical(ix, r, allies, enemies, rest, unavailable);
       const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);

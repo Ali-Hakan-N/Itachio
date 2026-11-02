@@ -550,6 +550,9 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
   display: grid; grid-template-columns: 2.4fr 0.7fr 1.2fr 0.8fr 0.8fr 0.8fr; align-items: center; gap: 10px;
   padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--panel);
 }
+.sort-head { display: inline-flex; align-items: center; gap: 4px; padding: 0; background: none; border: 0; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; }
+.sort-head:hover, .sort-head.active { color: var(--ink); }
+.sort-head i { min-width: 8px; font-size: 8px; font-style: normal; color: var(--cue); }
 .stats-row.head { background: none; border-color: transparent; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding-top: 0; padding-bottom: 0; }
 .stats-row .who { display: flex; align-items: center; gap: 10px; }
 .stats-row .who .champ { width: 32px; height: 32px; }

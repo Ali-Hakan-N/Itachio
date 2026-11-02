@@ -1,6 +1,6 @@
 # Itachio Analytics
 
-This TypeScript workspace adds an Itachio-owned 58-feature draft model, ClickHouse ingestion, pairwise item ranking, cross-fitted causal estimation, and an MCP matchup tool. It does not reproduce Winrate.gg's private schema, training data, or model weights.
+This TypeScript workspace adds an Itachio-owned experimental draft model (gradient boosted trees over 58 dense features and a sparse champion layer), ClickHouse ingestion, pairwise item ranking, cross-fitted causal estimation, and an MCP matchup tool. It does not reproduce Winrate.gg's private schema, training data, or model weights.
 
 ## Install and test
 
@@ -14,13 +14,21 @@ npm test --prefix analytics
 
 ## Train the draft model
 
-The trainer reads Itachio compact Match-V5 JSONL, uses the first 70% of games to build historical features, and trains/evaluates on a capped later window. It produces a logistic model in ONNX form, not XGBoost. Each match contributes both teams' five outcomes, so the training labels are balanced; the intercept is still learned, and 50% is a neutral reference rather than a hard-coded prediction. This model is not a fixed 50/50 blend with MetaSRC.
+The trainer reads Itachio compact Match-V5 JSONL, uses the oldest 70% of games to build historical features and fit a sparse champion layer, and fits histogram gradient boosted trees (`src/gbdt.ts`, LightGBM's method in TypeScript, no native dependency) on a capped later window. Its newest 20% drives early stopping, the blend toward a win-rate prior where picks have few games, and calibration. The ONNX artifact is a standard `TreeEnsembleRegressor` with a sigmoid. Columns with no real historical value (`pick_order`, `enemy_answer_share`, `rank_tier`, `patch_age`, `candidate_range`) are masked: Match-V5 does not record draft order, and rank at match time is unknown unless a rank map is supplied. Set `META_PRIOR_PATH` to a JSON file of `{ "<champion>:<lane>": winRate }` to use MetaSRC rates as the prior.
 
 ```powershell
 npm run train --prefix analytics -- ../collector/data/matches/16.21.jsonl
 ```
 
-The default cap is 20,000 later matches and 40 training epochs. Set `DRAFT_TRAIN_MATCHES`, `DRAFT_TRAIN_EPOCHS`, or `DRAFT_ONNX_PATH` to adjust the run. Review validation log loss/accuracy before distributing an artifact.
+The default cap is 30,000 later matches. Set `DRAFT_TRAIN_MATCHES` or `DRAFT_ONNX_PATH` to adjust the run.
+
+## Compare with the production model
+
+```powershell
+npm run backtest --prefix analytics -- ../collector/data/matches/16.21.jsonl
+```
+
+Fits the candidate and the production trainer (`collector/src/model`) on the same older matches and scores both on the newest 30% of the matches with a start time. The result goes to `models/backtest.json`. A candidate only passes when its paired logloss gain exceeds 2 standard errors. The command reads local files and uploads nothing.
 
 ## ClickHouse ingestion
 

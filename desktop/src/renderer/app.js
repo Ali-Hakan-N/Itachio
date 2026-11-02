@@ -39,7 +39,7 @@ let screen = 'loading'; // loading | config | login | profile | team | main
 let configError = null;
 // Whose champion statistics are shown (default: me), from which games, and for the team
 // games which line-up of team members
-const statsUi = { player: null, source: 'season', lineup: null };
+const statsUi = { player: null, source: 'season', lineup: null, sort: 'delta', descending: true };
 const STAT_SOURCES = [
   ['season', 'Season'], // the player's ranked games of the season
   ['history', 'Patch'], // the same, of the current patch
@@ -1212,6 +1212,29 @@ function sideColumn(which, d) {
     </section>`;
 }
 // ---------- Champions ----------
+const STAT_COLUMNS = [
+  { key: 'name', label: 'Champion', value: (r) => champName(r.championId) },
+  { key: 'games', label: 'Games', value: (r) => r.games },
+  { key: 'winRate', label: 'W–L', title: 'Sorted by win rate', value: (r) => r.wins / r.games },
+  { key: 'early', label: 'Lane Δ', title: 'Laning phase versus an average player in the same matchup', value: (r) => r.early },
+  { key: 'late', label: 'Late Δ', title: 'Post-laning result beyond the draft and lane', value: (r) => r.late },
+  { key: 'delta', label: 'Score Δ', title: "Added to this player's score for the champion", value: (r) => r.delta },
+];
+// Ties go to the champion with more games
+function sortStatRows(rows) {
+  const column = STAT_COLUMNS.find((c) => c.key === statsUi.sort) || STAT_COLUMNS.at(-1);
+  const direction = statsUi.descending ? -1 : 1;
+  return [...rows].sort((x, y) => {
+    const [a, b] = [column.value(x), column.value(y)];
+    const order = typeof a === 'string' ? a.localeCompare(b) : (a ?? 0) - (b ?? 0);
+    return direction * order || y.games - x.games;
+  });
+}
+const statHeader = (column) => {
+  const active = statsUi.sort === column.key;
+  return `<span role="columnheader" aria-sort="${active ? (statsUi.descending ? 'descending' : 'ascending') : 'none'}"><button type="button" class="sort-head ${active ? 'active' : ''}" data-sort="${column.key}"${column.title ? ` title="${esc(column.title)}"` : ''}>${esc(column.label)}<i aria-hidden="true">${active ? (statsUi.descending ? '▼' : '▲') : ''}</i></button></span>`;
+};
+
 // How each player does on each champion (collector/src/players), from three kinds of games:
 // their ranked games of the season, those of the patch, and those with team members on
 // their side (per line-up). Games, record, and the effect split into the laning phase and
@@ -1313,9 +1336,8 @@ function renderChampions() {
   const pts = (x) => Engine.points(S.model, x);
   const signed = (n) => `<b class="${n > 0 ? 'up' : n < 0 ? 'down' : ''}">${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)}</b>`;
   const rows = stats
-    ? Object.entries(stats.byKey)
-        .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], ...v }))
-        .sort((x, y) => y.games - x.games || y.delta - x.delta)
+    ? sortStatRows(Object.entries(stats.byKey)
+        .map(([key, v]) => ({ championId: Number(key.split(':')[0]), role: key.split(':')[1], ...v })))
     : [];
   const empty = {
     season: 'No ranked games this season.',
@@ -1338,7 +1360,7 @@ function renderChampions() {
       </div>
       ${rows.length
         ? `<div class="stats-table">
-            <div class="stats-row head"><span>Champion</span><span>Games</span><span>W–L</span><span title="Laning phase versus an average player in the same matchup">Lane Δ</span><span title="Post-laning result beyond the draft and lane">Late Δ</span><span title="Added to this player's score for the champion">Score Δ</span></div>
+            <div class="stats-row head" id="statsHead">${STAT_COLUMNS.map(statHeader).join('')}</div>
             ${rows.map((r) => `
               <div class="stats-row">
                 <span class="who">${champImg(r.championId)}<span><b>${esc(champName(r.championId))}</b><small>${esc(ROLE_NAME[r.role] || r.role)}</small></span></span>
@@ -1357,8 +1379,20 @@ function renderChampions() {
     statsUi.lineup = null;
     renderChampions();
   };
+  const head = document.getElementById('statsHead');
+  if (head) {
+    head.onclick = (e) => {
+      const key = e.target.closest('[data-sort]')?.dataset.sort;
+      if (!key) return;
+      // The same column turns around; a new one starts high to low, names from A
+      statsUi.descending = key === statsUi.sort ? !statsUi.descending : key !== 'name';
+      statsUi.sort = key;
+      renderChampions();
+    };
+  }
   attachLineupPicker();
 }
+
 // ---------- Team ----------
 // Role changes show at once and are saved behind the scenes: the newest wanted set is sent
 // when the previous save returns, and a failed save puts the last saved roles back.

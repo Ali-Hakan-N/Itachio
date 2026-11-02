@@ -28,6 +28,8 @@ function matchLogit(data) {
     ts.set(`${y}:${x}`, w);
   }
   const tag = (c) => (data.tags || {})[c] || 'None';
+  // Latent vector of a champion:role; one too rare to have its own gets its class's
+  const latent = (name, c, r) => data.fm[name][`${c}:${r}`] ?? data.fm.prior?.[name]?.[`${tag(c)}:${r}`];
   const floor = data.shareFloor || SHARE_FLOOR;
   const composition = data.comp;
   const styleOf = (team) => {
@@ -103,7 +105,7 @@ function matchLogit(data) {
       for (let j = i + 1; j < 5; j++) {
         v += syn.get(`${t[i]}:${i}:${t[j]}:${j}`) || 0;
         v += ts.get(`${tag(t[i])}:${tag(t[j])}`) || 0;
-        if (data.fm) v += dot(data.fm.S[`${t[i]}:${i}`], data.fm.S[`${t[j]}:${j}`]);
+        if (data.fm) v += dot(latent('S', t[i], i), latent('S', t[j], j));
       }
     }
     return v;

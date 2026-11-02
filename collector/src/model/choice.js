@@ -49,7 +49,11 @@ function matchupOf(data) {
   const fm = data.fm;
   return (a, ra, b, rb) => {
     let v = vs.get(`${a}:${ra}:${b}:${rb}`) || 0;
-    if (fm) v += dot(fm.P[`${a}:${ra}`], fm.Q[`${b}:${rb}`]) - dot(fm.P[`${b}:${rb}`], fm.Q[`${a}:${ra}`]);
+    if (fm) {
+      // A champion:role too rare to have its own vectors uses its class's
+      const latent = (name, c, r) => fm[name][`${c}:${r}`] ?? fm.prior?.[name]?.[`${data.tags?.[c] || 'None'}:${r}`];
+      v += dot(latent('P', a, ra), latent('Q', b, rb)) - dot(latent('P', b, rb), latent('Q', a, ra));
+    }
     return v + (tv.get(`${tag(a)}:${tag(b)}`) || 0);
   };
 }

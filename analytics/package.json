@@ -8,6 +8,7 @@
     "build": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
     "train": "tsx src/train-cli.ts",
+    "backtest": "tsx --max-old-space-size=14000 src/backtest-cli.ts",
     "ingest": "tsx src/ingest-cli.ts",
     "serve:mcp": "tsx src/server.ts"
   },

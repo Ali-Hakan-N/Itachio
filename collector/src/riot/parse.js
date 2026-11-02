@@ -102,17 +102,25 @@ function purchaseOrder(timeline) {
 
 /**
  * What a player did to the other team (ITEM_FACTS in model/builds.js names the entries):
- * magic and physical damage to champions, healing done, seconds of crowd control on others.
- * Champions' profiles (who heals, who locks you down) come from these.
+ * magic and physical damage to champions, healing done, seconds of crowd control on others,
+ * damage taken. Champions' profiles (who heals, who locks you down, who stands in front) come
+ * from these.
  */
 function factsOf(p) {
   if (!Number.isFinite(p.magicDamageDealtToChampions)) return null;
-  return [num(p.magicDamageDealtToChampions), num(p.physicalDamageDealtToChampions), num(p.totalHeal), num(p.timeCCingOthers)];
+  return [num(p.magicDamageDealtToChampions), num(p.physicalDamageDealtToChampions), num(p.totalHeal), num(p.timeCCingOthers), num(p.totalDamageTaken)];
 }
 
 /** Team that took each first objective (OBJECTIVES order): 100, 200 or 0 */
 function firstsOf(teams) {
   return OBJECTIVES.map((o) => (teams || []).find((t) => t.objectives?.[o]?.first)?.teamId || 0);
+}
+
+/** Void grubs each team took, [blue, red]: they leave the map early, so the count is an early game number */
+function grubsOf(teams) {
+  const of = (id) => (teams || []).find((t) => t.teamId === id)?.objectives?.horde?.kills;
+  const [b, r] = [of(100), of(200)];
+  return Number.isFinite(b) && Number.isFinite(r) ? [b, r] : null;
 }
 
 /** "16.21.712.5555" or "16.21.1" -> "16.21" */
@@ -145,6 +153,7 @@ function parseMatch(match, timeline = null) {
     start: info.gameStartTimestamp ?? info.gameCreation ?? 0,
     dur: info.gameDuration,
     first: firstsOf(info.teams),
+    grubs: grubsOf(info.teams),
     b: (info.teams || []).flatMap((t) => (t.bans || []).map((b) => b.championId)).filter((c) => c > 0),
     p: parts.map((p) => {
       const l = laneOf(p);
