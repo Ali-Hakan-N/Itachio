@@ -29,6 +29,6 @@ test('games with exactly this line-up count', () => {
 test('needs five members; the lobby is read from the client', () => {
   assert.equal(lineupRoles({ model: null, members: members.slice(0, 4), playerStats: {} }), null);
   const lobby = normalizeLobby({ localMember: { puuid: 'x' }, gameConfig: { queueId: 440 }, members: [{ puuid: 'x', firstPositionPreference: 'MIDDLE', secondPositionPreference: 'FILL' }] });
-  assert.deepEqual(lobby.members[0], { puuid: 'x', isLocal: true, preferences: ['middle'] });
+  assert.deepEqual(lobby.members[0], { puuid: 'x', riotId: '', isLocal: true, preferences: ['middle'] });
   assert.equal(normalizeLobby(null), null);
 });

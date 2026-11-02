@@ -111,6 +111,9 @@
   const NEW_ROLE = 0.5; // standard deviations lost on a role a known player never plays
   const ROLE_CHOICE = 0.3; // standard deviations for the roles a player chose (Team tab) or queued for
   const ROLE_EVIDENCE_GAMES = 250; // games of a champion in a role at which the model is trusted about 63% on it
+  const PICK_BLIND = { top: 10, middle: 8, jungle: 3, bottom: 3, utility: 1 }; // points of exposure to a counter while the opponent is unseen
+  const PICK_EAGER = 3; // points per slot of waiting once the opponent is on the board
+  const PICK_TRADE = 0.5; // points per slot of distance from the client's order
   const HISTORY_PRIOR = 2; // games of each result a team's record against a champion starts from
   const HISTORY_CONFIDENCE = 4; // games at which the record counts half
   const HISTORY_CAP = 0.5; // log-odds of losing counted at most
@@ -825,6 +828,64 @@
       .sort((a, b) => a.orderPriority - b.orderPriority);
   }
 
+  /**
+   * A pick order planned slot by slot. remaining: the teammates still to pick, in the
+   * client's order ({ p: { cellId, position }, poolDepth }); sequence: pickSequence of the
+   * draft. Every (player, slot) pair has a cost in points:
+   *   blind risk   how exposed the role is to a counter (PICK_BLIND, top and mid most) while
+   *                its opponent is still unseen: the chance the opponent has shown by that slot
+   *                comes from the enemy picks that happen before it
+   *   pool         a narrow pool on a solo lane makes that exposure worse
+   *   eagerness    an opponent already on the board is countered right away, so those roles
+   *                go first (PICK_EAGER points per slot of waiting)
+   *   trade        a small cost per slot of distance from the client's order, so it only
+   *                moves people when it pays
+   * Returns { order: cell ids, costOf(order) } with the cheapest assignment; costOf lets the
+   * caller see how much a change is worth before making it.
+   */
+  function planPickOrder({ model, remaining, enemyPicks = [], sequence = [], lockedAllies = [] }) {
+    const ix = has(model) ? index(model) : null;
+    const assignments = ix ? roleAssignments(ix, enemyPicks, lockedAllies) : [];
+    const roleProbability = (role) => (ix
+      ? assignments.reduce((sum, a) => sum + (a.roles.includes(role) ? a.probability : 0), 0)
+      : (enemyPicks.some((p) => ROLE_INDEX[asPick(p).position] === role) ? 1 : 0));
+    const visible = (position) => {
+      const role = ROLE_INDEX[position];
+      if (role === ROLE_INDEX.bottom || role === ROLE_INDEX.utility) return Math.min(1, roleProbability(ROLE_INDEX.bottom) + roleProbability(ROLE_INDEX.utility));
+      return Math.min(1, roleProbability(role));
+    };
+    const pending = sequence.filter((x) => !x.ally && !x.completed);
+    const slotRound = (cellId) => sequence.find((x) => x.ally && !x.completed && x.cellId === cellId)?.round;
+    const slots = remaining.map((r) => {
+      const round = slotRound(r.p.cellId);
+      const revealed = round === undefined ? 0 : pending.filter((x) => x.round < round).length;
+      return pending.length ? revealed / pending.length : 0;
+    });
+    const byCell = new Map(remaining.map((r, i) => [r.p.cellId, { r, home: i }]));
+    const cost = (cellId, slot) => {
+      const { r, home } = byCell.get(cellId);
+      const now = visible(r.p.position);
+      const seen = now + (1 - now) * slots[slot];
+      let blind = PICK_BLIND[r.p.position] ?? 3;
+      if ((r.p.position === 'top' || r.p.position === 'middle') && r.poolDepth !== null && r.poolDepth !== undefined) {
+        blind += POOL_WEIGHT * (1 / (1 + r.poolDepth) - 1 / (1 + POOL_NORMAL));
+      }
+      return Math.max(0, blind) * (1 - seen) + PICK_EAGER * now * slot + PICK_TRADE * Math.abs(home - slot);
+    };
+    const costOf = (order) => order.reduce((sum, cellId, slot) => sum + cost(cellId, slot), 0);
+    let best = null;
+    const walk = (left, acc) => {
+      if (!left.length) {
+        const c = costOf(acc);
+        if (!best || c < best.c - 1e-9) best = { order: acc, c };
+        return;
+      }
+      left.forEach((cellId, i) => walk([...left.slice(0, i), ...left.slice(i + 1)], [...acc, cellId]));
+    };
+    walk(remaining.map((r) => r.p.cellId), []);
+    return { order: best ? best.order : [], costOf };
+  }
+
   function pickOrderImprovement(current, desired, rated) {
     if (!Array.isArray(current) || !current.length) return Infinity;
     const priorities = new Map(rated.map((pick) => [pick.p.cellId, pick.orderPriority]));
@@ -1401,6 +1462,7 @@
     recommend: hybridRecommend,
     evaluate: hybridEvaluate,
     orderPickSuggestions,
+    planPickOrder,
     roleDistribution,
     pickOrderImprovement,
     pickOrderTrades,

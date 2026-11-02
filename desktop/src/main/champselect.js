@@ -142,6 +142,7 @@ function normalizeLobby(raw) {
     queueId: raw.gameConfig?.queueId ?? null,
     members: members.map((m) => ({
       puuid: m.puuid,
+      riotId: m.gameName ? `${m.gameName}#${m.gameTag || m.tagLine || ''}` : '',
       isLocal: m.puuid === own,
       preferences: [m.firstPositionPreference, m.secondPositionPreference]
         .map((p) => String(p || '').toLowerCase())

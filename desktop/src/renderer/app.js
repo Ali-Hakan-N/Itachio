@@ -669,22 +669,28 @@ function poolDepthOf(playerId, role) {
   return entries.length ? Engine.poolDepth(entries.filter((e) => e.role === role)) : null;
 }
 
-const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null, lockedSignature: null };
-const PICK_ORDER_STABILITY_MS = 1500;
-const PICK_ORDER_HYSTERESIS = 2.5;
+const pickOrderUi = { gameId: null, order: null, pending: null, pendingKey: null, timer: null, lockedSignature: null, dirty: false };
+const PICK_ORDER_STABILITY_MS = 2500; // a better order must hold this long before it replaces the shown one
+const PICK_ORDER_MIN_GAIN = 4; // points the plan must save to change it (see Engine.planPickOrder)
 
-function stabilizedPickOrder(d, rated, suggested, lockedChanged) {
+// plan: Engine.planPickOrder result. The shown order is kept unless a new lock-in made another
+// order clearly cheaper, and that stays true for PICK_ORDER_STABILITY_MS.
+function stabilizedPickOrder(d, rated, plan, lockedChanged) {
   if (pickOrderUi.gameId !== d.gameId) {
     clearTimeout(pickOrderUi.timer);
-    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, lockedSignature: null });
+    Object.assign(pickOrderUi, { gameId: d.gameId, order: null, pending: null, pendingKey: null, timer: null, lockedSignature: null, dirty: false });
   }
-  const desired = suggested.map((r) => r.p.cellId);
-  // Only a new lock-in can reorder: hovers, timers and our own clicks never do
-  const canChange = !pickOrderUi.order || lockedChanged;
-  const improvement = Engine.pickOrderImprovement(pickOrderUi.order, desired, suggested);
-  const result = Engine.stabilizePickOrder(pickOrderUi.order, pickOrderUi.pending, desired, Date.now(), PICK_ORDER_STABILITY_MS, canChange, improvement, PICK_ORDER_HYSTERESIS);
+  if (lockedChanged) pickOrderUi.dirty = true;
+  const desired = plan.order;
+  // Whoever has locked in leaves the shown order; the others keep their places
+  const left = new Set(desired);
+  const previous = (pickOrderUi.order || []).filter((cellId) => left.has(cellId));
+  const sameSet = previous.length === desired.length;
+  const improvement = sameSet ? plan.costOf(previous) - plan.costOf(desired) : Infinity;
+  const result = Engine.stabilizePickOrder(sameSet ? previous : [], pickOrderUi.pending, desired, Date.now(), PICK_ORDER_STABILITY_MS, !pickOrderUi.order || pickOrderUi.dirty, improvement, PICK_ORDER_MIN_GAIN);
   pickOrderUi.order = result.order;
   pickOrderUi.pending = result.pending;
+  if (!result.pending) pickOrderUi.dirty = false;
   const pendingKey = result.pending?.order.join(',') || null;
   if (pendingKey !== pickOrderUi.pendingKey) {
     clearTimeout(pickOrderUi.timer);
@@ -722,7 +728,8 @@ function pickOrderHtml(d, blocked) {
   });
   const enemyPicks = d.enemy.filter((p) => p.locked && p.championId);
   const lockedAllies = d.ally.filter((p) => p.locked && p.championId).map((p) => ({ championId: p.championId, position: p.position }));
-  const suggested = stabilizedPickOrder(d, rated, Engine.orderPickSuggestions(rated, enemyPicks, S.model, lockedAllies), lockedChanged);
+  const plan = Engine.planPickOrder({ model: S.model, remaining: rated, enemyPicks, sequence: d.pickSequence || [], lockedAllies });
+  const suggested = stabilizedPickOrder(d, rated, plan, lockedChanged);
   const trades = Engine.pickOrderTrades(rated, suggested, d.allyPickGroups || []);
   return `
     <div class="pick-order">
@@ -914,12 +921,16 @@ function lastGameHtml(g) {
 // statistics of the Champions tab (season, patch, and the games with exactly these five)
 function lineupRolesHtml() {
   const lobby = S.lobby;
-  if (!lobby || lobby.members.length !== 5 || !S.model) return '';
+  if (!lobby) return '';
+  const note = (text) => `<div class="lineup-roles"><h3>Suggested Roles</h3><p class="note">${esc(text)}</p></div>`;
+  const sameId = (a, b) => a && b && String(a).toLowerCase() === String(b).toLowerCase();
   const people = lobby.members.map((m) => {
-    const member = (m.isLocal && S.me) || memberByPuuid(m.puuid);
+    const member = (m.isLocal && S.me) || memberByPuuid(m.puuid) || S.members.find((x) => sameId(x.riot_id, m.riotId));
     return member ? { id: member.id, roles: member.roles || [], preferences: m.preferences } : null;
   });
-  if (people.some((p) => !p) || new Set(people.map((p) => p.id)).size !== 5) return '';
+  const known = people.filter(Boolean).length;
+  if (lobby.members.length < 5) return note(`Roles for your five appear once all of them are in the lobby (${lobby.members.length}/5).`);
+  if (known < 5 || new Set(people.map((p) => p?.id)).size !== 5) return note(`${known} of 5 are recognised as your team members. Everyone has to open Itachio once so their account is linked.`);
   const result = Engine.lineupRoles({ model: S.model, members: people, playerStats: S.playerStats });
   if (!result) return '';
   const [best, ...others] = result.options;
