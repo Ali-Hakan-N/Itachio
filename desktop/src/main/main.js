@@ -295,8 +295,8 @@ app.whenReady().then(async () => {
   handle('build:apply', async (parts) => core.applyBuild(parts));
   handle('profile:roles', async (roles) => {
     await data.saveRoles(requireTeamMember(), roles);
-    await core.refreshTeam();
-    return core.snapshot();
+    // The window already shows the new roles: the team reload need not hold up the answer
+    core.refreshTeam().catch((e) => fileLog.error?.(e));
   });
   handle('team:leave', async () => {
     await data.leaveTeam();

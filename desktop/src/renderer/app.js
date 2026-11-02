@@ -18,6 +18,7 @@ const ROLE_ICON = {
   utility: '<path d="M8 1.5l5.8 2.2v4.1c0 3.4-2.4 5.8-5.8 6.7-3.4-.9-5.8-3.3-5.8-6.7V3.7z"/><path class="faint" d="M8 5v6M5 8h6"/>',
 };
 const roleIcon = (r) => `<svg viewBox="0 0 16 16" aria-hidden="true">${ROLE_ICON[r] || ''}</svg>`;
+const roleGlyph = (r, title = ROLE_NAME[r] || '') => `<span class="role-gl" title="${esc(title)}" role="img" aria-label="${esc(title)}">${roleIcon(r)}</span>`;
 
 const PHASE_TEXT = {
   None: 'Idle',
@@ -40,9 +41,9 @@ let configError = null;
 // games which line-up of team members
 const statsUi = { player: null, source: 'season', lineup: null };
 const STAT_SOURCES = [
-  ['season', 'This Season'], // the player's ranked games of the season
-  ['history', 'This Patch'], // the same, of the current patch
-  ['team', 'With the Team'], // their games with five team members on their side, per line-up
+  ['season', 'Season'], // the player's ranked games of the season
+  ['history', 'Patch'], // the same, of the current patch
+  ['team', 'Lineup'], // their games with five team members on their side, per line-up
 ];
 // Whose games the History tab shows (default: me)
 const historyUi = { player: null, rows: [], more: false, html: new Map() };
@@ -203,6 +204,7 @@ api.onState((partial) => {
   if (screen === 'main' && 'me' in partial && !partial.me?.team_id) return decideScreen();
   renderStatus();
   // Keep focus while typing on the pool screen: re-render only the affected parts
+  if (roleSave.want && S.me) applyLocalRoles(roleSave.want);
   if (screen !== 'main') return;
   if (tab === 'draft' && ['draft', 'pools', 'lcu', 'lobby', 'teamHistory', 'members', 'model', 'currentBuild', 'applied', 'gameData', 'lastGame'].some((k) => k in partial)) renderMain();
   if (tab === 'team' && ('members' in partial || 'pools' in partial || 'team' in partial || 'me' in partial)) renderMain();
@@ -223,16 +225,60 @@ const ICONS = {
   chevron: '<path d="M6 9l6 6 6-6"/>',
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+// Every glyph of the draft screen: no words, the meaning is in the tooltip
+Object.assign(ICONS, {
+  strength: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
+  synergy: '<path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1"/><path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/>',
+  matchup: '<path d="M4 4l11 11M20 4L9 15M14 18l4-4M6 14l4 4M5 19l2-2M19 19l-2-2"/>',
+  balance: '<path d="M12 4v16M8 20h8M5 7h14"/><path d="M5 7l-2.5 6a3 3 0 0 0 5 0zM19 7l-2.5 6a3 3 0 0 0 5 0z"/>',
+  guard: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/>',
+  flag: '<path d="M5 21V4M5 4h12l-2 4 2 4H5"/>',
+  focus: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/>',
+  lane: '<path d="M4 20L20 4M4 14l6 6M14 4l6 6"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
+  dots: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  star: '<path d="M12 3l2.8 5.9 6.2.9-4.5 4.4 1 6.3-5.5-3-5.5 3 1-6.3L3 9.8l6.2-.9z"/>',
+  hex: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
+  moon: '<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10z"/>',
+  objective: '<path d="M12 3l9 9-9 9-9-9z"/><path d="M12 8v8"/>',
+  ban: '<circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/>',
+  pick: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
+  swap: '<path d="M4 8h14l-3-3M20 16H6l3 3"/>',
+  apply: '<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  cross: '<path d="M6 6l12 12M18 6L6 18"/>',
+  warn: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+  bag: '<path d="M6 8h12l1 12H5zM9 8a3 3 0 0 1 6 0"/>',
+  gem: '<path d="M6 4h12l3 5-9 11L3 9z"/><path d="M3 9h18"/>',
+  route: '<path d="M4 18h5a3 3 0 0 0 0-6H8a3 3 0 0 1 0-6h8"/><path d="M13 3l3 3-3 3"/>',
+  boot: '<path d="M8 3v9l-4 4v4h16v-3l-6-3V3z"/>',
+  shuffle: '<path d="M3 7h4l10 10h4M3 17h4l3-3M14 10l3-3h4M18 4l3 3-3 3M18 14l3 3-3 3"/>',
+  sword: '<path d="M20 4l-9 9-3-1-3 3 2 2-3 3M20 4l-1 5-6 6M20 4l-5 1-6 6"/>',
+  wand: '<path d="M4 20L15 9M15 4v2M20 9h-2M18.5 5.5L17 7M20 14l-1-1M10 5l1 1"/>',
+  pk: '<circle cx="12" cy="12" r="7"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/>',
+  en: '<path d="M3 12h13M11 6l6 6-6 6M20 5v14"/>',
+  pe: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M12 8v7M8.5 11.5h7"/>',
+  pi: '<path d="M15 4v8a5 5 0 1 1-10 0v-1l3 3"/><circle cx="15" cy="3" r="1"/>',
+  sp: '<path d="M12 21v-8M12 13L5 6M12 13l7-7M5 11V6h5M19 11V6h-5"/>',
+  fr: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/>',
+  cc: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  wc: '<path d="M3 9c3-3 6-3 9 0s6 3 9 0M3 15c3-3 6-3 9 0s6 3 9 0"/>',
+  ac: '<circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="3"/>',
+  sc: '<path d="M4 18l6-6 4 3 6-8M15 7h5v5"/>',
+});
+const glyph = (name, title) => `<span class="gl" title="${esc(title)}" role="img" aria-label="${esc(title)}">${icon(name)}</span>`;
 // The three statistics sources are inputs of the scores: each has its own entry
 const MENU = [
-  { id: 'draft', title: 'Draft', items: [{ tab: 'draft', label: 'Draft Assistant', hint: 'Live picks and bans', icon: 'target' }] },
-  { id: 'players', title: 'Players', items: [
-    { tab: 'champions', src: 'season', label: 'This Season', hint: 'Scoring input', icon: 'calendar' },
-    { tab: 'champions', src: 'history', label: 'This Patch', hint: 'Scoring input', icon: 'layers' },
-    { tab: 'champions', src: 'team', label: 'With the Team', hint: 'Scoring input', icon: 'users' },
+  { id: 'draft', title: 'Draft', items: [{ tab: 'draft', label: 'Draft Assistant', icon: 'target' }] },
+  { id: 'players', title: 'Statistics', items: [
+    { tab: 'champions', src: 'season', label: 'Season Stats', icon: 'calendar' },
+    { tab: 'champions', src: 'history', label: 'Patch Stats', icon: 'layers' },
+    { tab: 'champions', src: 'team', label: 'Lineup Stats', icon: 'users' },
     { tab: 'history', label: 'Match History', icon: 'clock' },
   ] },
-  { id: 'team', title: 'Team', items: [{ tab: 'team', label: 'Roster', hint: 'Members and roles', icon: 'shield' }] },
+  { id: 'team', title: 'Team', items: [{ tab: 'team', label: 'Roster', icon: 'shield' }] },
 ];
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
@@ -304,7 +350,7 @@ function render() {
   document.body.dataset.screen = screen;
   document.getElementById('page-head').hidden = screen !== 'main';
   renderStatus();
-  if (screen === 'loading') $view.innerHTML = splashHtml('Gathering your team and the model…');
+  if (screen === 'loading') $view.innerHTML = splashHtml('Loading team data and model…');
   if (screen === 'config') renderConfig();
   if (screen === 'login') renderLogin();
   if (screen === 'profile') renderProfile();
@@ -315,22 +361,22 @@ function render() {
 function renderStatus() {
   const warning = document.getElementById('metasrc-warning');
   warning.hidden = screen !== 'main' || !S?.metaSrcHealth?.stale;
-  warning.textContent = 'MetaSRC snapshot data has not refreshed in 72 hours';
+  warning.textContent = 'MetaSRC data older than 72 hours';
   const l = S?.lcu;
   if (!l) return ($status.innerHTML = '');
   const acct = l.summoner?.riotId ? ` · ${esc(l.summoner.riotId)}` : '';
   $status.innerHTML = l.connected
-    ? `<span class="dot on"></span><span><b>Eyes open</b><small>${esc(PHASE_TEXT[l.phase] || l.phase)}${acct}</small></span>`
-    : `<span class="dot"></span><span><b>The Rift is quiet</b><small>Open League to awaken Itachio</small></span>`;
+    ? `<span class="dot on"></span><span><b>Client connected</b><small>${esc(PHASE_TEXT[l.phase] || l.phase)}${acct}</small></span>`
+    : `<span class="dot"></span><span><b>Client offline</b><small>Start League of Legends</small></span>`;
 }
 
 function renderConfig() {
   $view.innerHTML = `
     <div class="card">
-      <h2>Setup Incomplete</h2>
+      <h2>Configuration Missing</h2>
       <p>${esc(configError)}</p>
-      <p>Copy <b>config.example.json</b> in the app folder to <b>config.json</b>,
-      fill in your Supabase project URL and key, then restart the app.</p>
+      <p>Copy <b>config.example.json</b> to <b>config.json</b> in the app folder,
+      set the Supabase project URL and key, then restart.</p>
     </div>`;
 }
 
@@ -403,8 +449,8 @@ function renderProfile() {
   $view.innerHTML = `
     <form class="card" id="f">
       <h2>Player Profile</h2>
-      <p>Your teammates will see you by this name. Your LoL account links automatically while the client is open.</p>
-      <label>Nickname <input name="nickname" required minlength="2" maxlength="32" value="${esc(me?.nickname || S?.lcu?.summoner?.riotId?.split('#')[0] || '')}"></label>
+      <p>Display name shown to team members. The Riot account links automatically while the client is running.</p>
+      <label>Display name <input name="nickname" required minlength="2" maxlength="32" value="${esc(me?.nickname || S?.lcu?.summoner?.riotId?.split('#')[0] || '')}"></label>
       <button class="btn primary" type="submit">Save Profile</button>
       ${me ? '' : '<button class="link" type="button" id="out">Sign Out</button>'}
     </form>`;
@@ -420,10 +466,10 @@ function renderProfile() {
 function renderTeamSetup() {
   $view.innerHTML = `
     <div class="card">
-      <h2>Join Your Team</h2>
-      <p>Enter the 8-character code from a teammate.</p>
-      <form class="row" id="join"><input name="code" placeholder="Team code" required class="grow upper"><button class="btn primary">Join</button></form>
-      <p class="gap">First one on the team? Create it and share the code with your friends.</p>
+      <h2>Team Setup</h2>
+      <p>Join with an 8-character invite code.</p>
+      <form class="row" id="join"><input name="code" placeholder="Invite code" required class="grow upper"><button class="btn primary">Join Team</button></form>
+      <p class="gap">Or create a team and share its invite code.</p>
       <form class="row" id="create"><input name="name" placeholder="Team name" required minlength="2" class="grow"><button class="btn">Create Team</button></form>
       <button class="link" type="button" id="out">Sign Out</button>
     </div>`;
@@ -449,11 +495,12 @@ async function signOut() {
 
 function renderMain() {
   const sourceName = (STAT_SOURCES.find(([k]) => k === statsUi.source) || STAT_SOURCES[0])[1];
+  // Section name in kanji, page name in English
   const pages = {
-    draft: ['LIVE DRAFT', 'Draft Assistant'],
-    champions: ['PLAYER ANALYTICS', `Champions \u00b7 ${sourceName}`],
-    team: ['ROSTER', S.team?.name || 'Team'],
-    history: ['MATCH ARCHIVE', 'Match History'],
+    draft: ['ドラフト', 'Draft Assistant'],
+    champions: ['統計', `Champion Stats · ${sourceName}`],
+    team: ['編成', 'Roster'],
+    history: ['戦績', 'Match History'],
   };
   const [kicker, title] = pages[tab] || pages.draft;
   document.getElementById('page-kicker').textContent = kicker;
@@ -470,7 +517,6 @@ function renderMain() {
   if (tab === 'team') renderTeam();
   if (tab === 'history') renderHistory();
 }
-
 // ---------- Draft ----------
 let timerHandle = null;
 
@@ -526,43 +572,31 @@ function recRow(r, i, { canHover, hoverId, rank }) {
   const tier = tierOf(r.score);
   const hovering = r.championId === hoverId;
   return `
-    <button type="button" class="rec ${hovering ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}"
+    <button type="button" class="rec ${hovering ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}" title="${esc(champName(r.championId))}"
       ${canHover ? '' : 'disabled'}>
       <span class="rank">${rank ?? i + 1}</span>
       ${champImg(r.championId)}
-      <span class="info">
-        <span class="name">${esc(champName(r.championId))}
-          <span class="tier t-${tier}">${tier}</span>
-          ${Number.isFinite(r.blindSpread) ? `<span class="badge" title="Standard deviation of odds-ratio-adjusted lane matchups after subtracting estimated sampling noise.">Spread ${(r.blindSpread * 100).toFixed(1)}pp</span>` : ''}
-          ${Number.isFinite(r.counterChance) ? `<span class="badge ${r.counterChance >= 0.5 ? 'warn' : 'good'}" title="Chance an average 7-champion pool for this role contains a matchup at least 2 percentage points worse than expected, weighted by current pick rates.">Pool counter ${Math.round(r.counterChance * 100)}%</span>` : ''}
-          ${hovering ? '<span class="badge live">Hovering</span>' : ''}
-        </span>
-      </span>
-      <span class="score"><b class="sc sc-${tierOf(r.score)}">${r.score}</b><i class="bar-${tierOf(r.score)}" data-w="${r.score}"></i></span>
+      <span class="info"><span class="name">${esc(champName(r.championId))}</span></span>
+      <span class="score"><b class="sc sc-${tier}">${r.score}</b><i class="bar-${tier}" data-w="${r.score}"></i></span>
     </button>`;
 }
-
 // Recommendations as tiers of champion tiles, each with its score
 const TIER_BANDS = [['S+', 85], ['S', 75], ['A', 65], ['B', 55], ['C', 45], ['D', 0]];
 function tierGrid(recs, { canHover, hoverId }) {
   const groups = TIER_BANDS.map(([label, min]) => ({ label, min, rows: [] }));
   for (const r of recs) groups.find((g) => r.score >= g.min).rows.push(r);
-  return `<div class="recs tiers">${groups.filter((g) => g.rows.length).map((g) => {
-    const hi = Math.max(...g.rows.map((r) => r.score));
-    const lo = Math.min(...g.rows.map((r) => r.score));
-    return `<div class="tier-group">
-      <div class="tier-head"><span class="tier t-${g.label[0]}">${g.label}</span><small>${lo === hi ? lo : `${lo}–${hi}`} · ${g.rows.length}</small></div>
+  return `<div class="recs tiers">${groups.filter((g) => g.rows.length).map((g) => `
+    <div class="tier-group">
+      <span class="tier t-${g.label[0]}">${g.label}</span>
       <div class="tier-tiles">${g.rows.map((r) => `
         <button type="button" class="tile ${r.championId === hoverId ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}" ${canHover ? '' : 'disabled'} title="${esc(champName(r.championId))} · ${r.score}">
           ${champImg(r.championId)}
-          <span class="tname">${esc(champName(r.championId))}</span>
           <b class="tscore sc-${tierOf(r.score)}">${r.score}</b>
         </button>`).join('')}</div>
-    </div>`;
-  }).join('')}</div>`;
+    </div>`).join('')}</div>`;
 }
 
-const NEED_NAME = { fr: 'frontline', cc: 'CC', en: 'engage', wc: 'waveclear', ac: 'AoE', pk: 'poke', pe: 'peel', sc: 'scaling', pi: 'pick', sp: 'split push' };
+const NEED_NAME = { fr: 'Frontline', cc: 'Crowd control', en: 'Engage', wc: 'Waveclear', ac: 'Area control', pk: 'Poke', pe: 'Peel', sc: 'Scaling', pi: 'Pick power', sp: 'Split push' };
 
 // Where the expected win chance of a pick comes from: each part in percentage points of win
 // chance, added one after another from an even game so they sum to the final number
@@ -572,17 +606,17 @@ function modelExplanation(row) {
   const win = (z) => 100 / (1 + Math.exp(-z)) - 50;
   const icons = (items, sign) => (items || []).filter((x) => x.value * sign > 0).slice(0, 3).map((x) => champImg(x.championId, 's')).join('');
   const items = [
-    { label: 'Champion strength', z: P.strength },
-    { label: 'Team synergy', z: P.synergy + P.ahead, detail: icons(row.allies, P.synergy >= 0 ? 1 : -1) },
-    { label: 'Enemy matchups', z: P.matchup, detail: icons(row.enemies, P.matchup >= 0 ? 1 : -1) },
-    { label: 'AP and AD balance', z: P.damage },
-    { label: 'CC, frontline, engage', z: P.needs, detail: row.lacking?.length ? `Missing ${row.lacking.map((k) => NEED_NAME[k] || k).join(', ')}` : '' },
-    { label: 'Fits the comp plan', z: P.plan },
-    { label: 'Team coordination', z: P.coherence },
-    { label: 'Enemy answers', z: P.exposure },
-    { label: 'Lane', z: P.lane },
-    { label: 'Personal fit', z: P.personal },
-    { label: 'Other factors', z: P.learned + P.typical },
+    { icon: 'strength', label: 'Champion strength', z: P.strength },
+    { icon: 'synergy', label: 'Team synergy', z: P.synergy + P.ahead, detail: icons(row.allies, P.synergy >= 0 ? 1 : -1) },
+    { icon: 'matchup', label: 'Enemy matchups', z: P.matchup, detail: icons(row.enemies, P.matchup >= 0 ? 1 : -1) },
+    { icon: 'balance', label: 'AP/AD balance', z: P.damage },
+    { icon: 'guard', label: 'CC, frontline, engage', z: P.needs, detail: (row.lacking || []).map((k) => (ICONS[k] ? glyph(k, `Missing: ${NEED_NAME[k] || k}`) : '')).join('') },
+    { icon: 'flag', label: 'Comp plan fit', z: P.plan },
+    { icon: 'focus', label: 'Team coordination', z: P.coherence },
+    { icon: 'eye', label: 'Counter exposure', z: P.exposure },
+    { icon: 'lane', label: 'Lane', z: P.lane },
+    { icon: 'user', label: 'Personal fit', z: P.personal },
+    { icon: 'dots', label: 'Other factors', z: P.learned + P.typical },
   ];
   let cum = 0;
   for (const it of items) {
@@ -592,46 +626,31 @@ function modelExplanation(row) {
   }
   const fmt = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}`;
   const line = (it) => `<div class="wf-row ${it.pp > 0 ? 'up' : 'down'}">
-    <span class="wf-label">${esc(it.label)}${it.detail ? `<small>${it.detail}</small>` : ''}</span>
+    ${glyph(it.icon, it.label)}
     <div class="wf-track"><span class="neg"><i data-w="${it.pp < 0 ? Math.min(100, Math.abs(it.pp) * 25) : 0}"></i></span><span class="pos"><i data-w="${it.pp > 0 ? Math.min(100, it.pp * 25) : 0}"></i></span></div>
     <b>${fmt(it.pp)}</b>
+    ${it.detail ? `<span class="wf-detail">${it.detail}</span>` : ''}
   </div>`;
-  const shown = items.filter((it) => Math.abs(it.pp) >= 0.05);
-  const blind = Number.isFinite(row.blindSpread) && Number.isFinite(row.counterChance)
-    ? `<div class="blind-summary"><span>Blind spread <b>${(row.blindSpread * 100).toFixed(1)}pp</b></span><span>7-pick pool counter <b>${Math.round(row.counterChance * 100)}%</b></span></div>`
-    : '';
   const name = champName(row.championId);
-  return `<section class="explanation" aria-label="Model breakdown for ${esc(name)}">
-    <div class="explanation-head"><div><span class="page-kicker">WHY ${esc(name.toUpperCase())} · EXPECTED WIN CHANCE ${(50 + win(cum)).toFixed(1)}%</span></div><strong>${row.score}<small>/100</small></strong></div>
-    <p class="wf-note">Each line moves the win chance, in percentage points: green up, red down.</p>
-    <div class="wf-list">${shown.map(line).join('') || '<p class="note">No material effect</p>'}</div>
-    <div class="wf-foot"><span>Even game <b>50.0%</b></span><span class="wf-arrow">›</span>${champImg(row.championId, 's')}<span>${esc(name)} <b>${(50 + win(cum)).toFixed(1)}%</b></span></div>
-    ${blind}
+  return `<section class="explanation" aria-label="Win chance breakdown: ${esc(name)}">
+    <div class="explanation-head" title="Expected win chance against a typical pick in this role">
+      ${champImg(row.championId, 's')}<strong>${(50 + win(cum)).toFixed(1)}<small>%</small></strong>
+    </div>
+    <div class="wf-list">${items.filter((it) => Math.abs(it.pp) >= 0.05).map(line).join('')}</div>
   </section>`;
 }
 
 // A ban suggestion: score 0-100 for how much banning it helps (see model.js)
-function banRow(r, i, { canHover, hoverId }) {
-  const tier = tierOf(r.score);
-  const hovering = r.championId === hoverId;
+function banTile(r, { canHover, hoverId }) {
   const pct = r.pickChance * 100;
   return `
-    <button type="button" class="rec ban ${hovering ? 'hovering' : ''}" data-hover="${r.championId}" data-kind="ban"
-      ${canHover ? 'title="Hover this ban in the client"' : 'disabled'}>
-      <span class="rank">${i + 1}</span>
+    <button type="button" class="tile ban ${r.championId === hoverId ? 'hovering' : ''}" data-hover="${r.championId}" data-kind="ban" ${canHover ? '' : 'disabled'}
+      title="${esc(champName(r.championId))} · ${esc(ROLE_NAME[r.role] || '')} · pick chance ${pct < 1 ? pct.toFixed(1) : Math.round(pct)}%">
       ${champImg(r.championId)}
-      <span class="info">
-        <span class="name">${esc(champName(r.championId))}
-          <span class="badge">${ROLE_NAME[r.role] || ''}</span>
-          <span class="badge" title="How often a team picks it there when it is not banned">Picked ${pct < 1 ? pct.toFixed(1) : Math.round(pct)}%</span>
-          ${r.history ? `<span class="badge warn" title="Your games with this five against it">Beat you ${r.history.games - r.history.wins} of ${r.history.games}</span>` : ''}
-          ${hovering ? '<span class="badge live">Hovering</span>' : ''}
-        </span>
-      </span>
-      <span class="score"><b class="sc sc-${tier}">${r.score}</b><i class="bar-${tier}" data-w="${r.score}"></i></span>
+      <span class="trole">${roleIcon(r.role)}</span>
+      <b class="tscore sc-${tierOf(r.score)}">${r.score}</b>
     </button>`;
 }
-
 // A player's games per champion and role: the season's, else the patch's
 function playedEntries(playerId) {
   const own = S.playerStats?.[playerId] || {};
@@ -733,23 +752,21 @@ function pickOrderHtml(d, blocked) {
   const trades = Engine.pickOrderTrades(rated, suggested, d.allyPickGroups || []);
   return `
     <div class="pick-order">
-      <h3 class="sub" title="By role and what the enemy has locked in; hovers never move it">Pick Order</h3>
-      <ol>${suggested.map((r) => `<li>${r.championId ? champImg(r.championId, 's') : ''}<span><b>${esc(nameOf(r.p))}</b><small>${ROLE_NAME[r.p.position]}</small></span></li>`).join('')}</ol>
-      ${trades.slice(0, 2).map(([a, b]) => `<p class="trade">Trade: <b>${esc(nameOf(a))}</b> ↔ <b>${esc(nameOf(b))}</b></p>`).join('')}
+      <h3 class="sub" title="Ordered by role and enemy locks; hovers do not change it">Pick Order</h3>
+      <ol>${suggested.map((r) => `<li title="${esc(ROLE_NAME[r.p.position])}">${roleGlyph(r.p.position)}${r.championId ? champImg(r.championId, 's') : ''}<b>${esc(nameOf(r.p))}</b></li>`).join('')}</ol>
+      ${trades.slice(0, 2).map(([a, b]) => `<p class="trade" title="Suggested pick trade"><b>${esc(nameOf(a))}</b>${icon('swap')}<b>${esc(nameOf(b))}</b></p>`).join('')}
     </div>`;
 }
 
 // The game plan once every champion is locked (it stays through the game). Every number is
-// the model's, in percentage points of win chance, so they can be compared; the advice is
-// read off the same numbers with the same threshold (plan.edge), so it never says
-// something the numbers do not show.
+// the model's, in percentage points of win chance, so they can be compared.
 const signedPct = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}%`;
 const pctClass = (v, edge) => (v >= edge ? 'up' : v <= -edge ? 'down' : '');
 const PLAN_PARTS = [
-  ['champions', 'Champions', 'Strength of each pick in its role'],
-  ['synergy', 'Synergy', 'Pairs on the same team, both teams'],
-  ['matchups', 'Matchups', 'Every champion against every enemy'],
-  ['composition', 'Composition', 'Team styles and how they meet'],
+  ['champions', 'star', 'Champion strength by role'],
+  ['synergy', 'synergy', 'Same-team pair synergy, both teams'],
+  ['matchups', 'matchup', 'Champion-versus-enemy matchups'],
+  ['composition', 'hex', 'Team composition interaction'],
 ];
 
 function gamePlanHtml(d) {
@@ -764,65 +781,63 @@ function gamePlanHtml(d) {
   const scale = Math.max(5, ...values.map(Math.abs));
   const bar = (v) => `<span class="pbar"><i class="${v < 0 ? 'neg' : 'pos'} ${pctClass(v, E)}" data-w="${Math.min(50, (Math.abs(v) / scale) * 50)}"></i></span>`;
   const row = (label, v, title = '', extra = '') => `<div class="prow"${title ? ` title="${esc(title)}"` : ''}><span class="plabel">${label}</span>${extra}${bar(v)}<b class="pval ${pctClass(v, E)}">${signedPct(v)}</b></div>`;
-  const call = { ahead: 'Ahead', even: 'Even', behind: 'Behind' };
+  const iconRow = (name, title, v) => row(glyph(name, title), v, title);
   const lanes = plan.lanes.filter(Boolean).map((l) => row(
-    ROLE_NAME[l.role],
+    roleGlyph(l.role),
     l.pct,
-    l.games ? `${champName(l.ours)} vs ${champName(l.theirs)}: learned from ${l.games} games of this lane` : `${champName(l.ours)} vs ${champName(l.theirs)}: from both champions' average lanes`,
-    `<span class="pvs">${champImg(l.ours, 's')}${champImg(l.theirs, 's')}</span><small class="pcall ${l.call}">${call[l.call]}</small>`,
+    l.games ? `${champName(l.ours)} vs ${champName(l.theirs)}: ${l.games} games` : `${champName(l.ours)} vs ${champName(l.theirs)}: champion averages`,
+    `<span class="pvs">${champImg(l.ours, 's')}${champImg(l.theirs, 's')}</span>`,
   )).join('');
   const chance = Math.round(plan.winChance * 100);
   return `
     <div class="game-plan">
-      <h3 class="sub head-row"><span>Game Plan</span><span class="hint">Draft win chance <b class="${pctClass(chance - 50, E)}">${chance}%</b></span></h3>
+      <h3 class="sub head-row"><span>Game Plan</span><span class="hint" title="Draft win chance"><b class="${pctClass(chance - 50, E)}">${chance}%</b></span></h3>
       <div class="plan-grid">
-        <div class="plan-block"><small>Where the edge comes from</small>${PLAN_PARTS.map(([k, label, title]) => row(label, plan.parts[k], title)).join('')}</div>
-        <div class="plan-block"><small>By phase</small>
-          ${row('Early', plan.early, 'Lanes and first objectives together: the first 15 minutes')}
-          ${row('Later', plan.later, 'The rest of the draft\'s edge: teamfights, scaling, the game after laning')}
-          ${row('Objectives', plan.objectives, 'First blood, tower, dragon, herald and grubs')}
+        <div class="plan-block">${PLAN_PARTS.map(([k, name, title]) => iconRow(name, title, plan.parts[k])).join('')}</div>
+        <div class="plan-block">
+          ${iconRow('sun', 'Early game: lanes and first objectives, first 15 minutes', plan.early)}
+          ${iconRow('moon', 'Later game: remaining draft edge', plan.later)}
+          ${iconRow('objective', 'First blood, tower, dragon, herald, grubs', plan.objectives)}
         </div>
-        <div class="plan-block lanes-block"><small>Lanes · laning phase</small>${lanes}</div>
+        <div class="plan-block lanes-block">${lanes}</div>
       </div>
     </div>`;
 }
-
 // Runes, items and spells for our pick, once every champion is locked; sent to the client
 // on their own when the options say so, else with the Apply buttons
-const BUCKET_TEXT = { any: 'General', ap: 'vs Magic Damage', ad: 'vs Physical Damage', mixed: 'vs Mixed Damage' };
+const BUCKET_TEXT = { any: 'General', ap: 'vs AP', ad: 'vs AD', mixed: 'vs Mixed' };
 function buildHtml() {
   const pick = S.currentBuild;
-  if (!pick) return '<div class="build"><h3 class="sub">Build</h3><p class="note">Waiting for all picks.</p></div>';
+  if (!pick) return '<div class="build"><h3 class="sub">Build</h3></div>';
   const { build } = pick;
   const perks = S.gameData?.perks || {};
   const spells = S.gameData?.summoner || {};
   const perkImg = (id) => (perks[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/img/${perks[id].icon}" alt="" title="${esc(perks[id].name)}">` : '');
   const itemImg = (id, title) => `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/item/${id}.png" alt="" title="${esc(title || S.gameData?.items?.[id] || '')}">`;
-  const pathHtml = (steps) => (steps?.length ? `<span class="item-group item-path"><small>Build Order</small><span>${steps.map((s) => `<span class="step">${s.parts.map((p) => `<span class="part">${itemImg(p)}</span>`).join('')}${s.parts.length ? '<i>→</i>' : ''}${itemImg(s.id)}</span>`).join('')}</span></span>` : '');
+  const pathHtml = (steps) => (steps?.length ? `<span class="item-group item-path">${glyph('route', 'Build order')}<span>${steps.map((s) => `<span class="step">${s.parts.map((p) => `<span class="part">${itemImg(p)}</span>`).join('')}${s.parts.length ? '<i>→</i>' : ''}${itemImg(s.id)}</span>`).join('')}</span></span>` : '');
   const spellImg = (id) => (spells[id] ? `<img src="https://ddragon.leagueoflegends.com/cdn/${S.patch}/img/spell/${spells[id].image}" alt="" title="${esc(spells[id].name)}">` : '');
   const applied = S.applied?.gameId === S.draft?.gameId ? S.applied.parts || {} : {};
-  const state = (part) => (applied[part] === true ? '<span class="ok">Applied</span>' : applied[part] === false ? '<span class="fail">Failed</span>' : '');
+  const state = (part) => (applied[part] === true ? `<span class="ok">${glyph('check', 'Applied')}</span>` : applied[part] === false ? `<span class="fail">${glyph('cross', 'Apply failed')}</span>` : '');
+  const apply = (part, title) => `<button class="btn ghost icon-btn" data-apply="${part}" title="${title}" aria-label="${title}">${icon('apply')}</button>`;
   const keystone = build.runes.perks[0];
-  const group = (label, ids, title) => (ids?.length ? `<span class="item-group"><small>${label}</small><span>${ids.map((id) => itemImg(id, title?.(id))).join('')}</span></span>` : '');
+  const group = (name, label, ids, title) => (ids?.length ? `<span class="item-group">${glyph(name, label)}<span>${ids.map((id) => itemImg(id, title?.(id))).join('')}</span></span>` : '');
   const situational = pick.situational || [];
-  const why = new Map(situational.map((x) => [x.id, `+${(x.value * 100).toFixed(1)}% win chance vs ${x.reasons.join(', ')}`]));
+  const why = new Map(situational.map((x) => [x.id, `${S.gameData?.items?.[x.id] || ''}: +${(x.value * 100).toFixed(1)}% win chance vs ${x.reasons.join(', ')}`]));
   return `
     <div class="build">
-      <h3 class="sub head-row"><span>Build · ${BUCKET_TEXT[pick.bucket] || ''}</span><span class="hint">${build.games} games</span></h3>
+      <h3 class="sub head-row"><span>Build</span><span class="hint" title="${build.games} games">${BUCKET_TEXT[pick.bucket] || ''}</span></h3>
       <div class="build-row">
-        <div class="build-part runes">${perkImg(keystone)}<span>${esc(perks[keystone]?.name || '')}<small>${esc(perks[build.runes.primary]?.name || '')} · ${esc(perks[build.runes.sub]?.name || '')}</small></span>${state('runes')}<button class="btn ghost" data-apply="runes">Apply Runes</button></div>
+        <div class="build-part runes" title="${esc(perks[keystone]?.name || '')} · ${esc(perks[build.runes.primary]?.name || '')} · ${esc(perks[build.runes.sub]?.name || '')}">${perkImg(keystone)}${perkImg(build.runes.primary)}${perkImg(build.runes.sub)}${state('runes')}${apply('runes', 'Apply runes')}</div>
         <div class="build-part items">
-          ${group('Starting Items', build.items.start)}
-          ${build.items.path?.length ? pathHtml(build.items.path) : `${group('Core', build.items.core)}${group('Boots', build.items.boots ? [build.items.boots] : [])}`}
-          ${group('Situational', situational.map((x) => x.id), (id) => why.get(id))}
-          ${state('items')}<button class="btn ghost" data-apply="items">Apply Items</button>
+          ${group('bag', 'Starting items', build.items.start)}
+          ${build.items.path?.length ? pathHtml(build.items.path) : `${group('gem', 'Core items', build.items.core)}${group('boot', 'Boots', build.items.boots ? [build.items.boots] : [])}`}
+          ${group('shuffle', 'Situational items', situational.map((x) => x.id), (id) => why.get(id))}
+          ${state('items')}${apply('items', 'Apply item set')}
         </div>
-        <div class="build-part spells">${build.spells.map(spellImg).join('')}${state('spells')}<button class="btn ghost" data-apply="spells">Apply Spells</button></div>
+        <div class="build-part spells">${build.spells.map(spellImg).join('')}${state('spells')}${apply('spells', 'Apply summoner spells')}</div>
       </div>
-      ${situational.length ? `<p class="note sit-note">${situational.map((x) => `<b>${esc(S.gameData?.items?.[x.id] || '')}</b>${S.gameData?.items?.[x.id] ? ' ' : ''}vs ${esc(x.reasons.join(', '))}`).join(' · ')}</p>` : ''}
     </div>`;
 }
-
 // Score each champion had when it was locked, to show how later picks changed it
 const pickScores = { gameId: null, map: new Map() };
 
@@ -853,15 +868,14 @@ function slotScore(d, which, p, championId, sink) {
   const changed = p.locked && atPick !== undefined && atPick !== ev.score;
 
   const label = changed
-    ? `<small class="${ev.score > atPick ? 'up' : 'down'}">picked at ${atPick}</small>`
-    : ev.offRole ? '<small class="warn">off-role</small>' : p.locked ? '' : '<small>if picked</small>';
+    ? `<small class="${ev.score > atPick ? 'up' : 'down'}" title="Score when locked: ${atPick}">${ev.score > atPick ? '▲' : '▼'}${atPick}</small>`
+    : ev.offRole ? `<small class="warn">${glyph('warn', 'Off-role')}</small>` : '';
   return `
-    <div class="slot-score ${p.locked ? '' : 'pending'} ${ev.unsure ? 'unsure' : ''}"${ev.unsure ? ` title="Rough estimate: ±${ev.uncertainty} points"` : ''}>
+    <div class="slot-score ${p.locked ? '' : 'pending'} ${ev.unsure ? 'unsure' : ''}"${ev.unsure ? ` title="Low sample: ±${ev.uncertainty}"` : ''}>
       <b class="sc sc-${tierOf(ev.score)}">${ev.score}</b>
       ${label}
     </div>`;
 }
-
 // The draft with every player's role: known roles kept, the others (the enemy's, hidden
 // in ranked) guessed from the champions shown, so slots sit in role order and the
 // scores use the likely role
@@ -890,7 +904,7 @@ function lastGameHtml(g) {
   const rows = (list, other, side) => list.map((p) => {
     const st = stats.get(`${side}:${p.championId}`) || {};
     const sc = scoreOf(p, list, other);
-    return `<div class="lg-row">${champImg(p.championId, 's')}<span class="lg-role">${ROLE_NAME[p.position] || ''}</span>${sc === null ? '<span></span>' : `<b class="sc sc-${tierOf(sc)}">${sc}</b>`}<span>${st.kills ?? '–'}/${st.deaths ?? '–'}/${st.assists ?? '–'}</span><span>${st.cs ?? '–'} cs</span><span>${st.damage != null ? `${(st.damage / 1000).toFixed(1)}k` : '–'}</span></div>`;
+    return `<div class="lg-row">${champImg(p.championId, 's')}${roleGlyph(p.position)}${sc === null ? '<span></span>' : `<b class="sc sc-${tierOf(sc)}">${sc}</b>`}<span>${st.kills ?? '–'}/${st.deaths ?? '–'}/${st.assists ?? '–'}</span><span>${st.cs ?? '–'} cs</span><span>${st.damage != null ? `${(st.damage / 1000).toFixed(1)}k` : '–'}</span></div>`;
   }).join('');
   const avg = (list, other) => {
     const v = list.map((p) => scoreOf(p, list, other)).filter((x) => x !== null);
@@ -899,38 +913,34 @@ function lastGameHtml(g) {
   const ourAvg = avg(allies, enemies);
   const theirAvg = avg(enemies, allies);
   const chance = plan ? Math.round(plan.winChance * 100) : null;
-  const call = { ahead: 'ahead', even: 'even', behind: 'behind' };
-  const lanes = plan ? plan.lanes.filter(Boolean).map((l) => `${ROLE_NAME[l.role]} ${call[l.call]} (${signedPct(l.pct)})`).join(' · ') : '';
   return `
     <div class="last-game">
       <div class="lg-head">
-        <h2>Last Game: <span class="${g.win ? 'win' : 'loss'}">${g.win ? 'Win' : g.win === false ? 'Loss' : ''}</span></h2>
+        <h2>Last Game <span class="${g.win ? 'win' : 'loss'}">${g.win ? 'Win' : g.win === false ? 'Loss' : ''}</span></h2>
         <span class="muted">${g.durationS ? `${Math.floor(g.durationS / 60)}:${String(g.durationS % 60).padStart(2, '0')}` : ''}</span>
-        ${chance !== null ? `<span class="lg-chance">Draft win chance <b>${chance}%</b></span>` : ''}
+        ${chance !== null ? `<span class="lg-chance" title="Draft win chance">Draft <b>${chance}%</b></span>` : ''}
       </div>
       <div class="lg-teams">
-        <div><h3 class="sub">Your Team ${ourAvg !== null ? `<b class="sc sc-${tierOf(ourAvg)}">${ourAvg}</b>` : ''}</h3>${rows(allies, enemies, 'ally')}</div>
-        <div><h3 class="sub">Enemy Team ${theirAvg !== null ? `<b class="sc sc-${tierOf(theirAvg)}">${theirAvg}</b>` : ''}</h3>${rows(enemies, allies, 'enemy')}</div>
+        <div><h3 class="sub">Ally ${ourAvg !== null ? `<b class="sc sc-${tierOf(ourAvg)}">${ourAvg}</b>` : ''}</h3>${rows(allies, enemies, 'ally')}</div>
+        <div><h3 class="sub">Enemy ${theirAvg !== null ? `<b class="sc sc-${tierOf(theirAvg)}">${theirAvg}</b>` : ''}</h3>${rows(enemies, allies, 'enemy')}</div>
       </div>
-      ${lanes ? `<p class="note">Lanes the draft gave you: ${lanes}</p>` : ''}
     </div>`;
 }
-
 // ---------- Lineup roles (lobby / queue) ----------
 // When all five in the party are team members: who should play which role, from the
 // statistics of the Champions tab (season, patch, and the games with exactly these five)
 function lineupRolesHtml() {
   const lobby = S.lobby;
   if (!lobby) return '';
-  const note = (text) => `<div class="lineup-roles"><h3>Suggested Roles</h3><p class="note">${esc(text)}</p></div>`;
+  const note = (text) => `<div class="lineup-roles"><h3>Lineup Roles</h3><p class="note">${esc(text)}</p></div>`;
   const sameId = (a, b) => a && b && String(a).toLowerCase() === String(b).toLowerCase();
   const people = lobby.members.map((m) => {
     const member = (m.isLocal && S.me) || memberByPuuid(m.puuid) || S.members.find((x) => sameId(x.riot_id, m.riotId));
     return member ? { id: member.id, roles: member.roles || [], preferences: m.preferences } : null;
   });
   const known = people.filter(Boolean).length;
-  if (lobby.members.length < 5) return note(`Roles for your five appear once all of them are in the lobby (${lobby.members.length}/5).`);
-  if (known < 5 || new Set(people.map((p) => p?.id)).size !== 5) return note(`${known} of 5 are recognised as your team members. Everyone has to open Itachio once so their account is linked.`);
+  if (lobby.members.length < 5) return note(`Lobby members: ${lobby.members.length}/5`);
+  if (known < 5 || new Set(people.map((p) => p?.id)).size !== 5) return note(`Linked team members: ${known}/5`);
   const result = Engine.lineupRoles({ model: S.model, members: people, playerStats: S.playerStats });
   if (!result) return '';
   const [best, ...others] = result.options;
@@ -938,51 +948,45 @@ function lineupRolesHtml() {
   const label = { season: 'Season', history: 'Patch', team: 'With team' };
   const order = (option) => [...option.picks].sort((a, b) => ROLES.findIndex(([r]) => r === a.role) - ROLES.findIndex(([r]) => r === b.role));
   const row = (p) => `
-    <div class="lr-row">
-      <span class="lr-role">${roleIcon(p.role)}${esc(ROLE_NAME[p.role])}</span>
-      <span class="lr-who"><b>${esc(nickOf(p.id))}</b><small>${Object.entries(p.parts).map(([k, v]) => `${label[k]} ${v.games}g`).join(' · ') || 'No games yet'}</small></span>
+    <div class="lr-row" title="${esc(Object.entries(p.parts).map(([k, v]) => `${label[k]} ${v.games}g`).join(' · ') || 'No games')}">
+      ${roleGlyph(p.role)}
+      <b class="lr-who">${esc(nickOf(p.id))}</b>
       <span class="lr-champs">${p.champions.map((c) => champImg(c, 's')).join('')}</span>
       ${signed(p.points)}
     </div>`;
   const close = result.margin < 3;
   return `
     <div class="lineup-roles">
-      <h3>Suggested Roles <small>${close ? 'close call' : 'for this five'}</small></h3>
+      <h3>Lineup Roles ${close ? '<small title="Top options score within 3 points">close</small>' : ''}</h3>
       ${order(best).map(row).join('')}
-      ${others.length ? `<details><summary>Other options</summary>${others.map((o) => `
-        <div class="lr-alt">${order(o).map((p) => `<span>${esc(ROLE_NAME[p.role])}: ${esc(nickOf(p.id))}</span>`).join('')}<b class="down">${o.total - best.total}</b></div>`).join('')}</details>` : ''}
+      ${others.length ? `<details><summary>Alternatives</summary>${others.map((o) => `
+        <div class="lr-alt">${order(o).map((p) => `<span title="${esc(ROLE_NAME[p.role])}">${roleGlyph(p.role)}${esc(nickOf(p.id))}</span>`).join('')}<b class="down">${o.total - best.total}</b></div>`).join('')}</details>` : ''}
     </div>`;
 }
-
 // ---------- Comp: what each team is turning into ----------
 const classOf = (championId) => champMap().get(championId)?.tags?.[0] || S.model?.tags?.[championId] || 'None';
 function compCard(title, ids, mine) {
   const comp = Traits.compProfile(ids.map((id) => ({ id, tag: classOf(id) })));
-  const sure = Math.round(comp.confidence * 100);
+  const lead = comp.plan && !comp.mixed ? comp.plan : null;
   const plans = comp.plans.map((p) => `
-    <div class="plan ${comp.plan === p.key && !comp.mixed ? 'lead' : ''}" title="${esc(p.name)}">
-      <span>${esc(p.name)}</span><div class="plan-track"><i data-w="${Math.round(p.share * 100)}"></i></div><b>${Math.round(p.share * 100)}%</b>
-    </div>`).join('');
-  const chips = comp.needs.slice(0, 7).map((n) => `<span class="need ${n.state}" title="${esc(n.name)}: ${n.have} of about ${n.need}">${esc(n.name)} <b>${n.have}/${Math.ceil(n.need)}</b></span>`).join('');
-  const open = comp.needs.filter((n) => n.state !== 'done').slice(0, 3).map((n) => n.name);
+    <span class="plan ${lead === p.key ? 'lead' : ''}" title="${esc(p.name)}: ${Math.round(p.share * 100)}%" role="img" aria-label="${esc(p.name)}">
+      ${icon(p.key)}<i class="plan-fill" data-w="${Math.round(p.share * 100)}"></i>
+    </span>`).join('');
+  const needs = comp.needs.map((n) => `
+    <span class="need ${n.state}" title="${esc(n.name)}" role="img" aria-label="${esc(n.name)}: ${n.state}">${icon(n.key)}</span>`).join('');
   const ap = Math.round(comp.damage.ap * 100);
-  const dmgText = { open: '', balanced: 'Balanced damage', 'ap-heavy': 'Too much magic damage', 'ad-heavy': 'Too much physical damage' }[comp.damage.state];
   return `
-    <div class="comp-card ${mine ? 'ours' : 'theirs'}">
-      <div class="comp-head"><span class="comp-kicker">${title}</span><b>${esc(comp.label)}</b><small>${comp.plan ? `${sure}% sure · ` : ''}${comp.n}/5 picks</small></div>
-      ${comp.n ? `<div class="plans">${plans}</div>` : ''}
-      ${comp.n ? `<div class="needs">${chips}</div>` : ''}
-      ${comp.n ? `<div class="dmg ${comp.damage.state}"><span>AD</span><div class="dmg-track"><i data-w="${ap}"></i></div><span>AP</span><small>${dmgText}</small></div>` : ''}
-      ${mine && comp.n && comp.n < 5 && open.length ? `<p class="comp-next">Look for: <b>${esc(open.join(', '))}</b></p>` : ''}
+    <div class="comp-card ${mine ? 'ours' : 'theirs'}" title="${esc(title)}: ${esc(comp.label)}">
+      ${comp.n ? `<div class="plans">${plans}</div><div class="needs">${needs}</div>
+      <div class="dmg ${comp.damage.state}" title="Damage split: ${100 - ap}% AD, ${ap}% AP">${icon('sword')}<div class="dmg-track"><i data-w="${ap}"></i></div>${icon('wand')}</div>` : ''}
     </div>`;
 }
 function compHtml(d) {
   const ours = d.ally.map(shownChamp).filter(Boolean);
   const theirs = d.enemy.map(shownChamp).filter(Boolean);
   if (!ours.length && !theirs.length) return '';
-  return `<section class="comp" aria-label="Team compositions">${compCard('YOUR COMP', ours, true)}${compCard('ENEMY COMP', theirs, false)}</section>`;
+  return `<section class="comp" aria-label="Team compositions">${compCard('Ally comp', ours, true)}${compCard('Enemy comp', theirs, false)}</section>`;
 }
-
 function renderDraft() {
   clearInterval(timerHandle);
   const d = withRoles(S.draft);
@@ -999,25 +1003,20 @@ function renderDraft() {
           <span class="sweep"></span>
           <img class="orb-seal" src="logo.png" alt="">
         </div>
-        <p class="kicker">${connected ? 'Eyes open' : 'The Rift is quiet'}</p>
-        <h2 class="waiting-title">${connected ? 'Awaiting Champ Select' : 'Awaiting League'}</h2>
-        <p class="waiting-text">${connected
-          ? 'Queue up. The draft unfolds here the moment champ select begins.'
-          : 'Open the client and Itachio awakens on its own.'}</p>
-        <div class="scan"><span class="scan-dot"></span>${connected ? esc(PHASE_TEXT[S.lcu?.phase] || 'Idle') : 'Listening for the client'}</div>
+        <p class="kicker">${connected ? '接続' : '待機'}</p>
+        <h2 class="waiting-title">${connected ? 'Waiting for Champ Select' : 'League Client Not Detected'}</h2>
+        <div class="scan"><span class="scan-dot"></span>${connected ? esc(PHASE_TEXT[S.lcu?.phase] || 'Idle') : 'Searching for client'}</div>
         ${connected ? lineupRolesHtml() : ''}
-        ${S.stats?.meta?.length ? '' : '<p class="waiting-text small">No meta data yet. Recommendations appear after the collector runs for the first time.</p>'}
+        ${S.stats?.meta?.length ? '' : '<p class="waiting-text small">No meta data. The collector has not run yet.</p>'}
       </div>`;
     return;
   }
 
   const blocked = unavailable(d);
-  const turnText = !d.turn
-    ? d.phase === 'FINALIZATION' ? 'Finalization' : PHASE_TEXT[S.lcu?.phase] || 'Waiting'
-    : d.isOurTurn
-      ? d.turn.kind === 'ban' ? 'Your Turn to Ban' : 'Your Turn to Pick'
-      : `${d.turn.side === 'ally' ? 'Your Team Is' : 'Enemy Is'} ${d.turn.kind === 'ban' ? 'Banning' : 'Picking'}`;
-
+  const turnKind = d.turn?.kind === 'ban' ? 'Ban' : 'Pick';
+  const turnHtml = !d.turn
+    ? `<span>${esc(d.phase === 'FINALIZATION' ? 'Finalization' : PHASE_TEXT[S.lcu?.phase] || 'Waiting')}</span>`
+    : `${icon(d.turn.kind === 'ban' ? 'ban' : 'pick')}<span>${d.isOurTurn ? `Your ${turnKind}` : d.turn.side === 'ally' ? 'Ally' : 'Enemy'}</span>`;
   // Our team is always on the left, whichever side we play
   const allyCol = sideColumn('ally', d);
   const enemyCol = sideColumn('enemy', d);
@@ -1052,16 +1051,12 @@ function renderDraft() {
     : [];
   const banBlock = d.myBanActionId
     ? `<div>
-        <h3 class="sub head-row">
-          <span>Ban Suggestions</span>
-          ${bans.length ? '<span class="hint">Click to hover the ban in the client</span>' : ''}
-        </h3>
+        <h3 class="sub head-row"><span class="head-ic">${glyph('ban', 'Ban suggestions')}Bans</span></h3>
         ${bans.length
-          ? `<div class="recs" data-kind="ban">${bans.map((r, i) => banRow(r, i, { canHover: true, hoverId: d.banHoverId })).join('')}</div>`
-          : '<p class="note">Ban suggestions need the learned model; they appear after the next training.</p>'}
+          ? `<div class="recs tiers" data-kind="ban"><div class="tier-group"><div class="tier-tiles">${bans.map((r) => banTile(r, { canHover: true, hoverId: d.banHoverId })).join('')}</div></div></div>`
+          : '<p class="note">Requires a trained model.</p>'}
       </div>`
     : '';
-
   // The build for our pick once every champion is locked (sent to the client automatically)
   const buildBlock = local?.locked ? buildHtml() + gamePlanHtml(d) : '';
 
@@ -1081,7 +1076,7 @@ function renderDraft() {
     });
     if (ev) {
       const row = { ...ev, inPool: myPool().some((p) => p.champion_id === local.hoverId) };
-      hoverRow = `<h3 class="sub gap">Your Hover</h3><div class="recs pinned">${recRow(row, 0, { canHover: false, hoverId: local.hoverId, rank: '•' })}</div>`;
+      hoverRow = `<div class="recs pinned gap">${recRow(row, 0, { canHover: false, hoverId: local.hoverId, rank: '•' })}</div>`;
     }
   }
 
@@ -1099,9 +1094,7 @@ function renderDraft() {
     ? pickRow + explanationBlock + buildBlock
     : recs.length
       ? recommendationList
-      : `<p class="note">${hasStats
-          ? 'No pickable champions left for this role.'
-          : 'No meta data yet. Recommendations appear here after the collector runs.'}</p>`;
+      : `<p class="note">${hasStats ? 'No pickable champions for this role.' : 'No meta data. The collector has not run yet.'}</p>`;
 
   $view.innerHTML = `
     <div class="board">
@@ -1109,7 +1102,7 @@ function renderDraft() {
       <section class="center">
         <div class="phasebox ${d.isOurTurn ? 'mine' : ''}">
           <div class="turn-row">
-            <div class="turn ${d.isOurTurn ? 'mine' : ''}">${esc(turnText)}</div>
+            <div class="turn ${d.isOurTurn ? 'mine' : ''}">${turnHtml}</div>
             <div class="secs" id="tsec"></div>
           </div>
           <div class="timer"><div id="tbar"></div></div>
@@ -1118,10 +1111,7 @@ function renderDraft() {
         ${compHtml(d)}
         ${pickOrderHtml(d, blocked)}
         <div>
-          <h3 class="sub head-row">
-            <span>${local?.locked ? `Your Pick: ${esc(champName(local.championId))}` : `Recommended${role ? ' · ' + ROLE_NAME[role] : ''}`}</span>
-            ${!local?.locked && d.myPickActionId && recs.length ? '<span class="hint">Click to hover in the client</span>' : ''}
-          </h3>
+          <h3 class="sub head-row"><span class="head-ic">${local?.locked ? glyph('pick', 'Locked pick') : role ? roleGlyph(role) : ''}${local?.locked ? 'Your Pick' : `Picks${role ? ` · ${ROLE_NAME[role]}` : ''}`}</span></h3>
           ${recommendationContent}
         </div>
       </section>
@@ -1201,13 +1191,11 @@ function sideColumn(which, d) {
       mini = `<div class="mini">${picks.map((r) => champImg(r.championId, 's')).join('')}</div>`;
     }
     const cls = ['slot', p.isLocal ? 'me' : '', acting.has(p.cellId) ? 'acting' : '', !p.locked && shown ? 'hover' : ''].join(' ');
+    const roleMark = roleLabel ? `<span class="slot-role ${p.roleGuessed ? 'guess' : ''}">${roleGlyph(p.position, p.roleGuessed ? `${roleLabel} (estimated)` : roleLabel)}</span>` : '<span class="slot-role"></span>';
     return `
-      <div class="${cls}">
+      <div class="${cls}" ${shown ? `title="${esc(champName(shown))}"` : ''}>
+        ${roleMark}
         ${champImg(shown, 'l')}
-        <div class="who">
-          <div class="name">${esc(shown ? champName(shown) : '…')}</div>
-          ${roleLabel ? `<div class="role"${p.roleGuessed ? ' title="Estimated from the champion"' : ''}>${roleLabel}${p.roleGuessed ? '?' : ''}</div>` : ''}
-        </div>
         ${shown ? slotScore(d, which, p, shown, scores) : mini}
       </div>`;
   });
@@ -1215,66 +1203,19 @@ function sideColumn(which, d) {
   const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
   return `
     <section class="side ${color}">
-      <div class="side-head">
-        <h2>${isAlly ? 'Your Team' : 'Enemy Team'}</h2>
-        ${avg === null ? '' : `<div class="avg" title="Average score of the champions shown"><small>avg</small><b class="sc sc-${tierOf(avg)}">${avg}</b></div>`}
-        <span>${color === 'blue' ? 'Blue Side' : 'Red Side'}</span>
+      <div class="side-head" title="${color === 'blue' ? 'Blue side' : 'Red side'}">
+        <h2><span class="kanji">${isAlly ? '味方' : '敵'}</span>${isAlly ? 'Ally' : 'Enemy'}</h2>
+        ${avg === null ? '' : `<div class="avg" title="Average score"><b class="sc sc-${tierOf(avg)}">${avg}</b></div>`}
       </div>
       ${slots.join('')}
-      <div class="bans">${bans.length ? bans.map((id) => champImg(id, 's')).join('') : '<span class="note">No bans</span>'}</div>
+      <div class="bans">${bans.map((id) => champImg(id, 's')).join('')}</div>
     </section>`;
 }
-
 // ---------- Champions ----------
 // How each player does on each champion (collector/src/players), from three kinds of games:
 // their ranked games of the season, those of the patch, and those with team members on
 // their side (per line-up). Games, record, and the effect split into the laning phase and
 // the rest of the game.
-// Champions worth learning for a player: in each role they play (chosen in the Team tab,
-// else the role they play most), the best scored with the champions their teammates
-// usually play, leaving out what they already play there
-const LEARN_COUNT = 5;
-function learnHtml(playerId) {
-  if (!S.model) return '';
-  const entries = playedEntries(playerId);
-  const member = (S.members || []).find((m) => m.id === playerId);
-  let roles = (member?.roles || []).filter((r) => ROLE_NAME[r]);
-  if (!roles.length) {
-    const roleGames = {};
-    for (const e of entries) roleGames[e.role] = (roleGames[e.role] || 0) + e.games;
-    const main = Object.entries(roleGames).sort((a, b) => b[1] - a[1])[0]?.[0];
-    roles = main ? [main] : [];
-  }
-  roles = ROLES.map(([r]) => r).filter((r) => roles.includes(r));
-  const rows = roles.map((role) => {
-    const played = new Set(entries.filter((e) => e.role === role).map((e) => e.championId));
-    // Teammates' usual champion in each other role
-    const allies = [];
-    for (const m of S.members || []) {
-      if (m.id === playerId) continue;
-      const theirs = playedEntries(m.id)
-        .filter((x) => x.role !== role && !allies.some((a) => a.position === x.role))
-        .sort((a, b) => b.games - a.games)[0];
-      if (theirs) allies.push({ championId: theirs.championId, position: theirs.role });
-    }
-    const picks = Engine.recommend({ stats: S.stats, model: S.model, role, allies, limit: 40 })
-      .filter((r) => !played.has(r.championId))
-      .slice(0, LEARN_COUNT);
-    if (!picks.length) return '';
-    return `
-      <div class="learn-line">
-        <span class="learn-role">${ROLE_NAME[role]}</span>
-        <div class="learn-row">${picks.map((r) => `<span class="learn-pick">${champImg(r.championId)}<span>${esc(champName(r.championId))}</span><b class="sc sc-${tierOf(r.score)}">${r.score}</b></span>`).join('')}</div>
-      </div>`;
-  }).join('');
-  if (!rows) return '';
-  return `
-    <div class="learn">
-      <h3 class="sub">Champions to Learn</h3>
-      ${rows}
-    </div>`;
-}
-
 const nickOf = (id) => (S.members || []).find((m) => m.id === id)?.nickname || '?';
 // A line-up's name from one player's side: the team members they played with
 const lineupName = (lineup, playerId) => `with ${lineup.split(',').filter((id) => id !== playerId).map(nickOf).join(', ')}`;
@@ -1377,29 +1318,27 @@ function renderChampions() {
         .sort((x, y) => y.games - x.games || y.delta - x.delta)
     : [];
   const empty = {
-    season: 'No ranked games this season yet.',
-    history: 'No ranked games this patch yet.',
-    team: 'No ranked games of five team members together yet. Games where all five on your side are team members count here, for each five.',
+    season: 'No ranked games this season.',
+    history: 'No ranked games on this patch.',
+    team: 'No ranked games with a full five-member lineup.',
   }[source[0]];
   $view.innerHTML = `
     <div class="champ-stats">
       <div class="toolbar">
-        <h2>Champion Statistics</h2>
-        <div class="seg" id="src">${STAT_SOURCES.map(([k, label]) => `<button data-src="${k}" class="${k === source[0] ? 'active' : ''}">${label}</button>`).join('')}</div>
+        <p class="note source-note">${{
+          season: 'All ranked games this season. Input to the personal score layer.',
+          history: 'Ranked games on the current patch. Input to the personal score layer.',
+          team: 'Ranked games with five team members. Applied only when the same lineup is drafted.',
+        }[source[0]]}</p>
         <span class="grow"></span>
         <div class="toolbar-actions">
           ${lineups.length && source[0] === 'team' ? renderLineupPicker(lineups, lineup, id) : ''}
           <select id="who" class="who-select">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
         </div>
       </div>
-      <p class="note source-note">${{
-        season: 'How well each champion goes for this player, from all their ranked games of the season. It feeds their scores in the draft.',
-        history: 'The same from this patch only: fewer games, but how each champion does for them right now. It feeds their scores too.',
-        team: 'Their games where all five on their side were these team members. In the draft it counts when the same five are on your side.',
-      }[source[0]]}</p>
       ${rows.length
         ? `<div class="stats-table">
-            <div class="stats-row head"><span>Champion</span><span>Games</span><span>Record</span><span title="Laning phase compared with an average player in the same matchup">Lane</span><span title="The rest of the game, beyond the draft and the lane">Rest</span><span title="What it adds to this player's score for the champion">Effect</span></div>
+            <div class="stats-row head"><span>Champion</span><span>Games</span><span>W–L</span><span title="Laning phase versus an average player in the same matchup">Lane Δ</span><span title="Post-laning result beyond the draft and lane">Late Δ</span><span title="Added to this player's score for the champion">Score Δ</span></div>
             ${rows.map((r) => `
               <div class="stats-row">
                 <span class="who">${champImg(r.championId)}<span><b>${esc(champName(r.championId))}</b><small>${esc(ROLE_NAME[r.role] || r.role)}</small></span></span>
@@ -1410,16 +1349,9 @@ function renderChampions() {
                 <span>${signed(pts(r.delta))}</span>
               </div>`).join('')}
           </div>
-          <p class="note">Champions not played here: ${signed(pts(stats.unplayed))}</p>`
+          <p class="note">Unplayed champion baseline: ${signed(pts(stats.unplayed))}</p>`
         : `<p class="note">${empty}</p>`}
-      ${learnHtml(id)}
     </div>`;
-  document.getElementById('src').onclick = (e) => {
-    const b = e.target.closest('[data-src]');
-    if (!b) return;
-    statsUi.source = b.dataset.src;
-    renderMain();
-  };
   document.getElementById('who').onchange = (e) => {
     statsUi.player = e.target.value;
     statsUi.lineup = null;
@@ -1427,8 +1359,56 @@ function renderChampions() {
   };
   attachLineupPicker();
 }
-
 // ---------- Team ----------
+// Role changes show at once and are saved behind the scenes: the newest wanted set is sent
+// when the previous save returns, and a failed save puts the last saved roles back.
+const roleSave = { want: null, sending: false, confirmed: null };
+
+function applyLocalRoles(roles) {
+  if (S.me) S.me = { ...S.me, roles };
+  S.members = (S.members || []).map((m) => (m.id === S.me?.id ? { ...m, roles } : m));
+}
+
+function paintRoleTiles() {
+  const roles = new Set(S.me?.roles || []);
+  for (const tile of $view.querySelectorAll('[data-role]')) {
+    const on = roles.has(tile.dataset.role);
+    tile.classList.toggle('on', on);
+    tile.setAttribute('aria-pressed', String(on));
+  }
+}
+
+async function flushRoles() {
+  if (roleSave.sending) return;
+  roleSave.sending = true;
+  while (roleSave.want) {
+    const sent = roleSave.want;
+    const res = await api.saveRoles(sent);
+    if (!res.ok) {
+      roleSave.want = null;
+      applyLocalRoles(roleSave.confirmed || []);
+      if (tab === 'team') paintRoleTiles();
+      toast(res.error, 'error');
+      break;
+    }
+    roleSave.confirmed = sent;
+    if (roleSave.want === sent) roleSave.want = null;
+  }
+  roleSave.sending = false;
+}
+
+function toggleRole(role) {
+  if (!roleSave.want && !roleSave.sending) roleSave.confirmed = S.me?.roles || [];
+  const roles = new Set(S.me?.roles || []);
+  if (roles.has(role)) roles.delete(role);
+  else roles.add(role);
+  const next = ROLES.map(([r]) => r).filter((r) => roles.has(r));
+  roleSave.want = next;
+  applyLocalRoles(next);
+  paintRoleTiles();
+  flushRoles();
+}
+
 function renderTeam() {
   const t = S.team;
   const isOwner = t?.owner_id === S.me?.id;
@@ -1456,41 +1436,33 @@ function renderTeam() {
             <div class="top">
               <span class="nick">${esc(m.nickname)}${owner ? ' <span class="badge owner">Owner</span>' : ''}</span>
             </div>
-            <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'LoL account not linked yet'}</div>
-            ${mine ? `<div class="roles-label">Your roles <small>pick any number</small></div><div class="role-tiles">${chips}</div>` : `<div class="role-tags">${chips || '<span class="muted small">No roles chosen</span>'}</div>`}
-            ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove From Team</button>` : ''}
+            <div class="muted small">${m.riot_id ? esc(m.riot_id) : 'Riot account not linked'}</div>
+            ${mine ? `<div class="roles-label">Roles</div><div class="role-tiles">${chips}</div>` : `<div class="role-tags">${chips || '<span class="muted small">No roles set</span>'}</div>`}
+            ${isOwner && m.id !== S.me.id ? `<button class="link kick" data-kick="${m.id}" data-name="${esc(m.nickname)}">Remove Member</button>` : ''}
           </div>`;
       }).join('')}
     </div>`;
   $view.querySelector('.members').onclick = async (e) => {
     const chip = e.target.closest('[data-role]');
-    if (chip) {
-      const roles = new Set(S.me?.roles || []);
-      if (roles.has(chip.dataset.role)) roles.delete(chip.dataset.role);
-      else roles.add(chip.dataset.role);
-      chip.disabled = true;
-      S = await run(api.saveRoles(ROLES.map(([r]) => r).filter((r) => roles.has(r))));
-      return renderMain();
-    }
+    if (chip) return toggleRole(chip.dataset.role);
     const b = e.target.closest('[data-kick]');
     if (!b || !confirm(`Remove ${b.dataset.name} from the team?`)) return;
     S = await run(api.kickMember(b.dataset.kick));
-    toast(`${b.dataset.name} was removed from the team`);
+    toast(`Removed ${b.dataset.name}`);
     renderMain();
   };
-  document.getElementById('copy').onclick = () => navigator.clipboard.writeText(t.join_code).then(() => toast('Code copied'));
+  document.getElementById('copy').onclick = () => navigator.clipboard.writeText(t.join_code).then(() => toast('Invite code copied'));
   document.getElementById('out').onclick = signOut;
   document.getElementById('prof').onclick = () => {
     screen = 'profile';
     render();
   };
   document.getElementById('leave').onclick = async () => {
-    if (!confirm('Are you sure you want to leave the team?')) return;
+    if (!confirm('Leave this team?')) return;
     S = await run(api.leaveTeam());
     decideScreen();
   };
 }
-
 // ---------- History ----------
 // A player's ranked games of the season from Riot (the collector reads them), newest first:
 // both teams in role order with every champion's score on the final board. Only for
@@ -1528,7 +1500,7 @@ async function renderHistory(more = false) {
   const avgHtml = (t) => (t.avg === null ? '<span class="havg"></span>' : `<span class="havg sc sc-${tierOf(t.avg)}">${t.avg}</span>`);
   const toolbar = `
     <div class="toolbar hist-bar">
-      <h2>Ranked Games</h2>
+      <span class="grow"></span>
       <span class="grow"></span>
       <select id="hwho">${members.map((m) => `<option value="${m.id}" ${m.id === id ? 'selected' : ''}>${esc(m.nickname)}</option>`).join('')}</select>
       ${mine && rows.length ? '<button class="btn ghost danger" id="hclear">Clear History</button>' : ''}
@@ -1547,15 +1519,16 @@ async function renderHistory(more = false) {
         <div class="hrow ${r.win ? 'won' : 'lost'}">
           <span class="hwhen"><b>${new Date(r.started_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</b><small>${QUEUE_NAME[r.queue_id] || ''}${time ? ` · ${time}` : ''}</small></span>
           <span class="hres ${r.win ? 'win' : 'loss'}">${r.win ? 'Win' : 'Loss'}<small class="tag ${r.side}">${r.side === 'red' ? 'Red' : 'Blue'}</small></span>
-          <span class="hme">${champImg(r.champion_id)}<span><b>${esc(champName(r.champion_id))}</b><small>${ROLE_NAME[r.role] || ''}${kda ? ` · ${kda}` : ''}${r.cs !== null ? ` · ${r.cs} cs` : ''}</small>${r.lineup ? `<small class="hwith">${esc(lineupName(r.lineup, id))}</small>` : ''}</span></span>
+          <span class="hme">${champImg(r.champion_id)}<span><b>${esc(champName(r.champion_id))}</b><small>${ROLE_NAME[r.role] || ''}${kda ? ` · ${kda}` : ''}${r.cs !== null ? ` · ${r.cs} cs` : ''}</small></span></span>
           ${teamHtml(us, r.champion_id)}
           <div class="hscore">${avgHtml(us)}<span class="hvs">vs</span>${avgHtml(them)}</div>
           ${teamHtml(them, null)}
+          ${r.lineup ? `<span class="hwith" title="${esc(lineupName(r.lineup, id))}">${icon('users')}<span>${esc(lineupPeople(r.lineup, id).join(', '))}</span></span>` : ''}
         </div>`;
         historyUi.html.set(r.match_id, html);
         return html;
       }).join('')}</div>${historyUi.more ? '<div class="hist-more"><button class="btn ghost" id="hmore">Load More</button></div>' : ''}`
-    : `<div class="empty-state"><h2>No Games Yet</h2><p>${mine ? 'Your ranked games of the season show up here once the collector reads them from Riot.' : 'No ranked games to show.'}</p></div>`;
+    : `<div class="empty-state"><h2>No Ranked Games</h2><p>${mine ? 'Games appear after the collector syncs them from Riot.' : 'No games available for this player.'}</p></div>`;
   $view.innerHTML = toolbar + body;
   $view.scrollTop = keepScroll;
   const moreBtn = document.getElementById('hmore');
@@ -1573,7 +1546,7 @@ async function renderHistory(more = false) {
   const clear = document.getElementById('hclear');
   if (clear) {
     clear.onclick = async () => {
-      if (!confirm('Clear your history? Games so far are hidden from this list. Champion statistics stay as they are.')) return;
+      if (!confirm('Clear match history? Existing games are hidden from this list. Champion statistics are not affected.')) return;
       S = await run(api.clearHistory());
       toast('History cleared');
       renderHistory();
@@ -1582,13 +1555,13 @@ async function renderHistory(more = false) {
 }
 
 // ---------- Options ----------
-// Kept on this computer. Essentials: start with Windows. Draft rites: send runes (with
-// summoner spells) and the item build to the client once every champion is locked.
+// Kept on this computer. General: launch at sign-in. Draft: send runes (with summoner
+// spells) and the item set to the client once every champion is locked.
 const OPTION_TABS = [
-  ['general', 'Essentials', 'seal', [['openAtLogin', 'Awaken at sign-in', 'Ready before League opens']]],
-  ['drafting', 'Draft Rites', 'scroll', [
-    ['autoRunes', 'Rune seal', 'Sets runes and spells at lock-in'],
-    ['autoItems', 'Item scroll', 'Sets the item build at lock-in'],
+  ['general', 'General', 'seal', [['openAtLogin', 'Launch at Windows sign-in', 'Starts Itachio before the League client']]],
+  ['drafting', 'Draft', 'scroll', [
+    ['autoRunes', 'Auto-apply runes and spells', 'Sent to the client when all picks are locked'],
+    ['autoItems', 'Auto-apply item set', 'Sent to the client when all picks are locked'],
   ]],
 ];
 ICONS.seal = '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 8 5.5M12 21a9 9 0 0 1-8-5.5M3.5 9.5A9 9 0 0 1 12 3"/><circle cx="12" cy="12" r="2.4"/>';
