@@ -30,6 +30,8 @@ Pick better in champ select. Itachio watches your League of Legends draft live a
 8. Once every champion is locked, the **Build** panel shows runes, summoner spells and items for your champion against this enemy team. Items cover starting items, core items, boots, and situational items picked for this enemy team; hover an item for the reason (for example "vs healing" or "vs magic damage"). Click the download button to send them to the client, or turn on auto-apply in **Options** so they're sent by themselves.
 9. The **Game Plan** under the build shows the draft's win chance and where it comes from (champions, synergy, matchups, composition), the edge early and later, the first objectives, and every lane's matchup, all in points of win chance.
 
+**Champion Pool** limits your recommendations. Select champions, then choose **Include Only** (only these are suggested), **Exclude** (these are never suggested) or **All Champions** (the list is kept, with no effect). The same switch sits next to the picks in **Draft Assistant**. The list stays on this computer and only changes what is suggested to you: you can still hover or lock anything in the client, and scores still expect the enemy to be able to pick your excluded champions.
+
 The draft screen is built from icons: hover any icon for what it means.
 
 After the game, **Draft Assistant** shows a summary: the result, the draft's win chance, and every player's score and numbers.

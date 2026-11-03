@@ -953,7 +953,7 @@
   };
 
   /** Same arguments and result as Recommend.recommend, plus model. Scores look ahead (see above). */
-  function recommend({ model, role = '', unavailable = new Set(), pickable = null, allies = [], enemies = [], pool = [], limit = 10, personal = null, answerShare = 1 }) {
+  function recommend({ model, role = '', unavailable = new Set(), pickable = null, keep = null, allies = [], enemies = [], pool = [], limit = 10, personal = null, answerShare = 1 }) {
     const ix = index(model);
     const allowed = pickable ? new Set(pickable) : null;
     const inPool = new Set(pool);
@@ -967,8 +967,10 @@
       if (unavailable.has(championId) || (allowed && !allowed.has(championId))) continue;
       const r = role ? ROLE_INDEX[role] : best.r;
       const entry = ix.champ.get(`${championId}:${r}`);
-      // Never seen in this role, or off-meta there: not recommended (see above), unless it is the player's main
-      if ((!entry || (ix.matches && entry.games / (2 * ix.matches) < MIN_PICK_RATE)) && !isMain(personal, championId, ROLES[r])) continue;
+      // Never seen in this role, or off-meta there: not recommended (see above), unless it is the
+      // player's main. keep: champions the player asked for by name may be off-meta, not unseen.
+      const offMeta = entry && ix.matches && entry.games / (2 * ix.matches) < MIN_PICK_RATE && !keep?.has(championId);
+      if ((!entry || offMeta) && !isMain(personal, championId, ROLES[r])) continue;
       const rest = ix.matches ? restFor(r) : null;
       const typ = typical(ix, r, allies, enemies, rest, unavailable);
       const row = finalRow(ix, assess(ix, championId, r, allies, enemies, rest), typ, rest);
@@ -1485,8 +1487,26 @@
     return pending.filter((x) => x.round > mine.round).length / pending.length;
   }
 
+  /**
+   * The player's champion pool as recommend() arguments. filter: { mode: 'off'|'include'|'exclude',
+   * champions: [ids] }; an empty list filters nothing. Only pickable changes, never unavailable:
+   * a champion the player will not play can still be picked by the enemy, and the look-ahead has
+   * to keep counting it. Returns { pickable, keep, active }.
+   */
+  function poolPickable(filter, pickable, allChampions) {
+    const list = new Set(filter?.champions || []);
+    if (!list.size || (filter.mode !== 'include' && filter.mode !== 'exclude')) return { pickable, keep: null, active: false };
+    const base = pickable || allChampions || [];
+    if (filter.mode === 'include') {
+      const allowed = pickable ? new Set(pickable) : null;
+      return { pickable: [...list].filter((id) => !allowed || allowed.has(id)), keep: list, active: true };
+    }
+    return { pickable: base.filter((id) => !list.has(id)), keep: null, active: true };
+  }
+
   const Engine = {
     recommend: hybridRecommend,
+    poolPickable,
     evaluate: hybridEvaluate,
     orderPickSuggestions,
     planPickOrder,

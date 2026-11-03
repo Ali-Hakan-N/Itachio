@@ -268,10 +268,18 @@ Object.assign(ICONS, {
   ac: '<circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="3"/>',
   sc: '<path d="M4 18l6-6 4 3 6-8M15 7h5v5"/>',
 });
+Object.assign(ICONS, {
+  pool: '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M14 17l2.5 2.5L21 14"/>',
+  all: '<circle cx="6" cy="6" r="1.6"/><circle cx="12" cy="6" r="1.6"/><circle cx="18" cy="6" r="1.6"/><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/><circle cx="6" cy="18" r="1.6"/><circle cx="12" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/>',
+});
 const glyph = (name, title) => `<span class="gl" title="${esc(title)}" role="img" aria-label="${esc(title)}">${icon(name)}</span>`;
 // The three statistics sources are inputs of the scores: each has its own entry
 const MENU = [
-  { id: 'draft', title: 'Draft', items: [{ tab: 'draft', label: 'Draft Assistant', icon: 'target' }] },
+  { id: 'draft', title: 'Draft', items: [
+    { tab: 'draft', label: 'Draft Assistant', icon: 'target' },
+    { tab: 'pool', label: 'Champion Pool', icon: 'pool' },
+  ] },
   { id: 'players', title: 'Statistics', items: [
     { tab: 'champions', src: 'season', label: 'Season Stats', icon: 'calendar' },
     { tab: 'champions', src: 'history', label: 'Patch Stats', icon: 'layers' },
@@ -501,6 +509,7 @@ function renderMain() {
     champions: ['統計', `Champion Stats · ${sourceName}`],
     team: ['編成', 'Roster'],
     history: ['戦績', 'Match History'],
+    pool: ['候補', 'Champion Pool'],
   };
   const [kicker, title] = pages[tab] || pages.draft;
   document.getElementById('page-kicker').textContent = kicker;
@@ -516,6 +525,7 @@ function renderMain() {
   if (tab === 'champions') renderChampions();
   if (tab === 'team') renderTeam();
   if (tab === 'history') renderHistory();
+  if (tab === 'pool') renderPool();
 }
 // ---------- Draft ----------
 let timerHandle = null;
@@ -1024,6 +1034,7 @@ function renderDraft() {
   const local = d.ally.find((p) => p.isLocal);
   const role = local?.position || '';
   const hasStats = S.stats?.meta?.length > 0;
+  const poolRule = Engine.poolPickable(poolFilter(), S.pickable, (S.champions || []).map((c) => c.id));
   const recs = local?.locked
     ? []
     : Engine.recommend({
@@ -1031,7 +1042,8 @@ function renderDraft() {
         role,
         // Teammates' hovers are taken too: don't suggest what a friend is about to pick
         unavailable: new Set([...blocked, ...d.ally.filter((p) => !p.isLocal && shownChamp(p)).map(shownChamp)]),
-        pickable: S.pickable,
+        pickable: poolRule.pickable,
+        keep: poolRule.keep,
         ...draftContext(d, local?.cellId),
         pool: myPool().map((p) => p.champion_id),
         limit: 80,
@@ -1094,7 +1106,9 @@ function renderDraft() {
     ? pickRow + explanationBlock + buildBlock
     : recs.length
       ? recommendationList
-      : `<p class="note">${hasStats ? 'No pickable champions for this role.' : 'No meta data. The collector has not run yet.'}</p>`;
+      : poolRule.active && hasStats
+        ? `<p class="note pool-empty">No pool champions for this role. <button type="button" class="link" data-pool-mode="off">Show all</button></p>`
+        : `<p class="note">${hasStats ? 'No pickable champions for this role.' : 'No meta data. The collector has not run yet.'}</p>`;
 
   $view.innerHTML = `
     <div class="board">
@@ -1111,7 +1125,7 @@ function renderDraft() {
         ${compHtml(d)}
         ${pickOrderHtml(d, blocked)}
         <div>
-          <h3 class="sub head-row"><span class="head-ic">${local?.locked ? glyph('pick', 'Locked pick') : role ? roleGlyph(role) : ''}${local?.locked ? 'Your Pick' : `Picks${role ? ` · ${ROLE_NAME[role]}` : ''}`}</span></h3>
+          <h3 class="sub head-row"><span class="head-ic">${local?.locked ? glyph('pick', 'Locked pick') : role ? roleGlyph(role) : ''}${local?.locked ? 'Your Pick' : `Picks${role ? ` · ${ROLE_NAME[role]}` : ''}`}</span>${local?.locked ? '' : poolSwitchHtml()}</h3>
           ${recommendationContent}
         </div>
       </section>
@@ -1120,6 +1134,9 @@ function renderDraft() {
 
   // Inline style attributes are blocked by the CSP, so bar widths are set here
   for (const bar of $view.querySelectorAll('[data-w]')) bar.style.width = `${bar.dataset.w}%`;
+  for (const b of $view.querySelectorAll('[data-pool-mode]')) b.onclick = () => setPoolMode(b.dataset.poolMode);
+  const poolEdit = $view.querySelector('[data-pool-edit]');
+  if (poolEdit) poolEdit.onclick = () => { tab = 'pool'; renderMain(); };
   // Apply buttons of the build
   for (const b of $view.querySelectorAll('[data-apply]')) {
     b.onclick = async () => {
@@ -1391,6 +1408,148 @@ function renderChampions() {
     };
   }
   attachLineupPicker();
+}
+
+// ---------- Champion pool ----------
+// The player's own limit on the draft's recommendations, kept on this computer per account:
+// one list and a switch for what it means, so turning it off or around loses nothing. Which
+// role a champion fits comes from the recommendations themselves, so one list serves all roles.
+const POOL_MODES = [
+  { mode: 'off', label: 'All Champions', icon: 'all', note: () => 'Recommendations use every champion.' },
+  { mode: 'include', label: 'Include Only', icon: 'pick', note: (n) => (n ? `Recommendations are limited to ${n} selected ${n === 1 ? 'champion' : 'champions'}.` : 'Select champions to limit the recommendations to.') },
+  { mode: 'exclude', label: 'Exclude', icon: 'ban', note: (n) => (n ? `${n} selected ${n === 1 ? 'champion is' : 'champions are'} left out of the recommendations.` : 'Select champions to leave out of the recommendations.') },
+];
+const POOL_STAMP = { include: '選', exclude: '禁' };
+const POOL_ROLE_SHARE = 0.05; // share of a champion's games, to list it under a role
+const poolUi = { owner: undefined, filter: null, role: '', query: '' };
+
+function poolFilter() {
+  const owner = S?.me?.id || null;
+  if (poolUi.owner !== owner) {
+    const saved = store.get(`pool.filter.${owner}`, {});
+    poolUi.owner = owner;
+    poolUi.filter = {
+      mode: POOL_MODES.some((m) => m.mode === saved.mode) ? saved.mode : 'off',
+      champions: Array.isArray(saved.champions) ? saved.champions.filter(Number.isInteger) : [],
+    };
+  }
+  return poolUi.filter;
+}
+const savePoolFilter = () => store.set(`pool.filter.${poolUi.owner}`, poolUi.filter);
+
+function setPoolMode(mode) {
+  poolFilter().mode = mode;
+  savePoolFilter();
+  renderMain();
+}
+
+// The switch next to the draft's picks
+function poolSwitchHtml() {
+  const { mode, champions } = poolFilter();
+  return `<span class="pool-switch" role="group" aria-label="Champion pool">
+    ${POOL_MODES.map((m) => `<button type="button" class="${m.mode === mode ? `on ${m.mode}` : ''}" data-pool-mode="${m.mode}" title="${m.label}" aria-label="${m.label}" aria-pressed="${m.mode === mode}">${icon(m.icon)}</button>`).join('')}
+    <button type="button" class="pool-edit" data-pool-edit title="Edit champion pool" aria-label="Edit champion pool">${icon('pool')}${champions.length ? `<b>${champions.length}</b>` : ''}</button>
+  </span>`;
+}
+
+// Roles a champion is played in, from the model, else the meta statistics; empty when unknown
+function poolRolesOf(championId) {
+  const out = new Set();
+  ROLES.forEach(([role], r) => {
+    if ((S.model?.champ?.[`${championId}:${r}`]?.[2] || 0) >= POOL_ROLE_SHARE) out.add(role);
+  });
+  if (!out.size) for (const row of S.stats?.meta || []) if (row.champion_id === championId && row.role) out.add(row.role);
+  return out;
+}
+
+function paintPool() {
+  const { mode, champions } = poolFilter();
+  const chosen = new Set(champions);
+  const stamp = POOL_STAMP[mode] || '';
+  for (const b of $view.querySelectorAll('[data-pool-set]')) {
+    const on = b.dataset.poolSet === mode;
+    b.className = on ? `on ${mode}` : '';
+    b.setAttribute('aria-pressed', String(on));
+  }
+  const query = poolUi.query.trim().toLowerCase();
+  for (const tile of $view.querySelectorAll('[data-pool-champ]')) {
+    const id = Number(tile.dataset.poolChamp);
+    const selected = chosen.has(id);
+    tile.classList.toggle('selected', selected);
+    tile.setAttribute('aria-pressed', String(selected));
+    tile.querySelector('.stamp').textContent = selected ? stamp : '';
+    const fits = !poolUi.role || !tile.dataset.roles || tile.dataset.roles.split(',').includes(poolUi.role);
+    tile.hidden = !(fits && (!query || tile.dataset.name.includes(query)));
+  }
+  for (const b of $view.querySelectorAll('[data-pool-role]')) {
+    const on = b.dataset.poolRole === poolUi.role;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  }
+  document.getElementById('poolNote').textContent = POOL_MODES.find((m) => m.mode === mode).note(champions.length);
+  document.getElementById('poolCount').textContent = champions.length;
+  document.getElementById('poolClear').disabled = !champions.length;
+  const page = $view.querySelector('.pool-page');
+  page.dataset.mode = mode;
+}
+
+function renderPool() {
+  const champions = [...(S.champions || [])].sort((a, b) => a.name.localeCompare(b.name));
+  $view.innerHTML = `
+    <div class="pool-page">
+      <div class="pool-bar">
+        <div class="pool-seg" role="group" aria-label="Pool mode">
+          ${POOL_MODES.map((m) => `<button type="button" data-pool-set="${m.mode}">${icon(m.icon)}<span>${m.label}</span></button>`).join('')}
+        </div>
+        <span class="pool-roles" role="group" aria-label="Filter by role">
+          <button type="button" data-pool-role="" title="All roles" aria-label="All roles">${icon('all')}</button>
+          ${ROLES.map(([role, name]) => `<button type="button" data-pool-role="${role}" title="${name}" aria-label="${name}">${roleIcon(role)}</button>`).join('')}
+        </span>
+        <label class="pool-search">${icon('search')}<input id="poolSearch" type="search" placeholder="Search champion" aria-label="Search champion" value="${esc(poolUi.query)}"></label>
+        <span class="grow"></span>
+        <span class="pool-count" title="Selected champions"><b id="poolCount"></b></span>
+        <button type="button" class="btn ghost" id="poolClear">Clear</button>
+      </div>
+      <p class="note source-note" id="poolNote"></p>
+      <div class="pool-grid" id="poolGrid">
+        ${champions.map((c) => `
+          <button type="button" class="pool-tile" data-pool-champ="${c.id}" data-name="${esc(c.name.toLowerCase())}" data-roles="${[...poolRolesOf(c.id)].join(',')}" title="${esc(c.name)}">
+            ${champImg(c.id)}<i class="stamp" aria-hidden="true"></i><span>${esc(c.name)}</span>
+          </button>`).join('')}
+      </div>
+    </div>`;
+  document.getElementById('poolGrid').onclick = (e) => {
+    const tile = e.target.closest('[data-pool-champ]');
+    if (!tile) return;
+    const filter = poolFilter();
+    const id = Number(tile.dataset.poolChamp);
+    filter.champions = filter.champions.includes(id) ? filter.champions.filter((x) => x !== id) : [...filter.champions, id];
+    savePoolFilter();
+    paintPool();
+  };
+  for (const b of $view.querySelectorAll('[data-pool-set]')) {
+    b.onclick = () => {
+      poolFilter().mode = b.dataset.poolSet;
+      savePoolFilter();
+      paintPool();
+    };
+  }
+  for (const b of $view.querySelectorAll('[data-pool-role]')) {
+    b.onclick = () => {
+      poolUi.role = b.dataset.poolRole;
+      paintPool();
+    };
+  }
+  document.getElementById('poolSearch').oninput = (e) => {
+    poolUi.query = e.target.value;
+    paintPool();
+  };
+  document.getElementById('poolClear').onclick = () => {
+    poolFilter().champions = [];
+    savePoolFilter();
+    paintPool();
+  };
+  paintPool();
 }
 
 // ---------- Team ----------

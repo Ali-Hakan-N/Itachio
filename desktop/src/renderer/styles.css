@@ -833,3 +833,51 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .hist-more { display: flex; justify-content: center; padding: 14px 0 6px; }
 .head-ic { display: inline-flex; align-items: center; gap: 7px; }
 .head-ic .gl, .head-ic .role-gl { width: 15px; height: 15px; }
+
+/* ---------- Champion pool ---------- */
+.pool-switch { display: inline-flex; align-items: center; gap: 2px; padding: 2px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; }
+.pool-switch button { display: inline-flex; align-items: center; gap: 4px; height: 22px; min-width: 24px; justify-content: center; padding: 0 4px; color: var(--faint); background: none; border: 0; border-radius: 6px; }
+.pool-switch button:hover { color: var(--ink); }
+.pool-switch svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.pool-switch b { color: var(--gold); font-size: 10px; letter-spacing: 0; }
+.pool-switch .on.off { color: var(--ink); background: var(--panel-3); }
+.pool-switch .on.include { color: var(--cue); background: var(--cue-dim); }
+.pool-switch .on.exclude { color: var(--red); background: var(--red-dim); }
+.pool-switch .pool-edit { margin-left: 2px; border-left: 1px solid var(--line); border-radius: 0 6px 6px 0; }
+.pool-empty .link { margin-left: 4px; }
+
+.pool-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.pool-seg { display: inline-flex; gap: 3px; padding: 3px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 10px; }
+.pool-seg button { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; color: var(--muted); font-size: 12.5px; font-weight: 600; background: none; border: 0; border-radius: 7px; transition: color 0.15s, background 0.15s; }
+.pool-seg button:hover { color: var(--ink); }
+.pool-seg svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.pool-seg .on.off { color: var(--ink); background: var(--panel-3); }
+.pool-seg .on.include { color: var(--cue); background: var(--cue-dim); box-shadow: inset 0 0 0 1px rgba(47, 211, 192, 0.4); }
+.pool-seg .on.exclude { color: #ff6b62; background: rgba(200, 50, 43, 0.2); box-shadow: inset 0 0 0 1px rgba(232, 82, 74, 0.5); }
+.pool-roles { display: inline-flex; gap: 2px; padding: 3px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; }
+.pool-roles button { display: grid; place-items: center; width: 28px; height: 26px; padding: 0; color: var(--faint); background: none; border: 0; border-radius: 7px; }
+.pool-roles button:hover { color: var(--ink); }
+.pool-roles button.on { color: var(--gold); background: var(--gold-dim); }
+.pool-roles svg { width: 15px; height: 15px; fill: currentColor; }
+.pool-roles svg .faint { opacity: 0.3; stroke: currentColor; stroke-width: 1.2; }
+.pool-search { position: relative; display: block; flex: 0 1 220px; min-width: 150px; }
+.pool-search svg { position: absolute; left: 10px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); fill: none; stroke: var(--faint); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.pool-search input { width: 100%; padding: 7px 10px 7px 30px; border-radius: 9px; font-size: 13px; }
+.pool-count b { font-family: var(--brand); font-size: 20px; font-weight: 400; color: var(--gold); }
+.pool-page .source-note { margin: 0 0 12px; }
+.pool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; }
+.pool-tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; padding: 8px 3px 6px; color: var(--muted); font-size: 11px; background: transparent; border: 1px solid transparent; border-radius: var(--radius-m); transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.pool-tile:hover { color: var(--ink); background: var(--panel); border-color: var(--line-2); }
+.pool-tile > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pool-tile .champ { width: 46px; height: 46px; }
+/* The hanko stamp on a selected champion: 選 included, 禁 excluded */
+.pool-tile .stamp { position: absolute; top: 4px; right: calc(50% - 30px); display: none; place-items: center; width: 18px; height: 18px; color: #fff; font-family: var(--brand); font-size: 11px; font-style: normal; line-height: 1; background: linear-gradient(135deg, #c8322b, #7a1d1a); border-radius: 4px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18), 0 2px 6px rgba(0, 0, 0, 0.5); transform: rotate(-6deg); }
+.pool-tile.selected { color: var(--ink); background: var(--panel); border-color: var(--line-2); }
+.pool-tile.selected .stamp { display: grid; }
+.pool-page[data-mode="include"] .pool-tile.selected { border-color: rgba(47, 211, 192, 0.55); background: var(--cue-dim); }
+.pool-page[data-mode="include"] .pool-tile.selected .stamp { background: linear-gradient(135deg, #23a897, #12695f); }
+.pool-page[data-mode="exclude"] .pool-tile.selected { border-color: rgba(232, 82, 74, 0.55); background: var(--red-dim); }
+.pool-page[data-mode="exclude"] .pool-tile.selected .champ { filter: grayscale(1) brightness(0.65); }
+/* Off keeps the list, with no effect: it shows as a quiet outline */
+.pool-page[data-mode="off"] .pool-tile.selected { border-style: dashed; }
+.pool-page[data-mode="off"] .pool-tile.selected .stamp { display: none; }

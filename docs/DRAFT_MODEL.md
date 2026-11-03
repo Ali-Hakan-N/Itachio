@@ -235,6 +235,10 @@ Bunlar ayrı kavramlardır; UI/model alanları da ayrı kalmalıdır.
 
 UI akışı [desktop/src/renderer/app.js](../desktop/src/renderer/app.js) ve [desktop/src/renderer/champselect.js](../desktop/src/main/champselect.js) tarafında; client’a sadece kullanıcı tıklaması/ayar açık olduğunda hover veya rune/build apply gider, Itachio lock-in yapmaz.
 
+### Champion pool filtresi
+
+`Engine.poolPickable`, oyuncunun listesini `recommend()` argümanlarına çevirir: `include` adayları listeyle sınırlar ve `keep` ile adıyla seçilen off-meta champion’ları %1 pick-rate eşiğinden muaf tutar (rolde hiç görülmemiş champion yine çıkmaz); `exclude` listeyi adaylardan çıkarır. Boş liste veya `off` hiçbir şeyi değiştirmez. Filtre yalnız `pickable`’a dokunur, `unavailable`’a asla: orası ban sayıldığı için rakibin o champion’la cevap verebilmesi look-ahead’den düşerdi. Hover skorları, ban önerileri, takım arkadaşı önerileri ve pick order etkilenmez. Liste `localStorage`’da hesap başına tutulur; `player_pools` tablosuna yazılmaz.
+
 ## 7. Kişiselleştirme
 
 [collector/src/players/history.js](../collector/src/players/history.js), takım üyelerinin Riot ID’si ile Solo/Duo ve Flex ranked geçmişini toplar. [collector/src/players/analyze.js](../collector/src/players/analyze.js) üç ayrı kaynağı üretir:
