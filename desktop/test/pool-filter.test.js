@@ -65,3 +65,32 @@ test('an excluded champion is not treated as banned: the scores of the others do
   assert.equal(filtered.score, plain.score);
   assert.equal(filtered.logit, plain.logit);
 });
+
+test('every role has its own pool: a change in one leaves the others alone', () => {
+  const pools = Engine.poolsByRole(null);
+  assert.deepEqual(pools.top, { mode: 'off', champions: [] });
+  pools.middle.mode = 'exclude';
+  pools.middle.champions.push(1);
+  assert.deepEqual(pools.top, { mode: 'off', champions: [] });
+  assert.deepEqual(pools.utility, { mode: 'off', champions: [] });
+  // A champion excluded for mid is still suggested top
+  assert.deepEqual(picks(pools.top), [1, 2]);
+  const again = Engine.poolsByRole(JSON.parse(JSON.stringify(pools)));
+  assert.deepEqual(again.middle, { mode: 'exclude', champions: [1] });
+  assert.deepEqual(again.top, { mode: 'off', champions: [] });
+});
+
+test('the single list of the older version starts every role, as separate copies', () => {
+  const pools = Engine.poolsByRole(null, { mode: 'include', champions: [1, 2] });
+  assert.deepEqual(pools.bottom, { mode: 'include', champions: [1, 2] });
+  pools.top.champions.push(3);
+  assert.deepEqual(pools.middle.champions, [1, 2]);
+  // Once saved per role, the old list is ignored
+  assert.deepEqual(Engine.poolsByRole({ top: { mode: 'exclude', champions: [4] } }, { mode: 'include', champions: [1] }).middle, { mode: 'off', champions: [] });
+});
+
+test('saved pools with broken values fall back to no filter', () => {
+  const pools = Engine.poolsByRole({ top: { mode: 'nonsense', champions: ['x', 2] }, jungle: null });
+  assert.deepEqual(pools.top, { mode: 'off', champions: [2] });
+  assert.deepEqual(pools.jungle, { mode: 'off', champions: [] });
+});

@@ -1504,9 +1504,23 @@
     return { pickable: base.filter((id) => !list.has(id)), keep: null, active: true };
   }
 
+  /**
+   * Saved champion pools as one { mode, champions } per role, so a choice for one role never
+   * touches another. legacy: the single list of v1.11.0; until pools are saved per role, every
+   * role starts from it, which is what it did then.
+   */
+  function poolsByRole(saved, legacy = null) {
+    const clean = (entry) => ({
+      mode: entry?.mode === 'include' || entry?.mode === 'exclude' ? entry.mode : 'off',
+      champions: Array.isArray(entry?.champions) ? entry.champions.filter(Number.isInteger) : [],
+    });
+    return Object.fromEntries(ROLES.map((role) => [role, clean(saved ? saved[role] : legacy)]));
+  }
+
   const Engine = {
     recommend: hybridRecommend,
     poolPickable,
+    poolsByRole,
     evaluate: hybridEvaluate,
     orderPickSuggestions,
     planPickOrder,

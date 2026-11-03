@@ -237,7 +237,7 @@ UI akışı [desktop/src/renderer/app.js](../desktop/src/renderer/app.js) ve [de
 
 ### Champion pool filtresi
 
-`Engine.poolPickable`, oyuncunun listesini `recommend()` argümanlarına çevirir: `include` adayları listeyle sınırlar ve `keep` ile adıyla seçilen off-meta champion’ları %1 pick-rate eşiğinden muaf tutar (rolde hiç görülmemiş champion yine çıkmaz); `exclude` listeyi adaylardan çıkarır. Boş liste veya `off` hiçbir şeyi değiştirmez. Filtre yalnız `pickable`’a dokunur, `unavailable`’a asla: orası ban sayıldığı için rakibin o champion’la cevap verebilmesi look-ahead’den düşerdi. Hover skorları, ban önerileri, takım arkadaşı önerileri ve pick order etkilenmez. Liste `localStorage`’da hesap başına tutulur; `player_pools` tablosuna yazılmaz.
+`Engine.poolPickable`, oyuncunun listesini `recommend()` argümanlarına çevirir: `include` adayları listeyle sınırlar ve `keep` ile adıyla seçilen off-meta champion’ları %1 pick-rate eşiğinden muaf tutar (rolde hiç görülmemiş champion yine çıkmaz); `exclude` listeyi adaylardan çıkarır. Boş liste veya `off` hiçbir şeyi değiştirmez. Filtre yalnız `pickable`’a dokunur, `unavailable`’a asla: orası ban sayıldığı için rakibin o champion’la cevap verebilmesi look-ahead’den düşerdi. Hover skorları, ban önerileri, takım arkadaşı önerileri ve pick order etkilenmez. Her rolün kendi listesi ve modu vardır (`Engine.poolsByRole`); draft yalnız oynanan rolün havuzunu uygular, rol bilinmiyorsa filtre yoktur. v1.11.0’ın tek listesi, ilk kayda kadar her role başlangıç olarak kopyalanır. Listeler `localStorage`’da hesap başına tutulur; `player_pools` tablosuna yazılmaz.
 
 ## 7. Kişiselleştirme
 

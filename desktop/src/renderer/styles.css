@@ -855,15 +855,18 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .pool-seg .on.include { color: var(--cue); background: var(--cue-dim); box-shadow: inset 0 0 0 1px rgba(47, 211, 192, 0.4); }
 .pool-seg .on.exclude { color: #ff6b62; background: rgba(200, 50, 43, 0.2); box-shadow: inset 0 0 0 1px rgba(232, 82, 74, 0.5); }
 .pool-roles { display: inline-flex; gap: 2px; padding: 3px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; }
-.pool-roles button { display: grid; place-items: center; width: 28px; height: 26px; padding: 0; color: var(--faint); background: none; border: 0; border-radius: 7px; }
+.pool-roles button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; color: var(--muted); font-size: 12.5px; font-weight: 600; background: none; border: 0; border-radius: 7px; }
 .pool-roles button:hover { color: var(--ink); }
 .pool-roles button.on { color: var(--gold); background: var(--gold-dim); }
 .pool-roles svg { width: 15px; height: 15px; fill: currentColor; }
 .pool-roles svg .faint { opacity: 0.3; stroke: currentColor; stroke-width: 1.2; }
-.pool-search { position: relative; display: block; flex: 0 1 220px; min-width: 150px; }
+.pool-roles b { font-size: 10.5px; color: var(--faint); }
+.pool-roles b:empty { display: none; }
+.pool-roles b.include { color: var(--cue); }
+.pool-roles b.exclude { color: #ff6b62; }
+.pool-search { position: relative; display: block; flex: 0 1 200px; min-width: 130px; }
 .pool-search svg { position: absolute; left: 10px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); fill: none; stroke: var(--faint); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
 .pool-search input { width: 100%; padding: 7px 10px 7px 30px; border-radius: 9px; font-size: 13px; }
-.pool-count b { font-family: var(--brand); font-size: 20px; font-weight: 400; color: var(--gold); }
 .pool-page .source-note { margin: 0 0 12px; }
 .pool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; }
 .pool-tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; padding: 8px 3px 6px; color: var(--muted); font-size: 11px; background: transparent; border: 1px solid transparent; border-radius: var(--radius-m); transition: background 0.12s, border-color 0.12s, color 0.12s; }
