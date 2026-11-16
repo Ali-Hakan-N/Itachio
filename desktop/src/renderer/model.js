@@ -30,7 +30,8 @@
 // PERSONAL_WEIGHT, less PERSONAL_COUNTERED of it once the lane opponent is on the board
 // (then the matchup decides more), under a soft cap of PERSONAL_CAP standard deviations
 // of strength (cap × tanh(x / cap), about 10 points; a main up to 1.5 times that): a
-// nudge, never what makes a pick on its own.
+// nudge, never what makes a pick on its own. In a list, at most COMFORT_SLOTS of the first
+// COMFORT_TOP picks may be there only by comfort (diversify); scores stay as they are.
 //
 // Composition (comp): every champion has learned style numbers u (collector comp.js); a
 // team's style is their sum T, and a team gains Σ_k a_k tanh(T_k + c_k) plus Tᵀ M T_enemy
@@ -101,7 +102,9 @@
   const UNCERTAINTY_Z = 1; // standard errors taken off an uncertain strength (see above)
   const LANE_CALL = 0.6; // a lane is ahead or behind beyond this many standard deviations of its role (game plan and lane penalty)
   const EDGE_PCT = 1; // game plan: an edge counts from this many percentage points of win chance
-  const PERSONAL_WEIGHT = 1;
+  // Half of the player's measured effect: the personal backtest (collector npm run
+  // players:backtest) found every larger weight predicting the team's games worse
+  const PERSONAL_WEIGHT = 0.5;
   const POOL_GAMES = 10; // games on a champion for it to count fully in a player's pool
   const POOL_MASTERY = 0.4; // mastery (0-1) that makes a champion comfortable without results
   const POOL_NORMAL = 4; // a pool of this size changes nothing in the pick order
@@ -112,6 +115,8 @@
   const MAIN_CAP_GAIN = 0.5; // a main at full mastery may reach 1.5 times PERSONAL_CAP
   const PERSONAL_SHIFT_PRIOR = 20; // games before patch or team statistics replace the season's
   const PERSONAL_COUNTERED = 0.4; // share of the personal effect left to the matchup once the lane opponent is known
+  const COMFORT_TOP = 5; // the first picks of a list, where comfort may not take every place
+  const COMFORT_SLOTS = 3; // of those, at most this many may be there only by comfort
   const ROLE_PRIOR = 15; // pseudo-games shrinking a player's average on a role toward zero (line-up roles)
   const ROLE_EXPERIENCE = 0.4; // standard deviations for a role that is most of a player's games
   const POOL_DEPTH = 0.3; // standard deviations between a deep and a shallow pool on the role
@@ -742,35 +747,51 @@
   // The player's own layer on top of the model; personal is what it adds in points.
   // The patch and team statistics are games of the season too: they do not add to it, they
   // move it toward their own value by how many games back them (PERSONAL_SHIFT_PRIOR).
-  function personalize(ix, row, personal) {
-    if (!personal) return row;
-    const tag = ix.tags.get(row.championId) || 'None';
+  const PERSONAL_DEFAULTS = {
+    weight: PERSONAL_WEIGHT, cap: PERSONAL_CAP, mainGain: MAIN_CAP_GAIN,
+    shiftPrior: PERSONAL_SHIFT_PRIOR, countered: PERSONAL_COUNTERED, merge: 'shift', soft: true,
+  };
+  /**
+   * The personal effect of a player on a champion in a role, in log-odds: { delta, games }.
+   * sd: standard deviation of strength (the cap's unit); laneKnown: chance the lane opponent
+   * is on the board. options override PERSONAL_DEFAULTS (the backtest compares them:
+   * merge 'sum' adds the sources up, soft false clips at the cap).
+   */
+  function personalDelta(personal, { championId, role, tag = 'None', sd, laneKnown = 0 }, options = {}) {
+    const o = { ...PERSONAL_DEFAULTS, ...options };
+    if (!personal) return { delta: 0, games: 0 };
     const read = (src) => {
       if (!src) return null;
-      const own = src.byKey?.[`${row.championId}:${row.role}`];
-      const classFit = src.byClass?.[`${tag}:${row.role}`];
+      const own = src.byKey?.[`${championId}:${role}`];
+      const classFit = src.byClass?.[`${tag}:${role}`];
       return { delta: own ? own.delta : classFit?.delta ?? src.unplayed ?? 0, games: own?.games || classFit?.games || 0 };
     };
-    const season = read(personal.season);
     let sum = 0;
     let games = 0;
     let started = false;
-    for (const x of [season, read(personal.history), read(personal.team)]) {
+    for (const x of [read(personal.season), read(personal.history), read(personal.team)]) {
       if (!x) continue;
-      if (!started) {
-        sum = x.delta;
-        started = true;
-      } else {
-        sum += (x.delta - sum) * (x.games / (x.games + PERSONAL_SHIFT_PRIOR));
-      }
-      games = Math.max(games, x.games);
+      if (o.merge === 'sum') sum += x.delta;
+      else if (!started) sum = x.delta;
+      else sum += (x.delta - sum) * (x.games / (x.games + o.shiftPrior));
+      started = true;
+      games = o.merge === 'sum' ? games + x.games : Math.max(games, x.games);
     }
     // Comfort matters most in a blind pick; once the lane opponent is on the board the
     // matchup takes over part of it
-    const weight = PERSONAL_WEIGHT * (1 - PERSONAL_COUNTERED * (row.laneKnown || 0));
-    const cap = PERSONAL_CAP * ix.sd * (1 + MAIN_CAP_GAIN * mainMastery(personal, row.championId, row.role));
+    const x = o.weight * (1 - o.countered * laneKnown) * sum;
+    if (!Number.isFinite(o.cap)) return { delta: x, games };
+    const cap = o.cap * sd * (1 + o.mainGain * mainMastery(personal, championId, role));
     // Soft cap: big effects flatten out instead of all sitting at the same ceiling
-    const delta = cap * Math.tanh((weight * sum) / cap);
+    const delta = o.soft ? cap * Math.tanh(x / cap) : Math.max(-cap, Math.min(cap, x));
+    return { delta, games };
+  }
+
+  function personalize(ix, row, personal) {
+    if (!personal) return row;
+    const { delta, games } = personalDelta(personal, {
+      championId: row.championId, role: row.role, tag: ix.tags.get(row.championId) || 'None', sd: ix.sd, laneKnown: row.laneKnown || 0,
+    });
     if (!delta) return { ...row, personal: 0, personalGames: games };
     const logit = row.logit + delta;
     const score = Math.round(toScore(ix, logit));
@@ -1010,7 +1031,33 @@
         inPool: inPool.has(championId),
       });
     }
-    return out.sort((x, y) => y.logit - x.logit || y.games - x.games).slice(0, limit);
+    return diversify(out.sort((x, y) => y.logit - x.logit || y.games - x.games)).slice(0, limit);
+  }
+
+  /**
+   * At most COMFORT_SLOTS of the first COMFORT_TOP picks may be there only because of the
+   * player's comfort (comfortLifted: the draft alone would not put them in the first
+   * COMFORT_TOP); the others wait right after, so the top always shows picks the draft
+   * itself asks for. Scores do not change, only the order.
+   */
+  function diversify(sorted) {
+    if (sorted.length <= COMFORT_TOP) return sorted;
+    const draftOf = (r) => r.logit - (r.parts?.personal || 0);
+    const cut = sorted.map(draftOf).sort((a, b) => b - a)[COMFORT_TOP - 1];
+    const rows = sorted.map((r) => ({ ...r, comfortLifted: (r.parts?.personal || 0) > 0 && draftOf(r) < cut }));
+    const top = [];
+    const waiting = [];
+    let lifted = 0;
+    for (const r of rows) {
+      if (top.length >= COMFORT_TOP) break;
+      if (r.comfortLifted && lifted >= COMFORT_SLOTS) waiting.push(r);
+      else {
+        if (r.comfortLifted) lifted++;
+        top.push(r);
+      }
+    }
+    const placed = new Set([...top, ...waiting]);
+    return [...top, ...waiting, ...rows.filter((r) => !placed.has(r))];
   }
 
   /**
@@ -1569,7 +1616,10 @@
     personalFor,
   };
 
-  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, winParts, personalFor, lineupRoles, Engine, ROLES };
+  // The constants behind the score scale, for the tests that keep the comments honest
+  const SCALE = { SPREAD, PERSONAL_CAP, MAIN_CAP_GAIN, PERSONAL_COUNTERED, BAN_UNIT, LANE_CALL, COMFORT_TOP, COMFORT_SLOTS };
+  const strengthSd = (model) => index(model).sd;
+  const api = { recommend, evaluate, recommendBans, guessRoles, gamePlan, winChance, winParts, personalFor, personalDelta, strengthSd, lineupRoles, Engine, ROLES, SCALE };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Engine = Engine;
 })(typeof window !== 'undefined' ? window : globalThis);

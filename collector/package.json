@@ -10,6 +10,7 @@
     "collect:metasrc:dry": "node --env-file=.env src/run.js --source metasrc --dry-run",
     "train": "node --env-file=.env src/train-model.js",
     "players": "node --env-file=.env src/update-players.js",
+    "players:backtest": "node --env-file=.env src/players-backtest.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {
