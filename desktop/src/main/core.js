@@ -73,8 +73,8 @@ class AppCore extends EventEmitter {
     this.lcu = lcu;
     this.data = data;
     this.log = log;
-    // Options: send runes (with spells) and the item set to the client on their own
-    this.settings = { autoRunes: false, autoItems: false, ...settings };
+    // Options: send runes, summoner spells and the item set to the client on their own, each by itself
+    this.settings = { autoRunes: false, autoSpells: false, autoItems: false, ...settings };
     this.state = {
       me: null,
       team: null,
@@ -397,7 +397,8 @@ class AppCore extends EventEmitter {
   // options ask for to the client (the others wait for the Apply buttons)
   #autoApply(draft) {
     if (!draft.gameId || this.state.applied?.gameId === draft.gameId) return;
-    const parts = [...(this.settings.autoRunes ? ['runes', 'spells'] : []), ...(this.settings.autoItems ? ['items'] : [])];
+    const parts = [['autoRunes', 'runes'], ['autoSpells', 'spells'], ['autoItems', 'items']]
+      .filter(([key]) => this.settings[key]).map(([, part]) => part);
     if (!parts.length || !this.buildFor(draft)) return;
     this.state.applied = { gameId: draft.gameId };
     this.applyBuild(parts).catch((err) => this.log.error('[build]', err.message));

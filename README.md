@@ -40,7 +40,7 @@ After the game, **Draft Assistant** shows a summary: the result, the draft's win
 
 **Match History** lists your ranked games of the season with both teams in role order. Use the menu to see a teammate's games. **Clear History** hides your games so far from the list; your champion statistics stay as they are.
 
-**Options** (the red seal at the top right) has two tabs. **General** lets you start Itachio with Windows. **Draft** lets you turn on auto-apply for runes and spells and for the item set.
+**Options** (the red seal at the top right) has two tabs. **General** lets you start Itachio with Windows. **Draft** lets you turn on auto-apply for runes, summoner spells and the item set, each on its own.
 
 Scores look ahead: a pick that is easy to counter while the enemy can still answer scores lower, one that holds up well blind scores higher.
 

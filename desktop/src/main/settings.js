@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const KEYS = ['autoRunes', 'autoItems', 'openAtLogin'];
+const KEYS = ['autoRunes', 'autoSpells', 'autoItems', 'openAtLogin'];
 
 function createSettings(file) {
   const load = () => {

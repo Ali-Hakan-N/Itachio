@@ -84,11 +84,17 @@ const fileLog = {
   info: (...args) => writeLog('INFO', args),
 };
 
-// Options, kept on this computer: { autoRunes, autoItems, openAtLogin } (settings.js).
+// Options, kept on this computer: { autoRunes, autoSpells, autoItems, openAtLogin } (settings.js).
+// Spells used to come with autoRunes; until autoSpells is saved it follows autoRunes.
 const settings = createSettings(path.join(app.getPath('userData'), 'settings.json'));
 const loadSettings = settings.load;
 function settingsView(saved) {
-  return { autoRunes: !!saved.autoRunes, autoItems: !!saved.autoItems, openAtLogin: saved.openAtLogin ?? app.getLoginItemSettings().openAtLogin };
+  return {
+    autoRunes: !!saved.autoRunes,
+    autoSpells: !!(saved.autoSpells ?? saved.autoRunes),
+    autoItems: !!saved.autoItems,
+    openAtLogin: saved.openAtLogin ?? app.getLoginItemSettings().openAtLogin,
+  };
 }
 // Only an installed app registers itself; a development run would register Electron itself
 function applyLoginItem(open) {

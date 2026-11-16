@@ -277,8 +277,8 @@ async function buildCore(settings) {
   return { lcu, core, sent, build, buildSession };
 }
 
-test('build: with both auto options on, once all ten picks are locked, runes, items and spells go to the client once', async () => {
-  const { lcu, core, sent, build, buildSession } = await buildCore({ autoRunes: true, autoItems: true });
+test('build: with the three auto options on, once all ten picks are locked, runes, items and spells go to the client once', async () => {
+  const { lcu, core, sent, build, buildSession } = await buildCore({ autoRunes: true, autoSpells: true, autoItems: true });
   const post = sent.find((x) => x[1] === '/lol-perks/v1/pages' && x[0] === 'POST');
   assert.ok(post, 'a new rune page (a free page is left)');
   assert.deepEqual(post[2].selectedPerkIds, build.runes.perks);
@@ -304,6 +304,12 @@ test('build: nothing goes to the client on its own unless the options ask for it
   const items = await buildCore({ autoItems: true });
   assert.ok(items.sent.some((x) => x[1].startsWith('/lol-item-sets/')));
   assert.ok(!items.sent.some((x) => x[1].startsWith('/lol-perks/') || x[1].endsWith('/my-selection')));
+  const runes = await buildCore({ autoRunes: true });
+  assert.ok(runes.sent.some((x) => x[1].startsWith('/lol-perks/')));
+  assert.ok(!runes.sent.some((x) => x[1].endsWith('/my-selection') || x[1].startsWith('/lol-item-sets/')), 'runes no longer bring the spells');
+  const spells = await buildCore({ autoSpells: true });
+  assert.ok(spells.sent.some((x) => x[1].endsWith('/my-selection')));
+  assert.ok(!spells.sent.some((x) => x[1].startsWith('/lol-perks/') || x[1].startsWith('/lol-item-sets/')));
 });
 
 test('build: starting items and boots fall back from the general build when a damage bucket lacks them', async () => {

@@ -1762,13 +1762,14 @@ async function renderHistory(more = false) {
 }
 
 // ---------- Options ----------
-// Kept on this computer. General: launch at sign-in. Draft: send runes (with summoner
-// spells) and the item set to the client once every champion is locked.
+// Kept on this computer. General: launch at sign-in. Draft: send runes, summoner spells
+// and the item set to the client once every champion is locked, each on its own.
 const OPTION_TABS = [
   ['general', 'General', 'seal', [['openAtLogin', 'Launch at Windows sign-in', 'Starts Itachio before the League client']]],
   ['drafting', 'Draft', 'scroll', [
-    ['autoRunes', 'Auto-apply runes and spells', 'Sent to the client when all picks are locked'],
-    ['autoItems', 'Auto-apply item set', 'Sent to the client when all picks are locked'],
+    ['autoRunes', 'Auto-apply runes', 'Rune page sent to the client when all picks are locked'],
+    ['autoSpells', 'Auto-apply summoner spells', 'Sent when all picks are locked; Flash keeps its key'],
+    ['autoItems', 'Auto-apply item set', 'Item set sent to the client when all picks are locked'],
   ]],
 ];
 ICONS.seal = '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 8 5.5M12 21a9 9 0 0 1-8-5.5M3.5 9.5A9 9 0 0 1 12 3"/><circle cx="12" cy="12" r="2.4"/>';

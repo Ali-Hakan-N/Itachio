@@ -5,11 +5,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { createSettings } = require('../src/main/settings');
 
-test('settings persist the three options and ignore anything else', () => {
+test('settings persist the four options and ignore anything else', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'itachio-settings-'));
   const s = createSettings(path.join(dir, 'nested', 'settings.json'));
   assert.deepEqual(s.load(), {});
-  assert.deepEqual(s.save({ autoRunes: true, evil: 1 }), { autoRunes: true });
-  assert.deepEqual(s.save({ openAtLogin: 1, autoRunes: false }), { autoRunes: false, openAtLogin: true });
-  assert.deepEqual(createSettings(path.join(dir, 'nested', 'settings.json')).load(), { autoRunes: false, openAtLogin: true });
+  assert.deepEqual(s.save({ autoRunes: true, autoSpells: 0, evil: 1 }), { autoRunes: true, autoSpells: false });
+  assert.deepEqual(s.save({ openAtLogin: 1, autoRunes: false }), { autoRunes: false, autoSpells: false, openAtLogin: true });
+  assert.deepEqual(createSettings(path.join(dir, 'nested', 'settings.json')).load(), { autoRunes: false, autoSpells: false, openAtLogin: true });
 });
