@@ -41,8 +41,8 @@ test('mastery lets the personal effect of a main go past the normal cap', () => 
     model, championId: 2, role: 'top',
     personal: { season: { byKey: { '2:top': { delta: 5, games, mastery } }, unplayed: 0 } },
   }).parts.personal;
-  assert.ok(effect(1) > effect(0) * 1.9);
-  assert.ok(Math.abs(effect(0.5) / effect(0) - 1.5) < 1e-9);
+  assert.ok(Math.abs(effect(1) / effect(0) - 1.5) < 1e-9);
+  assert.ok(Math.abs(effect(0.5) / effect(0) - 1.25) < 1e-9);
   assert.equal(effect(1, 10), effect(0, 10), 'a few games are not a main');
 });
 

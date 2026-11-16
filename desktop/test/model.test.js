@@ -250,13 +250,28 @@ test('personal layer: the player\'s own results on a champion move its score', (
   // Recommendations rank with it
   const top = (p) => recommend({ model, role: 'top', personal: p }).map((r) => r.championId);
   assert.equal(top(null)[0], 1);
-  // Capped: even a huge value moves a score by a bounded amount (1.5 standard deviations)
+  // Capped: even a huge value moves a score by a bounded amount (0.6 standard deviations)
   const capped = evaluate({ model, championId: 2, role: 'top', personal: { history: { byKey: { '2:top': { delta: 5, games: 80 } }, unplayed: 0 } } });
-  assert.ok(capped.personal > 0 && capped.personal <= 30, `capped ${capped.personal}`);
-  // Both sources add up (before the cap)
-  const both = evaluate({ model, championId: 2, role: 'top', personal: { history: personal.history, team: personal.history } });
-  assert.ok(both.personal >= mine.personal);
+  assert.ok(capped.personal > 0 && capped.personal <= 11, `capped ${capped.personal}`);
+  // The same games seen again (patch, team) do not count twice
+  const both = evaluate({ model, championId: 2, role: 'top', personal: { season: personal.history, history: personal.history, team: personal.history } });
+  assert.ok(Math.abs(both.parts.personal - mine.parts.personal) < 1e-12);
   assert.equal(top(null)[0], 1);
+});
+
+test('personal layer: patch games move the season value toward theirs instead of adding to it', () => {
+  const season = { byKey: { '2:top': { delta: 0.1, games: 100 } }, unplayed: 0 };
+  const at = (history) => evaluate({ model, championId: 2, role: 'top', personal: { season, history } }).parts.personal;
+  const worse = { byKey: { '2:top': { delta: -0.1, games: 20 } }, unplayed: 0 };
+  assert.ok(at(worse) < at(undefined), 'a bad patch lowers it');
+  assert.ok(at(worse) > -at(undefined), 'twenty games move it halfway, not all the way');
+});
+
+test('personal layer: comfort counts less once the lane opponent is on the board', () => {
+  const personal = { season: { byKey: { '2:top': { delta: 0.02, games: 100 } }, unplayed: 0 } };
+  const blind = evaluate({ model, championId: 2, role: 'top', personal }).parts.personal;
+  const seen = evaluate({ model, championId: 2, role: 'top', enemies: [{ championId: 1, position: 'top' }], personal }).parts.personal;
+  assert.ok(seen > 0 && seen < blind * 0.7, `${seen} vs ${blind}`);
 });
 
 test('unseen champions inherit a shrinkage-weighted class and role comfort prior', () => {

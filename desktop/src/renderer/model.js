@@ -25,8 +25,12 @@
 // their ranked games of the season, history those of the patch, team those where all five
 // on their side were the team members of this draft (personalFor picks the line-up). delta is in log-odds,
 // already shrunk hard toward the player's own level for champions with few games. The
-// sources add up, count PERSONAL_WEIGHT of that, and are capped at PERSONAL_CAP standard
-// deviations of strength (about 7 points): a nudge, never what makes a pick.
+// patch and team games are part of the season, so they do not add to it: each moves the
+// season value toward its own by games / (games + PERSONAL_SHIFT_PRIOR). That counts
+// PERSONAL_WEIGHT, less PERSONAL_COUNTERED of it once the lane opponent is on the board
+// (then the matchup decides more), under a soft cap of PERSONAL_CAP standard deviations
+// of strength (cap × tanh(x / cap), about 10 points; a main up to 1.5 times that): a
+// nudge, never what makes a pick on its own.
 //
 // Composition (comp): every champion has learned style numbers u (collector comp.js); a
 // team's style is their sum T, and a team gains Σ_k a_k tanh(T_k + c_k) plus Tᵀ M T_enemy
@@ -104,7 +108,10 @@
   const POOL_WEIGHT = 6; // pick order points between a pool of none and a pool of POOL_NORMAL
   const LANE_PENALTY = 0.5; // share of a lane loss beyond the threshold that is taken off the logit
   const LANE_AMORTIZE = 1.5; // a lane loss is forgiven once the composition gain is this many times the loss
-  const PERSONAL_CAP = 1.5; // in standard deviations of strength
+  const PERSONAL_CAP = 0.6; // in standard deviations of strength: about 10 points at most (soft)
+  const MAIN_CAP_GAIN = 0.5; // a main at full mastery may reach 1.5 times PERSONAL_CAP
+  const PERSONAL_SHIFT_PRIOR = 20; // games before patch or team statistics replace the season's
+  const PERSONAL_COUNTERED = 0.4; // share of the personal effect left to the matchup once the lane opponent is known
   const ROLE_PRIOR = 15; // pseudo-games shrinking a player's average on a role toward zero (line-up roles)
   const ROLE_EXPERIENCE = 0.4; // standard deviations for a role that is most of a player's games
   const POOL_DEPTH = 0.3; // standard deviations between a deep and a shallow pool on the role
@@ -121,7 +128,7 @@
   const PERSONAL_CLASS_PRIOR = 40; // pseudo-games before class-level comfort transfers to an unseen champion
   const MIN_PICK_RATE = 0.01; // share of teams picking it in the role, to be recommended
   // A champion the player has this many games on stays on their list even when it is off-meta,
-  // and their personal effect on it may reach up to twice PERSONAL_CAP, by mastery
+  // and their personal effect on it may reach up to (1 + MAIN_CAP_GAIN) PERSONAL_CAP, by mastery
   const MAIN_GAMES = 25;
   const BAN_UNIT = 0.1; // in standard deviations of strength, see the ban score above
   const BAN_MIN_GAMES = 20; // champion:role pairs with fewer games are not considered for bans
@@ -524,6 +531,7 @@
 
     let mu = 0;
     let laneDiff = 0; // expected lane result against the enemies who may be in this lane, log-odds
+    let laneKnown = 0; // chance the lane opponent is already on the board
     const enemyHits = [];
     const enemyPicks = enemies.map(asPick);
     const assignments = roleAssignments(ix, enemyPicks, [...allies, { championId, position: ROLES[r] }]);
@@ -539,6 +547,7 @@
       }
       mu += expectedMatchup;
       const inLane = roleProbabilities.get(r) || 0;
+      laneKnown += inLane;
       if (tools && inLane) laneDiff += inLane * tools.laneOf(r, championId, p.championId).diff;
       if (expectedMatchup) enemyHits.push({
         championId: p.championId,
@@ -593,6 +602,7 @@
         lane: -lanePenalty, typical: 0, ahead: 0, exposure: 0, personal: 0,
       },
       lacking: fit.lacking || [],
+      laneKnown: Math.min(1, laneKnown),
       offRole: share < OFF_ROLE_SHARE,
       games: e ? e.games : 0,
       pickRate: e && ix.matches ? e.games / (2 * ix.matches) : 0,
@@ -729,21 +739,38 @@
     return { row, ahead: futureSynergy(ix, championId, r, rest.allyOpen), exposure: exposure(ix, championId, r, rest.enemyOpen, rest.answerShare) };
   }
 
-  // The player's own layer on top of the model; personal is what it adds in points
+  // The player's own layer on top of the model; personal is what it adds in points.
+  // The patch and team statistics are games of the season too: they do not add to it, they
+  // move it toward their own value by how many games back them (PERSONAL_SHIFT_PRIOR).
   function personalize(ix, row, personal) {
     if (!personal) return row;
-    let sum = 0;
-    let games = 0;
     const tag = ix.tags.get(row.championId) || 'None';
-    for (const src of [personal.season, personal.history, personal.team]) {
-      if (!src) continue;
+    const read = (src) => {
+      if (!src) return null;
       const own = src.byKey?.[`${row.championId}:${row.role}`];
       const classFit = src.byClass?.[`${tag}:${row.role}`];
-      sum += own ? own.delta : classFit?.delta ?? src.unplayed ?? 0;
-      games += own?.games || classFit?.games || 0;
+      return { delta: own ? own.delta : classFit?.delta ?? src.unplayed ?? 0, games: own?.games || classFit?.games || 0 };
+    };
+    const season = read(personal.season);
+    let sum = 0;
+    let games = 0;
+    let started = false;
+    for (const x of [season, read(personal.history), read(personal.team)]) {
+      if (!x) continue;
+      if (!started) {
+        sum = x.delta;
+        started = true;
+      } else {
+        sum += (x.delta - sum) * (x.games / (x.games + PERSONAL_SHIFT_PRIOR));
+      }
+      games = Math.max(games, x.games);
     }
-    const cap = PERSONAL_CAP * ix.sd * (1 + mainMastery(personal, row.championId, row.role));
-    const delta = Math.max(-cap, Math.min(cap, PERSONAL_WEIGHT * sum));
+    // Comfort matters most in a blind pick; once the lane opponent is on the board the
+    // matchup takes over part of it
+    const weight = PERSONAL_WEIGHT * (1 - PERSONAL_COUNTERED * (row.laneKnown || 0));
+    const cap = PERSONAL_CAP * ix.sd * (1 + MAIN_CAP_GAIN * mainMastery(personal, row.championId, row.role));
+    // Soft cap: big effects flatten out instead of all sitting at the same ceiling
+    const delta = cap * Math.tanh((weight * sum) / cap);
     if (!delta) return { ...row, personal: 0, personalGames: games };
     const logit = row.logit + delta;
     const score = Math.round(toScore(ix, logit));
