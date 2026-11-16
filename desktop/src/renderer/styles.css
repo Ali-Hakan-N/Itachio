@@ -306,6 +306,10 @@ input:focus, select:focus { border-color: var(--cue); outline: none; }
 .tile .trole { position: absolute; top: 28px; right: 2px; width: 13px; height: 13px; padding: 1px; background: var(--bg); border-radius: 3px; color: var(--muted); }
 .tile .trole svg { display: block; width: 100%; height: 100%; fill: currentColor; }
 .tile .trole svg .faint { opacity: 0.3; }
+/* Why a tile is there: the glyph of the part that lifts it most; the tooltip has every part */
+.tile .twhy { position: absolute; top: 1px; left: 2px; width: 13px; height: 13px; padding: 1px; background: var(--bg); border-radius: 3px; color: var(--muted); pointer-events: none; }
+.tile .twhy svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.tile .twhy.comfort { color: var(--gold); }
 .tile .tscore { font-family: var(--display); font-size: 12px; line-height: 1; }
 .tile .tscore.sc-S { color: var(--gold); }
 .tile .tscore.sc-A { color: var(--cue); }

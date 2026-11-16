@@ -598,11 +598,14 @@ function tierGrid(recs, { canHover, hoverId }) {
   return `<div class="recs tiers">${groups.filter((g) => g.rows.length).map((g) => `
     <div class="tier-group">
       <span class="tier t-${g.label[0]}">${g.label}</span>
-      <div class="tier-tiles">${g.rows.map((r) => `
-        <button type="button" class="tile ${r.championId === hoverId ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}" ${canHover ? '' : 'disabled'} title="${esc(champName(r.championId))} · ${r.score}">
-          ${champImg(r.championId)}
+      <div class="tier-tiles">${g.rows.map((r) => {
+        const why = tileWhy(r);
+        return `
+        <button type="button" class="tile ${r.championId === hoverId ? 'hovering' : ''} ${r.unsure ? 'unsure' : ''}" data-hover="${r.championId}" ${canHover ? '' : 'disabled'} title="${esc(`${champName(r.championId)} · ${r.score}${why.tip ? `\n${why.tip}` : ''}`)}">
+          ${champImg(r.championId)}${why.badge}
           <b class="tscore sc-${tierOf(r.score)}">${r.score}</b>
-        </button>`).join('')}</div>
+        </button>`;
+      }).join('')}</div>
     </div>`).join('')}</div>`;
 }
 
@@ -610,17 +613,16 @@ const NEED_NAME = { fr: 'Frontline', cc: 'Crowd control', en: 'Engage', wc: 'Wav
 
 // Where the expected win chance of a pick comes from: each part in percentage points of win
 // chance, added one after another from an even game so they sum to the final number
-function modelExplanation(row) {
-  if (!row?.parts) return '';
+const winOf = (z) => 100 / (1 + Math.exp(-z)) - 50;
+function winBreakdown(row, withDetail = false) {
   const P = row.parts;
-  const win = (z) => 100 / (1 + Math.exp(-z)) - 50;
-  const icons = (items, sign) => (items || []).filter((x) => x.value * sign > 0).slice(0, 3).map((x) => champImg(x.championId, 's')).join('');
+  const icons = (items, sign) => (withDetail ? (items || []).filter((x) => x.value * sign > 0).slice(0, 3).map((x) => champImg(x.championId, 's')).join('') : '');
   const items = [
     { icon: 'strength', label: 'Champion strength', z: P.strength },
     { icon: 'synergy', label: 'Team synergy', z: P.synergy + P.ahead, detail: icons(row.allies, P.synergy >= 0 ? 1 : -1) },
     { icon: 'matchup', label: 'Enemy matchups', z: P.matchup, detail: icons(row.enemies, P.matchup >= 0 ? 1 : -1) },
     { icon: 'balance', label: 'AP/AD balance', z: P.damage },
-    { icon: 'guard', label: 'CC, frontline, engage', z: P.needs, detail: (row.lacking || []).map((k) => (ICONS[k] ? glyph(k, `Missing: ${NEED_NAME[k] || k}`) : '')).join('') },
+    { icon: 'guard', label: 'CC, frontline, engage', z: P.needs, detail: withDetail ? (row.lacking || []).map((k) => (ICONS[k] ? glyph(k, `Missing: ${NEED_NAME[k] || k}`) : '')).join('') : '' },
     { icon: 'flag', label: 'Comp plan fit', z: P.plan },
     { icon: 'focus', label: 'Team coordination', z: P.coherence },
     { icon: 'eye', label: 'Counter exposure', z: P.exposure },
@@ -630,11 +632,33 @@ function modelExplanation(row) {
   ];
   let cum = 0;
   for (const it of items) {
-    const before = win(cum);
-    cum += it.z;
-    it.pp = win(cum) - before;
+    const before = winOf(cum);
+    cum += it.z || 0;
+    it.pp = winOf(cum) - before;
   }
-  const fmt = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}`;
+  return { items, total: 50 + winOf(cum) };
+}
+const signedPp = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}`;
+
+// A tile's reason, as a glyph: the part that lifts it most (Other factors aside); its
+// tooltip lists every part that moves the win chance by half a point or more
+function tileWhy(r) {
+  if (!r?.parts) return { badge: '', tip: '' };
+  const { items } = winBreakdown(r);
+  const lead = items.filter((it) => it.icon !== 'dots' && it.pp > 0.05).sort((a, b) => b.pp - a.pp)[0];
+  const tip = items.filter((it) => Math.abs(it.pp) >= 0.5).sort((a, b) => Math.abs(b.pp) - Math.abs(a.pp))
+    .map((it) => `${it.label} ${signedPp(it.pp)}`).join('\n');
+  const comfort = r.comfortLifted ? '\nIn the top picks by your comfort' : '';
+  return {
+    badge: lead ? `<span class="twhy ${lead.icon === 'user' ? 'comfort' : ''}" aria-hidden="true">${icon(lead.icon)}</span>` : '',
+    tip: `${tip}${comfort}`,
+  };
+}
+
+function modelExplanation(row) {
+  if (!row?.parts) return '';
+  const { items, total } = winBreakdown(row, true);
+  const fmt = signedPp;
   const line = (it) => `<div class="wf-row ${it.pp > 0 ? 'up' : 'down'}">
     ${glyph(it.icon, it.label)}
     <div class="wf-track"><span class="neg"><i data-w="${it.pp < 0 ? Math.min(100, Math.abs(it.pp) * 25) : 0}"></i></span><span class="pos"><i data-w="${it.pp > 0 ? Math.min(100, it.pp * 25) : 0}"></i></span></div>
@@ -644,7 +668,7 @@ function modelExplanation(row) {
   const name = champName(row.championId);
   return `<section class="explanation" aria-label="Win chance breakdown: ${esc(name)}">
     <div class="explanation-head" title="Expected win chance against a typical pick in this role">
-      ${champImg(row.championId, 's')}<strong>${(50 + win(cum)).toFixed(1)}<small>%</small></strong>
+      ${champImg(row.championId, 's')}<strong>${total.toFixed(1)}<small>%</small></strong>
     </div>
     <div class="wf-list">${items.filter((it) => Math.abs(it.pp) >= 0.05).map(line).join('')}</div>
   </section>`;
